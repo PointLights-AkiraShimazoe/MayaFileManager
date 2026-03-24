@@ -1,0 +1,32 @@
+{
+  "_comment": "MayaFileManager デフォルト設定ファイル",
+
+  "auto_naming": {
+    "_comment": "ディレクトリごとの自動命名ルール",
+    "rules": {
+      "/projects/CHR": {
+        "template": "CHR_{seq:04d}",
+        "seq_start": 1,
+        "counter_file": ".mfm_seq"
+      },
+      "/projects/WPN": {
+        "template": "WPN_{seq:04d}",
+        "seq_start": 1,
+        "counter_file": ".mfm_seq"
+      }
+    }
+  },
+
+  "quick_nav_presets": {
+    "default": [
+      { "label": "プロジェクト", "path": "/projects" },
+      { "label": "デスクトップ", "path": "~/Desktop" },
+      { "label": "ドキュメント", "path": "~/Documents" }
+    ]
+  },
+
+  "file_filter": {
+    "show_extensions": [".ma", ".mb", ".fbx", ".obj", ".abc", ".usd", ".usda", ".usdc"],
+    "hide_patterns": ["*.bak", "*.tmp", "~*"]
+  }
+}

@@ -1,0 +1,589 @@
+"""
+Main Window
+===========
+The central QMainWindow that hosts all panels as dockable widgets.
+
+Layout (default)
+----------------
+  ┌─────────────────────────────────────────────────────┐
+  │  MenuBar                                            │
+  │  ToolBar (quick-nav buttons, Maya ver, action mode) │
+  ├──────────────┬──────────────────────────┬───────────┤
+  │  Bookmark    │                          │ History   │
+  │  Panel       │  Browser Panel           │ Panel     │
+  │  (dock-left) │  (central)               │(dock-right│
+  │              │                          │           │
+  │              │                          │           │
+  ├──────────────┴──────────────────────────┴───────────┤
+  │  StatusBar (path | Maya version | message)          │
+  └─────────────────────────────────────────────────────┘
+"""
+
+import os
+from pathlib import Path
+from typing import Optional, List
+
+from core.compat import (
+    Qt, Signal,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QComboBox, QToolButton, QAction,
+    QMenu, QMenuBar, QStatusBar, QDockWidget, QToolBar,
+    QSizePolicy, QSplitter, QFrame,
+    QMessageBox, QFileDialog, QInputDialog,
+    QSize, QFont, QColor
+)
+from core.settings_manager import SettingsManager
+from core.bookmark_manager import BookmarkManager
+from core.thumbnail_generator import ThumbnailManager
+from core.maya_version import (
+    MayaInstallation, find_installed_maya_versions,
+    is_running_inside_maya, get_current_maya_version,
+    launch_maya
+)
+from ui.browser_panel import BrowserPanel
+from ui.bookmark_panel import BookmarkPanel
+from ui.preset_editor import ReferencePresetEditor
+from ui.settings_dialog import SettingsDialog
+from ui.batch_rename_dialog import BatchRenameDialog
+from ui.quick_nav_editor import QuickNavPresetEditor
+from ui.reference_editor import ReferenceEditor
+from ui.duplicate_folder_panel import DuplicateFolderPanel
+
+
+# ---------------------------------------------------------------------------
+# History Panel (inline – keeps it self-contained)
+# ---------------------------------------------------------------------------
+
+class HistoryPanel(QWidget):
+
+    navigate_requested = Signal(str)
+
+    def __init__(self, settings_manager: SettingsManager, parent=None):
+        super().__init__(parent)
+        self._sm = settings_manager
+        from core.compat import QListWidget, QListWidgetItem, QAbstractItemView, QToolButton, QVBoxLayout, QHBoxLayout, QLabel
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QHBoxLayout()
+        header.addWidget(QLabel("🕐 履歴"))
+        header.addStretch()
+        clr_btn = QToolButton()
+        clr_btn.setText("クリア")
+        clr_btn.clicked.connect(self._clear_history)
+        header.addWidget(clr_btn)
+        layout.addLayout(header)
+
+        self._list = QListWidget()
+        self._list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._list.itemDoubleClicked.connect(self._on_double_click)
+        layout.addWidget(self._list)
+
+        self.refresh()
+
+    def refresh(self):
+        from core.compat import QListWidgetItem
+        self._list.clear()
+        for path in self._sm.get_history():
+            item = QListWidgetItem(path)
+            item.setToolTip(path)
+            self._list.addItem(item)
+
+    def _on_double_click(self, item):
+        self.navigate_requested.emit(item.text())
+
+    def _clear_history(self):
+        self._sm.clear_history()
+        self._list.clear()
+
+
+# ---------------------------------------------------------------------------
+# Quick-nav toolbar area
+# ---------------------------------------------------------------------------
+
+class QuickNavBar(QWidget):
+    """Row of quick-navigation buttons loaded from settings presets."""
+
+    navigate_requested = Signal(str)
+
+    def __init__(self, settings_manager: SettingsManager, parent=None):
+        super().__init__(parent)
+        self._sm = settings_manager
+        self._buttons: List[QToolButton] = []
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self._container = QWidget()
+        self._btn_layout = QHBoxLayout(self._container)
+        self._btn_layout.setContentsMargins(0, 0, 0, 0)
+        self._btn_layout.setSpacing(4)
+        layout.addWidget(self._container)
+        layout.addStretch()
+
+        # Preset selector
+        layout.addWidget(QLabel("プリセット:"))
+        self._preset_combo = QComboBox()
+        self._preset_combo.setFixedWidth(120)
+        self._preset_combo.currentTextChanged.connect(self._on_preset_changed)
+        layout.addWidget(self._preset_combo)
+
+        edit_btn = QToolButton()
+        edit_btn.setText("⚙")
+        edit_btn.setToolTip("クイックナビを編集")
+        edit_btn.clicked.connect(self._edit_presets)
+        layout.addWidget(edit_btn)
+
+        self.refresh()
+
+    def refresh(self):
+        # Clear existing buttons
+        while self._btn_layout.count():
+            item = self._btn_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._buttons.clear()
+
+        # Populate preset combo
+        presets = self._sm.get_quick_nav_presets()
+        active = self._sm.get("quick_nav_preset", "default")
+
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.clear()
+        for name in sorted(presets.keys()):
+            self._preset_combo.addItem(name)
+        idx = self._preset_combo.findText(active)
+        self._preset_combo.setCurrentIndex(max(0, idx))
+        self._preset_combo.blockSignals(False)
+
+        # Build buttons for active preset
+        for nav in self._sm.get_active_quick_nav():
+            btn = QToolButton()
+            btn.setText(nav.get("label", "?"))
+            btn.setToolTip(nav.get("path", ""))
+            path = nav.get("path", "")
+            btn.clicked.connect(lambda checked=False, p=path: self.navigate_requested.emit(p))
+            self._btn_layout.addWidget(btn)
+            self._buttons.append(btn)
+
+    def _on_preset_changed(self, name: str):
+        self._sm.set("quick_nav_preset", name)
+        self.refresh()
+
+    def _edit_presets(self):
+        from ui.quick_nav_editor import QuickNavPresetEditor
+        dlg = QuickNavPresetEditor(self._sm, parent=self)
+        dlg.presets_saved.connect(self.refresh)
+        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+
+
+# ---------------------------------------------------------------------------
+# Main Window
+# ---------------------------------------------------------------------------
+
+class MainWindow(QMainWindow):
+
+    def __init__(self, settings_manager: SettingsManager,
+                 maya_installation: Optional[MayaInstallation] = None,
+                 parent=None):
+        super().__init__(parent)
+        self._sm = settings_manager
+        self._maya_inst = maya_installation
+        self._inside_maya = is_running_inside_maya()
+        self._maya_ver = (get_current_maya_version() or
+                          (maya_installation.version if maya_installation else ""))
+
+        if self._maya_ver:
+            self._sm.set_maya_version(self._maya_ver)
+
+        # Sub-managers
+        self._bm_mgr = BookmarkManager(self._sm)
+        self._thumb_mgr = ThumbnailManager(
+            cache_size=self._sm.get("thumbnail_cache_size", 256),
+            thumb_size=self._sm.get("thumbnail_size", 128),
+            parent=self,
+        )
+
+        self.setWindowTitle(
+            f"Maya File Manager"
+            + (f"  —  Maya {self._maya_ver}" if self._maya_ver else "")
+        )
+        self.setMinimumSize(1024, 640)
+
+        self._build_ui()
+        self._build_menu()
+        self._restore_geometry()
+
+    # ------------------------------------------------------------------
+    # UI Construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self):
+        # ── Central: browser ──────────────────────────────────────────
+        self._browser = BrowserPanel(self._sm, self._thumb_mgr, parent=self)
+        self._browser.file_activated.connect(self._on_file_activated)
+        self._browser.directory_changed.connect(self._on_directory_changed)
+        self._browser.status_message.connect(self.statusBar().showMessage)
+
+        # Register Maya action callbacks
+        if self._inside_maya:
+            self._browser.set_open_callback(self._maya_open)
+            self._browser.set_import_callback(self._maya_import)
+            self._browser.set_reference_callback(self._maya_reference)
+
+        self.setCentralWidget(self._browser)
+
+        # ── Left dock: bookmarks ──────────────────────────────────────
+        self._bookmark_panel = BookmarkPanel(self._bm_mgr, parent=self)
+        self._bookmark_panel.navigate_requested.connect(self._browser.navigate_to)
+        self._bookmark_panel.open_requested.connect(self._maya_open)
+        self._bookmark_panel.import_requested.connect(self._maya_import)
+        self._bookmark_panel.reference_requested.connect(self._maya_reference)
+
+        bm_dock = QDockWidget("ブックマーク", self)
+        bm_dock.setObjectName("BookmarkDock")
+        bm_dock.setWidget(self._bookmark_panel)
+        bm_dock.setMinimumWidth(180)
+        self.addDockWidget(Qt.LeftDockWidgetArea, bm_dock)
+
+        # ── Right dock: history ───────────────────────────────────────
+        self._history_panel = HistoryPanel(self._sm, parent=self)
+        self._history_panel.navigate_requested.connect(self._browser.navigate_to)
+
+        hist_dock = QDockWidget("履歴", self)
+        hist_dock.setObjectName("HistoryDock")
+        hist_dock.setWidget(self._history_panel)
+        hist_dock.setMinimumWidth(180)
+        self.addDockWidget(Qt.RightDockWidgetArea, hist_dock)
+
+        # ── Bottom dock: duplicate folder finder ──────────────────────
+        self._dup_panel = DuplicateFolderPanel(parent=self)
+        self._dup_panel.navigate_requested.connect(self._browser.navigate_to)
+
+        dup_dock = QDockWidget("重複フォルダ検出", self)
+        dup_dock.setObjectName("DupFolderDock")
+        dup_dock.setWidget(self._dup_panel)
+        dup_dock.setVisible(False)   # hidden by default
+        self.addDockWidget(Qt.BottomDockWidgetArea, dup_dock)
+        self._dup_dock = dup_dock
+
+        # ── Toolbar ───────────────────────────────────────────────────
+        self._build_toolbar()
+
+        # ── Status bar ────────────────────────────────────────────────
+        sb = self.statusBar()
+
+        self._status_path_label = QLabel("")
+        self._status_path_label.setStyleSheet("color: #888; font-size: 11px;")
+        sb.addWidget(self._status_path_label)
+
+        sb.addPermanentWidget(QLabel(f"Maya {self._maya_ver}" if self._maya_ver else "Standalone"))
+
+    def _build_toolbar(self):
+        tb = self.addToolBar("メイン")
+        tb.setMovable(False)
+        tb.setIconSize(QSize(20, 20))
+
+        # Action mode selector
+        tb.addWidget(QLabel("クリック動作:"))
+        self._action_combo = QComboBox()
+        self._action_combo.addItems(["プレビュー", "開く", "インポート", "リファレンス"])
+        action_map = ["preview", "open", "import", "reference"]
+        current_action = self._sm.get("single_click_action", "preview")
+        if current_action in action_map:
+            self._action_combo.setCurrentIndex(action_map.index(current_action))
+        self._action_combo.currentIndexChanged.connect(
+            lambda idx: self._sm.set("single_click_action", action_map[idx])
+        )
+        tb.addWidget(self._action_combo)
+
+        tb.addSeparator()
+
+        # Quick-nav bar
+        self._quick_nav = QuickNavBar(self._sm, parent=self)
+        self._quick_nav.navigate_requested.connect(self._browser.navigate_to)
+        tb.addWidget(self._quick_nav)
+
+        tb.addSeparator()
+
+        # Maya version selector (standalone mode)
+        if not self._inside_maya:
+            tb.addWidget(QLabel("Maya:"))
+            self._maya_combo = QComboBox()
+            self._maya_combo.setFixedWidth(100)
+            installations = find_installed_maya_versions(2023)
+            for inst in reversed(installations):
+                self._maya_combo.addItem(f"Maya {inst.version}", inst)
+            # Pre-select
+            if self._maya_inst:
+                for i in range(self._maya_combo.count()):
+                    if self._maya_combo.itemData(i) is self._maya_inst:
+                        self._maya_combo.setCurrentIndex(i)
+                        break
+            self._maya_combo.currentIndexChanged.connect(self._on_maya_version_changed)
+            tb.addWidget(self._maya_combo)
+
+            launch_btn = QPushButton("🚀 起動")
+            launch_btn.clicked.connect(self._launch_maya)
+            tb.addWidget(launch_btn)
+
+    def _build_menu(self):
+        mb = self.menuBar()
+
+        # ── File ─────────────────────────────────────────────────────
+        file_menu = mb.addMenu("ファイル")
+
+        if self._inside_maya:
+            open_act = file_menu.addAction("開く...")
+            open_act.triggered.connect(self._open_dialog)
+            import_act = file_menu.addAction("インポート...")
+            import_act.triggered.connect(self._import_dialog)
+            ref_act = file_menu.addAction("リファレンス...")
+            ref_act.triggered.connect(self._reference_dialog)
+            file_menu.addSeparator()
+
+        file_menu.addAction("終了").triggered.connect(self.close)
+
+        # ── ブックマーク ──────────────────────────────────────────────
+        bm_menu = mb.addMenu("ブックマーク")
+        bm_menu.addAction("現在のフォルダをブックマーク").triggered.connect(
+            lambda: self._bm_mgr.add_directory(self._browser.current_path())
+        )
+
+        # ── ツール ────────────────────────────────────────────────────
+        tools_menu = mb.addMenu("ツール")
+
+        tools_menu.addAction("バッチリネーム...").triggered.connect(
+            self._open_batch_rename
+        )
+        tools_menu.addSeparator()
+        tools_menu.addAction("リファレンスプリセットエディタ...").triggered.connect(
+            self._open_preset_editor
+        )
+        tools_menu.addAction("リファレンスエディタ...").triggered.connect(
+            self._open_reference_editor
+        )
+        tools_menu.addSeparator()
+        tools_menu.addAction("重複フォルダ検出...").triggered.connect(
+            self._toggle_dup_panel
+        )
+        tools_menu.addSeparator()
+        tools_menu.addAction("設定...").triggered.connect(self._open_settings)
+
+        # ── 表示 ──────────────────────────────────────────────────────
+        view_menu = mb.addMenu("表示")
+        view_menu.addAction("ブックマークパネル").triggered.connect(
+            lambda: self.findChild(QDockWidget, "ブックマーク") and
+                    self.findChild(QDockWidget, "ブックマーク").show()
+        )
+        view_menu.addAction("履歴パネル").triggered.connect(
+            lambda: self.findChild(QDockWidget, "履歴") and
+                    self.findChild(QDockWidget, "履歴").show()
+        )
+        view_menu.addAction("重複フォルダパネル").triggered.connect(self._toggle_dup_panel)
+
+        # ── ヘルプ ────────────────────────────────────────────────────
+        help_menu = mb.addMenu("ヘルプ")
+        help_menu.addAction("バージョン情報").triggered.connect(self._about)
+
+    # ------------------------------------------------------------------
+    # File actions
+    # ------------------------------------------------------------------
+
+    def _on_file_activated(self, path: str):
+        action = self._sm.get("double_click_action", "open")
+        if action == "open":
+            self._maya_open(path)
+        elif action == "import":
+            self._maya_import(path)
+        elif action == "reference":
+            self._maya_reference(path)
+
+    def _on_directory_changed(self, path: str):
+        self._status_path_label.setText(path)
+        self._history_panel.refresh()
+
+    def _open_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "ファイルを開く", "", "Maya Files (*.ma *.mb);;All (*.*)"
+        )
+        if path:
+            self._maya_open(path)
+
+    def _import_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "インポート", "",
+            "3D Files (*.ma *.mb *.fbx *.obj *.abc);;All (*.*)"
+        )
+        if path:
+            self._maya_import(path)
+
+    def _reference_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "リファレンス", "",
+            "Maya Files (*.ma *.mb *.fbx);;All (*.*)"
+        )
+        if path:
+            self._maya_reference(path)
+
+    # ------------------------------------------------------------------
+    # Maya operations (inside-Maya callbacks)
+    # ------------------------------------------------------------------
+
+    def _maya_open(self, path: str):
+        if not self._inside_maya:
+            self.statusBar().showMessage(f"[Standalone] 開く: {path}")
+            return
+        try:
+            import maya.cmds as cmds
+            if cmds.file(query=True, modified=True):
+                ret = QMessageBox.question(
+                    self, "未保存の変更",
+                    "現在のシーンを保存しますか？",
+                    QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+                )
+                if ret == QMessageBox.Cancel:
+                    return
+                if ret == QMessageBox.Save:
+                    cmds.file(save=True)
+            cmds.file(path, open=True, force=True, ignoreVersion=True)
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", str(e))
+
+    def _maya_import(self, path: str):
+        if not self._inside_maya:
+            self.statusBar().showMessage(f"[Standalone] インポート: {path}")
+            return
+        try:
+            import maya.cmds as cmds
+            ext = Path(path).suffix.lower()
+            if ext == ".fbx":
+                from core.file_operations import fbx_import_maya
+                fbx_import_maya(path)
+            else:
+                cmds.file(path, i=True, ignoreVersion=True,
+                          mergeNamespacesOnClash=False)
+        except Exception as e:
+            QMessageBox.critical(self, "インポートエラー", str(e))
+
+    def _maya_reference(self, path: str):
+        if not self._inside_maya:
+            self.statusBar().showMessage(f"[Standalone] リファレンス: {path}")
+            return
+        try:
+            import maya.cmds as cmds
+            ns, ok = QInputDialog.getText(self, "Namespace",
+                                          "Namespace を入力:", text="ref")
+            if not ok:
+                return
+            cmds.file(path, reference=True, namespace=ns,
+                      ignoreVersion=True, mergeNamespacesOnClash=False)
+        except Exception as e:
+            QMessageBox.critical(self, "リファレンスエラー", str(e))
+
+    # ------------------------------------------------------------------
+    # Maya version (standalone)
+    # ------------------------------------------------------------------
+
+    def _on_maya_version_changed(self, idx: int):
+        inst = self._maya_combo.itemData(idx)
+        if isinstance(inst, MayaInstallation):
+            self._maya_inst = inst
+            self._sm.set_maya_version(inst.version)
+            self.setWindowTitle(f"Maya File Manager  —  Maya {inst.version}")
+
+    def _launch_maya(self):
+        inst = self._maya_inst
+        if not inst:
+            QMessageBox.warning(self, "エラー", "Maya バージョンが選択されていません。")
+            return
+        try:
+            launch_maya(inst)
+            self.statusBar().showMessage(f"Maya {inst.version} を起動しました")
+        except Exception as e:
+            QMessageBox.critical(self, "起動エラー", str(e))
+
+    # ------------------------------------------------------------------
+    # Dialogs
+    # ------------------------------------------------------------------
+
+    def _open_preset_editor(self):
+        dlg = ReferencePresetEditor(self._sm, parent=self)
+        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+
+    def _open_settings(self):
+        dlg = SettingsDialog(self._sm, parent=self)
+        dlg.settings_changed.connect(self._on_settings_changed)
+        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+
+    def _on_settings_changed(self):
+        """Re-apply live settings to browser and thumbnail manager."""
+        self._browser.set_max_depth(self._sm.get("column_max_depth", 4))
+        self._browser.set_thumb_size(self._sm.get("thumbnail_size", 128))
+        self._thumb_mgr.set_cache_size(self._sm.get("thumbnail_cache_size", 256))
+        self.statusBar().showMessage("設定を適用しました")
+
+    def _open_batch_rename(self):
+        """Open batch rename for current browser selection (fallback: whole dir)."""
+        import os
+        # Try to get selected items from browser
+        paths = self._browser._get_selected_paths() if hasattr(self._browser, "_get_selected_paths") else []
+        if not paths:
+            current = self._browser.current_path()
+            if os.path.isdir(current):
+                paths = [os.path.join(current, f) for f in os.listdir(current)
+                         if os.path.isfile(os.path.join(current, f))]
+        if not paths:
+            QMessageBox.information(self, "情報", "リネーム対象のファイルが選択されていません。")
+            return
+        dlg = BatchRenameDialog(paths, parent=self)
+        dlg.renamed.connect(lambda results: self.statusBar().showMessage(
+            f"{len(results)} 件リネーム完了"))
+        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+
+    def _open_reference_editor(self):
+        dlg = ReferenceEditor(parent=self)
+        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+
+    def _toggle_dup_panel(self):
+        visible = not self._dup_dock.isVisible()
+        self._dup_dock.setVisible(visible)
+        if visible:
+            # Pre-fill with current directory
+            self._dup_panel.set_root(self._browser.current_path())
+
+    def _about(self):
+        QMessageBox.about(
+            self, "Maya File Manager",
+            "Maya File Manager v1.0\n\n"
+            "Maya 2023 以降対応\n"
+            "PySide2 / PySide6\n\n"
+            "© 2025 PointLights for entertainment"
+        )
+
+    # ------------------------------------------------------------------
+    # Window state
+    # ------------------------------------------------------------------
+
+    def _restore_geometry(self):
+        geom = self._sm.get("window_geometry")
+        state = self._sm.get("window_state")
+        if geom:
+            try:
+                from core.compat import Qt
+                import base64
+                self.restoreGeometry(bytes.fromhex(geom))
+            except Exception:
+                pass
+        if state:
+            try:
+                self.restoreState(bytes.fromhex(state))
+            except Exception:
+                pass
+
+    def closeEvent(self, event):
+        self._sm.set("window_geometry", self.saveGeometry().toHex().data().decode(), save=False)
+        self._sm.set("window_state",    self.saveState().toHex().data().decode(), save=False)
+        self._sm.save()
+        super().closeEvent(event)

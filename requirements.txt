@@ -1,0 +1,16 @@
+# MayaFileManager 依存パッケージ
+# pip install -r requirements.txt
+
+# Qt バインディング（Maya 外スタンドアロン起動用）
+# Maya 2023/2024 向けは PySide2、2025 以降は PySide6
+PySide6>=6.4.0
+# PySide2>=5.15.0  # Maya 2023/2024 環境に合わせる場合はこちら
+
+# ゴミ箱への安全な削除
+send2trash>=1.8.0
+
+# EXR/HDR サムネイル生成（任意）
+# opencv-python>=4.7.0
+
+# EXE ビルド用（開発環境のみ・本番不要）
+# pyinstaller>=6.0.0

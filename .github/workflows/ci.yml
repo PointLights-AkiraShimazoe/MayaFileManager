@@ -1,0 +1,45 @@
+name: CI – Syntax Check
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  syntax-check:
+    name: Python Syntax Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check syntax of all .py files
+        run: |
+          python3 - << 'EOF'
+          import ast, sys, os
+
+          errors = []
+          for root, dirs, files in os.walk("."):
+              dirs[:] = [d for d in dirs if d not in
+                         ["__pycache__", ".git", "dist", "build", ".github"]]
+              for fname in files:
+                  if not fname.endswith(".py"):
+                      continue
+                  path = os.path.join(root, fname)
+                  try:
+                      ast.parse(open(path, encoding="utf-8").read())
+                      print(f"  ✓  {path}")
+                  except SyntaxError as e:
+                      errors.append((path, e))
+                      print(f"  ✗  {path}: {e}")
+
+          print(f"\n{len(errors)} errors in {len(errors)+sum(1 for _ in open('/dev/stdin'))} files" if False else
+                f"\n{'OK' if not errors else 'FAILED'}: {len(errors)} syntax errors found")
+          sys.exit(len(errors))
+          EOF

@@ -1,0 +1,37 @@
+# UTF-8
+#
+# Windows EXE バージョン情報リソース
+# PyInstaller の version= パラメータで指定するファイル
+#
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,        # VOS_NT_WINDOWS32
+    fileType=0x1,      # VFT_APP
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          u'040904B0',   # Language: en-US, Codepage: UTF-16 LE
+          [
+            StringStruct(u'CompanyName',      u'PointLights for entertainment'),
+            StringStruct(u'FileDescription',  u'Maya File Manager'),
+            StringStruct(u'FileVersion',      u'1.0.0.0'),
+            StringStruct(u'InternalName',     u'MayaFileManager'),
+            StringStruct(u'LegalCopyright',   u'\xa9 2025 PointLights for entertainment'),
+            StringStruct(u'OriginalFilename', u'MayaFileManager.exe'),
+            StringStruct(u'ProductName',      u'Maya File Manager'),
+            StringStruct(u'ProductVersion',   u'1.0.0.0'),
+          ]
+        ),
+      ]
+    ),
+    VarFileInfo([VarStruct(u'Translation', [0x0409, 1200])])
+  ]
+)

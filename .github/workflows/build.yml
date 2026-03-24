@@ -1,0 +1,159 @@
+name: Build MayaFileManager.exe
+
+# ============================================================
+# トリガー
+# ============================================================
+on:
+  # v1.0.0 のようなタグをpushしたときに自動ビルド → Releaseに添付
+  push:
+    tags:
+      - "v*.*.*"
+
+  # 手動でも実行できる（Actionsタブ → Run workflow）
+  workflow_dispatch:
+    inputs:
+      release_name:
+        description: "リリース名 (例: v1.0.0)"
+        required: false
+        default: "dev-build"
+
+# ============================================================
+# ジョブ
+# ============================================================
+jobs:
+  build-windows:
+    name: Windows EXE Build
+    runs-on: windows-latest          # Windows Server 2022
+
+    steps:
+      # --------------------------------------------------------
+      # 1. ソースを取得
+      # --------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # 2. Python セットアップ
+      # --------------------------------------------------------
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # --------------------------------------------------------
+      # 3. 依存パッケージをインストール
+      # --------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 send2trash pyinstaller
+          # EXR サムネイル対応が必要な場合は以下を有効化
+          # pip install opencv-python
+
+      # --------------------------------------------------------
+      # 4. バージョン情報を更新（タグから自動取得）
+      # --------------------------------------------------------
+      - name: Set version from tag
+        shell: python
+        run: |
+          import re, os
+
+          tag = os.environ.get("GITHUB_REF_NAME", "dev")
+          # v1.2.3 → (1, 2, 3, 0)
+          m = re.match(r"v?(\d+)\.(\d+)\.(\d+)", tag)
+          if m:
+              major, minor, patch = m.group(1), m.group(2), m.group(3)
+          else:
+              major, minor, patch = "1", "0", "0"
+
+          ver_tuple = f"({major}, {minor}, {patch}, 0)"
+          ver_str   = f"{major}.{minor}.{patch}.0"
+
+          with open("version_info.txt") as f:
+              src = f.read()
+
+          src = re.sub(r"filevers=\([^)]+\)", f"filevers={ver_tuple}", src)
+          src = re.sub(r"prodvers=\([^)]+\)", f"prodvers={ver_tuple}", src)
+          src = re.sub(r"'FileVersion',\s*u'[^']*'",
+                       f"'FileVersion',      u'{ver_str}'", src)
+          src = re.sub(r"'ProductVersion',\s*u'[^']*'",
+                       f"'ProductVersion',   u'{ver_str}'", src)
+
+          with open("version_info.txt", "w") as f:
+              f.write(src)
+
+          print(f"Version set to {ver_str}")
+
+      # --------------------------------------------------------
+      # 5. PyInstaller でビルド
+      # --------------------------------------------------------
+      - name: Build EXE with PyInstaller
+        run: |
+          python -m PyInstaller MayaFileManager.spec --clean --noconfirm --log-level INFO
+
+      # --------------------------------------------------------
+      # 6. ビルド結果を確認
+      # --------------------------------------------------------
+      - name: Verify EXE
+        shell: pwsh
+        run: |
+          $exe = "dist\MayaFileManager.exe"
+          if (Test-Path $exe) {
+            $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+            Write-Host "✓ MayaFileManager.exe ($size MB)"
+          } else {
+            Write-Error "EXE が生成されませんでした"
+            exit 1
+          }
+
+      # --------------------------------------------------------
+      # 7. ZIPに固める（Releaseに添付するため）
+      # --------------------------------------------------------
+      - name: Zip EXE
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if (-not $tag) { $tag = "dev-build" }
+          $zipName = "MayaFileManager_${tag}_windows.zip"
+          Compress-Archive -Path "dist\MayaFileManager.exe" -DestinationPath $zipName
+          Write-Host "Created: $zipName"
+          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+
+      # --------------------------------------------------------
+      # 8. Artifacts にアップロード（ダウンロード用）
+      # --------------------------------------------------------
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MayaFileManager-windows
+          path: ${{ env.ZIP_NAME }}
+          retention-days: 30
+
+      # --------------------------------------------------------
+      # 9. GitHub Release を作成してEXEを添付
+      #    （タグ push 時のみ）
+      # --------------------------------------------------------
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: ${{ env.ZIP_NAME }}
+          body: |
+            ## Maya File Manager ${{ github.ref_name }}
+
+            ### ダウンロード
+            - **MayaFileManager_${{ github.ref_name }}_windows.zip** を展開して `MayaFileManager.exe` を実行
+
+            ### 動作要件
+            - Windows 10 / 11 (64bit)
+            - Maya 2023 以降（スタンドアロン起動する場合は Maya のインストール不要）
+
+            ### 変更履歴
+            <!-- 自動生成されます -->
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
