@@ -8,16 +8,21 @@ on:
 
 jobs:
   syntax-check:
-    name: Python Syntax Check
+    # Maya 2023(3.9) / 2024(3.10) / 2025-2026(3.11) / 2027(3.13) の各同梱Pythonで構文互換を保証
+    name: "Syntax Check (Python ${{ matrix.python }})"
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python ${{ matrix.python }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "${{ matrix.python }}"
 
       - name: Check syntax of all .py files
         run: |
@@ -39,7 +44,6 @@ jobs:
                       errors.append((path, e))
                       print(f"  ✗  {path}: {e}")
 
-          print(f"\n{len(errors)} errors in {len(errors)+sum(1 for _ in open('/dev/stdin'))} files" if False else
-                f"\n{'OK' if not errors else 'FAILED'}: {len(errors)} syntax errors found")
+          print(f"\n{'OK' if not errors else 'FAILED'}: {len(errors)} syntax errors found")
           sys.exit(len(errors))
           EOF

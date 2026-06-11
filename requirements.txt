@@ -2,8 +2,9 @@
 # pip install -r requirements.txt
 
 # Qt バインディング（Maya 外スタンドアロン起動用）
-# Maya 2023/2024 向けは PySide2、2025 以降は PySide6
-PySide6>=6.4.0
+# Maya 2023/2024 向けは PySide2、2025〜2027 は PySide6
+# Python 3.13 (Maya 2027 同梱) で使う場合は PySide6 6.8 以降を推奨
+PySide6>=6.8.0
 # PySide2>=5.15.0  # Maya 2023/2024 環境に合わせる場合はこちら
 
 # ゴミ箱への安全な削除

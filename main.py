@@ -42,7 +42,21 @@ def _bootstrap_pyside():
 
 
 def _apply_dark_theme(app):
-    """Apply a basic dark palette so the tool looks consistent on all OSes."""
+    """
+    Apply the design-token driven M3 theme (config/design_tokens.json).
+    Falls back to the legacy basic palette if the theme engine fails.
+    """
+    try:
+        from core.theme_engine import apply_theme
+        apply_theme(app, mode="dark")
+        return
+    except Exception as e:
+        print(f"[MayaFileManager] theme_engine failed, using fallback palette: {e}")
+        _apply_fallback_palette(app)
+
+
+def _apply_fallback_palette(app):
+    """Legacy basic dark palette (kept as a safety net)."""
     from core.compat import QPalette, QColor
     palette = QPalette()
     palette.setColor(QPalette.Window,          QColor(45, 45, 45))
@@ -218,7 +232,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-launcher", action="store_true",
                         help="Launcher ダイアログをスキップしてマネージャーを直接開く")
     parser.add_argument("--maya-ver", default="",
-                        help="使用する Maya バージョン (例: 2024)")
+                        help="使用する Maya バージョン (例: 2027)")
     args = parser.parse_args()
 
     run_standalone(skip_launcher=args.no_launcher)

@@ -8,12 +8,18 @@
 ; ============================================================
 
 #define AppName      "Maya File Manager"
-#define AppVersion   "1.0.0"
+; CI からは iscc /DAppVersion=1.2.3 で上書きされる
+#ifndef AppVersion
+  #define AppVersion "1.0.0"
+#endif
 #define AppPublisher "PointLights for entertainment"
 #define AppExeName   "MayaFileManager.exe"
 #define AppURL       "https://pointlights.jp"
 
 [Setup]
+; 相対パス (dist\, resources\) をリポジトリルート基準で解決する
+; （本スクリプトは build_tools\ 配下にあるため必須）
+SourceDir=..
 AppId={{E4A2F3B1-7C9D-4E5F-A8B0-123456789ABC}
 AppName={#AppName}
 AppVersion={#AppVersion}
@@ -61,5 +67,5 @@ Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#AppName}"; Filen
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{#AppName} を起動"; Flags: nowait postinstall skipifsilent
 
-[UninstallDelete]
-Type: filesandordirs; Name: "{userappdata}\.maya_file_manager"
+; 注意: ユーザー設定 (%USERPROFILE%\.maya_file_manager のブックマーク・履歴) は
+; アンインストールしても削除しない（再インストール時に引き継ぐため）

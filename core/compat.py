@@ -1,6 +1,7 @@
 """
 PySide2 / PySide6 compatibility layer.
-Maya 2023-2024 uses PySide2, Maya 2025+ uses PySide6.
+Maya 2023-2024 uses PySide2, Maya 2025-2027+ uses PySide6.
+(Maya 2027 ships Python 3.13 - keep this module 3.9-3.13 compatible.)
 Standalone mode auto-selects the available version.
 """
 

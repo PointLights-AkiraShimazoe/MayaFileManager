@@ -1,0 +1,100 @@
+{
+  "_comment": "MayaFileManager デザイントークン (Material Design 3 準拠の3層構造: ref → sys → comp)",
+  "_usage": "色・形状・密度はすべてここで管理する。QSSに直接色を書かないこと。core/theme_engine.py が本ファイルからQSSを生成する",
+
+  "ref": {
+    "palette": {
+      "primary80": "#8AB4F8",
+      "primary40": "#1A73E8",
+      "primary30": "#1B5CB8",
+      "primary20": "#174EA6",
+      "neutral10": "#1C1B1F",
+      "neutral12": "#211F26",
+      "neutral17": "#2B2930",
+      "neutral22": "#322F38",
+      "neutral30": "#48464C",
+      "neutral60": "#938F99",
+      "neutral80": "#CAC4D0",
+      "neutral90": "#E6E1E5",
+      "neutral95": "#F4EFF4",
+      "neutral99": "#FFFBFE",
+      "error80": "#F2B8B5",
+      "error40": "#B3261E",
+      "tertiary80": "#D0BCFF",
+      "green80": "#6DD58C",
+      "yellow80": "#FDD663"
+    }
+  },
+
+  "sys": {
+    "dark": {
+      "primary": "{ref.palette.primary80}",
+      "on_primary": "{ref.palette.neutral10}",
+      "primary_container": "{ref.palette.primary30}",
+      "on_primary_container": "#D6E3FF",
+      "surface": "{ref.palette.neutral10}",
+      "surface_container_low": "{ref.palette.neutral12}",
+      "surface_container": "{ref.palette.neutral17}",
+      "surface_container_high": "{ref.palette.neutral22}",
+      "on_surface": "{ref.palette.neutral90}",
+      "on_surface_variant": "{ref.palette.neutral80}",
+      "on_surface_dim": "{ref.palette.neutral60}",
+      "outline": "{ref.palette.neutral30}",
+      "outline_variant": "#3A3740",
+      "error": "{ref.palette.error80}",
+      "success": "{ref.palette.green80}",
+      "warning": "{ref.palette.yellow80}",
+      "selection": "{ref.palette.primary30}",
+      "on_selection": "{ref.palette.neutral99}",
+      "state_hover": "rgba(230, 225, 229, 0.08)",
+      "state_pressed": "rgba(230, 225, 229, 0.12)",
+      "state_focus": "rgba(138, 180, 248, 0.12)"
+    },
+    "light": {
+      "primary": "{ref.palette.primary40}",
+      "on_primary": "{ref.palette.neutral99}",
+      "primary_container": "#D6E3FF",
+      "on_primary_container": "{ref.palette.primary20}",
+      "surface": "{ref.palette.neutral99}",
+      "surface_container_low": "{ref.palette.neutral95}",
+      "surface_container": "#ECE6F0",
+      "surface_container_high": "#E0DAE4",
+      "on_surface": "{ref.palette.neutral10}",
+      "on_surface_variant": "{ref.palette.neutral30}",
+      "on_surface_dim": "{ref.palette.neutral60}",
+      "outline": "#79747E",
+      "outline_variant": "#C4C0CA",
+      "error": "{ref.palette.error40}",
+      "success": "#1E8E3E",
+      "warning": "#F9AB00",
+      "selection": "#D6E3FF",
+      "on_selection": "{ref.palette.neutral10}",
+      "state_hover": "rgba(28, 27, 31, 0.08)",
+      "state_pressed": "rgba(28, 27, 31, 0.12)",
+      "state_focus": "rgba(26, 115, 232, 0.12)"
+    }
+  },
+
+  "shape": {
+    "corner_small": 4,
+    "corner_medium": 8,
+    "corner_large": 12
+  },
+
+  "type": {
+    "family": "Noto Sans JP, Yu Gothic UI, Segoe UI, sans-serif",
+    "title_px": 14,
+    "body_px": 12,
+    "label_px": 11,
+    "caption_px": 10
+  },
+
+  "density": {
+    "_comment": "常駐領域はコンパクト密度(-2相当)。ダイアログは標準のまま (M3 density guideline)",
+    "list_row_h": 28,
+    "tree_row_h": 24,
+    "toolbar_h": 40,
+    "input_h": 26,
+    "button_h": 28
+  }
+}
