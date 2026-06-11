@@ -180,8 +180,6 @@ class DuplicateFolderPanel(QWidget):
         self._tree = QTreeWidget()
         self._tree.setColumnCount(3)
         self._tree.setHeaderLabels(["フォルダ名 / パス", "ファイル数", "サイズ"])
-        self._tree.header().setSectionResizeMode(0, QTreeWidget.header(self._tree).Stretch
-                                                  if hasattr(QTreeWidget, 'header') else 0)
         self._tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._show_context_menu)
@@ -189,9 +187,9 @@ class DuplicateFolderPanel(QWidget):
         self._tree.setAlternatingRowColors(True)
 
         from core.compat import QHeaderView
-        self._tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
 
         layout.addWidget(self._tree)
 
