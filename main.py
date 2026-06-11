@@ -41,6 +41,62 @@ def _bootstrap_pyside():
     return app, False
 
 
+def _setup_error_logging():
+    """
+    未捕捉例外を ~/.maya_file_manager/error.log に記録し、
+    可能ならダイアログでも表示する（console=False のEXEでは必須）。
+    """
+    import traceback
+    from pathlib import Path
+    from datetime import datetime
+
+    log_dir = Path.home() / ".maya_file_manager"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "error.log"
+
+    def _hook(exc_type, exc_value, exc_tb):
+        text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"\n===== {stamp} =====\n{text}")
+        except OSError:
+            pass
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        try:
+            from core.compat import QApplication, QMessageBox
+            if QApplication.instance():
+                QMessageBox.critical(
+                    None, "Maya File Manager — エラー",
+                    f"予期しないエラーが発生しました。\n\n{exc_value}\n\n"
+                    f"詳細ログ: {log_file}")
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+    return log_file
+
+
+def _report_window_error(exc):
+    """MainWindow 生成失敗をユーザーに見える形で報告する。"""
+    import traceback
+    from pathlib import Path
+    from datetime import datetime
+    log_file = Path.home() / ".maya_file_manager" / "error.log"
+    text = traceback.format_exc()
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} (MainWindow) =====\n{text}")
+    except OSError:
+        pass
+    from core.compat import QMessageBox
+    QMessageBox.critical(
+        None, "Maya File Manager — 起動エラー",
+        f"マネージャーウィンドウの作成に失敗しました。\n\n{exc}\n\n"
+        f"詳細ログ: {log_file}")
+
+
 def _apply_dark_theme(app):
     """
     Apply the design-token driven M3 theme (config/design_tokens.json).
@@ -85,6 +141,7 @@ def run_standalone(skip_launcher: bool = False):
     Start as a standalone application.
     """
     app, created = _bootstrap_pyside()
+    _setup_error_logging()
 
     from core.settings_manager import SettingsManager
     sm = SettingsManager()
@@ -99,24 +156,31 @@ def run_standalone(skip_launcher: bool = False):
         _pending_window = []  # hold reference to prevent GC
 
         def on_launch(installation, file_path):
-            win = _open_main_window(sm, maya_installation=installation)
-            _pending_window.append(win)
-            if file_path:
-                win._browser.navigate_to(
-                    os.path.dirname(file_path) if os.path.isfile(file_path) else file_path
-                )
+            try:
+                win = _open_main_window(sm, maya_installation=installation)
+                _pending_window.append(win)
+                if file_path:
+                    win._browser.navigate_to(
+                        os.path.dirname(file_path) if os.path.isfile(file_path) else file_path
+                    )
+            except Exception as e:
+                _report_window_error(e)
 
         def on_manager_only():
-            win = _open_main_window(sm, maya_installation=None)
-            _pending_window.append(win)
+            try:
+                win = _open_main_window(sm, maya_installation=None)
+                _pending_window.append(win)
+            except Exception as e:
+                _report_window_error(e)
 
         launcher.launch_requested.connect(on_launch)
         launcher.open_manager_only.connect(on_manager_only)
 
         result = launcher.exec_() if hasattr(launcher, "exec_") else launcher.exec()
 
-        # If user just closed launcher without proceeding, quit
-        if not _pending_window and result == 0:
+        # ウィンドウが1つも開けなかった場合は終了
+        # （キャンセル時だけでなく、生成失敗時も透明なプロセスを残さない）
+        if not _pending_window:
             sys.exit(0)
 
     if created:
