@@ -70,7 +70,8 @@ jobs:
           ver_tuple = f"({major}, {minor}, {patch}, 0)"
           ver_str   = f"{major}.{minor}.{patch}.0"
 
-          with open("version_info.txt") as f:
+          # Windowsランナーのデフォルトはcp1252のため、UTF-8を明示（日本語コメント対策）
+          with open("version_info.txt", encoding="utf-8") as f:
               src = f.read()
 
           src = re.sub(r"filevers=\([^)]+\)", f"filevers={ver_tuple}", src)
@@ -80,7 +81,7 @@ jobs:
           src = re.sub(r"'ProductVersion',\s*u'[^']*'",
                        f"'ProductVersion',   u'{ver_str}'", src)
 
-          with open("version_info.txt", "w") as f:
+          with open("version_info.txt", "w", encoding="utf-8") as f:
               f.write(src)
 
           print(f"Version set to {ver_str}")
