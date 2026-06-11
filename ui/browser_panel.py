@@ -34,6 +34,8 @@ from core.compat import (
     QDir, QFileInfo, QUrl, QMimeData, QPoint,
     QFontMetrics
 )
+from core.compat import QtCore as _QtCore
+from core.path_guard import PathProber, DriveScanner, invalidate_cache
 from core.file_operations import (
     open_with_default_app, reveal_in_explorer,
     copy_items, move_items, delete_items,
@@ -137,9 +139,20 @@ class FileFilterProxyModel(QSortFilterProxyModel):
             name = source_model.fileName(index).lower()
             if source_model.isDir(index):
                 return True  # Always show dirs so tree stays navigable
-            return self._filter in name
+            return self._fuzzy_match(self._filter, name)
 
         return True
+
+    @staticmethod
+    def _fuzzy_match(pattern: str, name: str) -> bool:
+        """
+        部分一致 or 順序保存サブシーケンス一致 (N-3 ファジー検索)。
+        例: 'chrahair' → 'chr_A_hair_sim_v012.ma' にヒット
+        """
+        if pattern in name:
+            return True
+        it = iter(name)
+        return all(c in it for c in pattern)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +220,16 @@ class BrowserPanel(QWidget):
         self._on_open: Optional[Callable[[str], None]] = None
         self._on_import: Optional[Callable[[str], None]] = None
         self._on_reference: Optional[Callable[[str], None]] = None
+
+        # N-1: 非同期パスプローブ＆ドライブ隔離（UIフリーズ対策）
+        self._prober = PathProber(self)
+        self._prober.probed.connect(self._on_probe_result)
+        self._drive_scanner = DriveScanner(self)
+        self._drive_scanner.drives_ready.connect(self._on_drives_ready)
+        self._pending_nav = None
+
+        # N-2: Quick Look（遅延生成）
+        self._quick_look = None
 
         self._build_ui()
         self._navigate(self._current_path)
@@ -305,6 +328,7 @@ class BrowserPanel(QWidget):
         # Thumbnail list view
         self._thumb_view = QListView()
         self._thumb_view.setModel(self._proxy)
+        # （Quick Look 用イベントフィルタは _build_ui 末尾で両ビューに設置）
         self._thumb_view.setViewMode(QListView.IconMode)
         self._thumb_view.setResizeMode(QListView.Adjust)
         self._thumb_view.setSpacing(4)
@@ -337,16 +361,59 @@ class BrowserPanel(QWidget):
         # Drag-drop accept onto panel itself
         self.setAcceptDrops(True)
 
+        # N-2: Space Quick Look 用イベントフィルタ
+        self._column_view.installEventFilter(self)
+        self._thumb_view.installEventFilter(self)
+
     # ------------------------------------------------------------------
     # Navigation
     # ------------------------------------------------------------------
 
-    def _navigate(self, path: str, add_to_history: bool = True):
-        path = os.path.normpath(path)
-        if not os.path.exists(path):
-            self.status_message.emit(f"パスが存在しません: {path}")
-            return
+    # ------------------------------------------------------------------
+    # Quick Look (N-2)
+    # ------------------------------------------------------------------
 
+    def eventFilter(self, obj, event):
+        if (event.type() == _QtCore.QEvent.KeyPress
+                and event.key() == Qt.Key_Space
+                and obj in (self._column_view, self._thumb_view)):
+            self._toggle_quick_look()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _toggle_quick_look(self):
+        paths = self._get_selected_paths()
+        if not paths:
+            return
+        if self._quick_look is None:
+            from ui.quick_look import QuickLookWindow
+            self._quick_look = QuickLookWindow(self)
+        self._quick_look.toggle_for(paths[0])
+
+    def _sync_quick_look(self, path: str):
+        """選択変更時、Quick Look が開いていれば内容を追従させる。"""
+        if self._quick_look and self._quick_look.isVisible() and os.path.isfile(path):
+            self._quick_look.show_for(path)
+
+    def _navigate(self, path: str, add_to_history: bool = True):
+        """到達可能性を非同期確認してから移動する（N-1: UIを止めない）。"""
+        path = os.path.normpath(path)
+        self._pending_nav = (path, add_to_history)
+        self.status_message.emit(f"確認中: {path}")
+        self._prober.probe(path)
+
+    def _on_probe_result(self, path: str, reachable: bool):
+        if not self._pending_nav or self._pending_nav[0] != path:
+            return  # 古いプローブ結果は無視（最後の要求のみ有効）
+        _, add_to_history = self._pending_nav
+        self._pending_nav = None
+        if not reachable:
+            self.status_message.emit(
+                f"パスに到達できません（不存在または応答なし）: {path}")
+            return
+        self._navigate_now(path, add_to_history)
+
+    def _navigate_now(self, path: str, add_to_history: bool = True):
         self._current_path = path
         self._addr_bar.setText(path)
 
@@ -373,8 +440,11 @@ class BrowserPanel(QWidget):
             self._history_index = len(self._history) - 1
             self._sm.add_to_history(path)
 
-        # Prefetch thumbnails for visible items
-        self._thumb_mgr.prefetch(self._list_visible_files(path))
+        # Prefetch thumbnails for visible items（到達確認済みだが念のため保護）
+        try:
+            self._thumb_mgr.prefetch(self._list_visible_files(path))
+        except OSError:
+            pass
 
     def _go_back(self):
         if self._history_index > 0:
@@ -400,15 +470,33 @@ class BrowserPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _refresh_drives(self):
+        """ドライブ走査を別スレッドで実行（N-1: 死んだNASマッピングで固まらない）。"""
+        invalidate_cache()
+        self._drive_scanner.scan()
+
+    def _on_drives_ready(self, results):
+        current = self._drive_combo.currentData()
         self._drive_combo.blockSignals(True)
         self._drive_combo.clear()
-        for d in list_drives():
-            self._drive_combo.addItem(d)
+        for root, ok in results:
+            self._drive_combo.addItem(root if ok else f"{root} (応答なし)", root)
+            if not ok:
+                # 応答しないドライブは選択不可にして隔離
+                model_item = self._drive_combo.model().item(
+                    self._drive_combo.count() - 1)
+                if model_item is not None:
+                    model_item.setEnabled(False)
+        if current:
+            for i in range(self._drive_combo.count()):
+                if self._drive_combo.itemData(i) == current:
+                    self._drive_combo.setCurrentIndex(i)
+                    break
         self._drive_combo.blockSignals(False)
 
     def _on_drive_changed(self, drive: str):
-        if drive and os.path.exists(drive):
-            self._navigate(drive)
+        root = self._drive_combo.currentData() or drive
+        if root:
+            self._navigate(root)  # 到達確認は _navigate 側で非同期に行う
 
     # ------------------------------------------------------------------
     # View mode / sort / filter
@@ -447,6 +535,7 @@ class BrowserPanel(QWidget):
             return
         action = self._sm.get("single_click_action", "preview")
         self._dispatch_action(action, path)
+        self._sync_quick_look(path)
         self.selection_changed.emit([path])
 
     def _on_item_activated(self, proxy_index: QModelIndex):
