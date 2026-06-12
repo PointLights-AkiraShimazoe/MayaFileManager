@@ -54,6 +54,19 @@ def _setup_error_logging():
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "error.log"
 
+    # ネイティブクラッシュ(C++層segfault等)もcrash.logに記録する
+    # ファイルハンドルはGC防止のためグローバル保持
+    global _crash_log_handle
+    try:
+        import faulthandler
+        _crash_log_handle = open(log_dir / "crash.log", "a", encoding="utf-8")
+        from datetime import datetime as _dt
+        _crash_log_handle.write(f"\n===== session start {_dt.now():%Y-%m-%d %H:%M:%S} =====\n")
+        _crash_log_handle.flush()
+        faulthandler.enable(_crash_log_handle)
+    except Exception:
+        pass
+
     def _hook(exc_type, exc_value, exc_tb):
         text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -201,6 +214,7 @@ def _open_main_window(settings_manager, maya_installation=None):
 # ---------------------------------------------------------------------------
 
 _maya_window_instance = None
+_crash_log_handle = None
 
 
 def show_in_maya():

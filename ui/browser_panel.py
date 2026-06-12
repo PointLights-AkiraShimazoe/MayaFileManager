@@ -162,26 +162,46 @@ class FileFilterProxyModel(QSortFilterProxyModel):
 class CappedColumnView(QColumnView):
     """
     QColumnView with configurable maximum column depth.
-    Columns beyond max_depth are removed.
+
+    仕様: 選択がmax_depthより深くなったら、ルートを1段下げて
+    可視カラム数をmax_depth以内に保つ（macOS Finder相当の挙動）。
+
+    実装注意: currentChanged の中で setRootIndex を呼ぶと
+    QColumnView内部のカラム再構築と競合してクラッシュするため、
+    QTimer.singleShot(0) でイベントループ一巡後に実行する。
     """
 
     def __init__(self, max_depth: int = 4, parent=None):
         super().__init__(parent)
         self._max_depth = max_depth
-        self._current_depth = 0
 
     def set_max_depth(self, depth: int):
         self._max_depth = depth
 
     def currentChanged(self, current: QModelIndex, previous: QModelIndex):
         super().currentChanged(current, previous)
-        # Trim columns beyond max depth by collapsing the root column count
-        self._trim_columns()
+        if self._max_depth <= 0 or not current.isValid():
+            return
+        # ルートから current までの祖先チェーンを構築
+        root = self.rootIndex()
+        chain = []
+        idx = current
+        while idx.isValid() and idx != root:
+            chain.append(idx)
+            idx = idx.parent()
+        # 可視カラム数 = チェーン長（root直下=1カラム目）
+        if len(chain) > self._max_depth:
+            new_root = _QtCore.QPersistentModelIndex(chain[-1])
+            QTimer.singleShot(0, lambda: self._apply_root_shift(new_root))
 
-    def _trim_columns(self):
-        # QColumnView exposes columnWidths; we can't easily cap columns here
-        # but we can set the preview widget once depth is exceeded.
-        pass  # Extend later with column-count introspection
+    def _apply_root_shift(self, persistent_root):
+        if not persistent_root.isValid() or self.model() is None:
+            return
+        idx = self.model().index(persistent_root.row(),
+                                 persistent_root.column(),
+                                 persistent_root.parent())
+        if idx.isValid():
+            self.setRootIndex(idx)
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +433,22 @@ class BrowserPanel(QWidget):
             return
         self._navigate_now(path, add_to_history)
 
+    def _set_current_path(self, path: str, add_to_history: bool = True):
+        """ビューのルートを変えずに現在地の状態だけ更新する（カラム展開用）。"""
+        self._current_path = path
+        self._addr_bar.setText(path)
+        self.directory_changed.emit(path)
+        self.status_message.emit(path)
+        if add_to_history:
+            self._history = self._history[:self._history_index + 1]
+            self._history.append(path)
+            self._history_index = len(self._history) - 1
+            self._sm.add_to_history(path)
+        try:
+            self._thumb_mgr.prefetch(self._list_visible_files(path))
+        except OSError:
+            pass
+
     def _navigate_now(self, path: str, add_to_history: bool = True):
         self._current_path = path
         self._addr_bar.setText(path)
@@ -439,6 +475,8 @@ class BrowserPanel(QWidget):
             self._history.append(path)
             self._history_index = len(self._history) - 1
             self._sm.add_to_history(path)
+
+        self.status_message.emit(path)  # 「確認中」表示を現在地に更新
 
         # Prefetch thumbnails for visible items（到達確認済みだが念のため保護）
         try:
@@ -531,7 +569,13 @@ class BrowserPanel(QWidget):
     def _on_item_clicked(self, proxy_index: QModelIndex):
         path = self._resolve_path(proxy_index)
         if os.path.isdir(path):
-            self._navigate(path)
+            if self._column_view.isVisible():
+                # カラムビュー: QColumnViewのネイティブ列展開に任せ、
+                # ルートは変更しない（変更すると1カラム表示になり、
+                # 内部カラム再構築との競合でクラッシュもする）
+                self._set_current_path(path)
+            else:
+                self._navigate(path)
             return
         action = self._sm.get("single_click_action", "preview")
         self._dispatch_action(action, path)
@@ -541,7 +585,10 @@ class BrowserPanel(QWidget):
     def _on_item_activated(self, proxy_index: QModelIndex):
         path = self._resolve_path(proxy_index)
         if os.path.isdir(path):
-            self._navigate(path)
+            if self._column_view.isVisible():
+                self._set_current_path(path)  # カラム展開を維持（ルート不変）
+            else:
+                self._navigate(path)
             return
         action = self._sm.get("double_click_action", "open")
         self._dispatch_action(action, path)
