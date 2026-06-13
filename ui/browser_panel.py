@@ -32,7 +32,7 @@ from core.compat import (
     QStyledItemDelegate, QStyle, QStyleOption,
     QModelIndex, QSize, QPixmap, QPainter, QColor, QFont,
     QDir, QFileInfo, QUrl, QMimeData, QPoint,
-    QFontMetrics
+    QFontMetrics, QTimer
 )
 from core.compat import QtCore as _QtCore
 from core.path_guard import PathProber, DriveScanner, invalidate_cache
