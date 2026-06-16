@@ -316,7 +316,10 @@ class BrowserPanel(QWidget):
         self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         tb_layout.addWidget(self._sort_combo)
 
-        layout.addWidget(toolbar)
+        # ツールバー(アドレスバー行)は本来の高さに固定する。
+        # これを怠ると縦方向にも伸びてビューの空間を奪う（上部に巨大な空白が出る）。
+        toolbar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        layout.addWidget(toolbar, 0)
 
         # ── Main view stack ───────────────────────────────────────────
         self._view_stack = QSplitter(Qt.Horizontal)
@@ -372,7 +375,8 @@ class BrowserPanel(QWidget):
         self._view_stack.addWidget(self._thumb_view)
         self._thumb_view.hide()
 
-        layout.addWidget(self._view_stack)
+        # stretch=1 で残りの縦空間をすべてビューに割り当てる
+        layout.addWidget(self._view_stack, 1)
 
         # ── History navigation ────────────────────────────────────────
         self._history: List[str] = []
@@ -450,6 +454,10 @@ class BrowserPanel(QWidget):
             pass
 
     def _navigate_now(self, path: str, add_to_history: bool = True):
+        # symlink/ジャンクションを直接ルートにすると中身が出ないため実体へ解決する
+        if os.path.isdir(path) and self._is_symlink_or_junction(path):
+            path = os.path.realpath(path)
+
         self._current_path = path
         self._addr_bar.setText(path)
 
@@ -566,14 +574,34 @@ class BrowserPanel(QWidget):
         source_index = self._proxy.mapToSource(proxy_index)
         return self._fs_model.filePath(source_index)
 
+    @staticmethod
+    def _is_symlink_or_junction(path: str) -> bool:
+        """
+        symlink（mklink /D）とWindowsジャンクション（mklink /J）の両方を検出する。
+        os.path.islink はジャンクションを False と返すため、
+        絶対パスと realpath の差で判定する（クロスプラットフォーム）。
+        """
+        try:
+            ap = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+            rp = os.path.normcase(os.path.normpath(os.path.realpath(path)))
+            return ap != rp
+        except OSError:
+            return False
+
     def _on_item_clicked(self, proxy_index: QModelIndex):
         path = self._resolve_path(proxy_index)
         if os.path.isdir(path):
             if self._column_view.isVisible():
-                # カラムビュー: QColumnViewのネイティブ列展開に任せ、
-                # ルートは変更しない（変更すると1カラム表示になり、
-                # 内部カラム再構築との競合でクラッシュもする）
-                self._set_current_path(path)
+                if self._is_symlink_or_junction(path):
+                    # symlink/ジャンクションはプロキシ経由のネイティブ列展開だと
+                    # 中身が出ない（下層モデルは列挙できるがプロキシで0件になる）。
+                    # 実体パスへ解決してルートを移動すれば中身をブラウズできる。
+                    self._navigate(path)
+                else:
+                    # 通常フォルダ: QColumnViewのネイティブ列展開に任せ、
+                    # ルートは変更しない（変更すると1カラム表示になり、
+                    # 内部カラム再構築との競合でクラッシュもする）
+                    self._set_current_path(path)
             else:
                 self._navigate(path)
             return
@@ -586,7 +614,10 @@ class BrowserPanel(QWidget):
         path = self._resolve_path(proxy_index)
         if os.path.isdir(path):
             if self._column_view.isVisible():
-                self._set_current_path(path)  # カラム展開を維持（ルート不変）
+                if self._is_symlink_or_junction(path):
+                    self._navigate(path)  # 実体へ解決して中身を表示
+                else:
+                    self._set_current_path(path)  # カラム展開を維持（ルート不変）
             else:
                 self._navigate(path)
             return
