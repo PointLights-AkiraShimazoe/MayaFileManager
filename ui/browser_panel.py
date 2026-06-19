@@ -48,6 +48,26 @@ from core.thumbnail_generator import ThumbnailManager
 
 
 # ---------------------------------------------------------------------------
+# 診断ログ（ショートカット/カラム構築の不具合切り分け用）
+# 出力先: ユーザーホーム直下の mfm_debug.log
+# ---------------------------------------------------------------------------
+_MFM_LOG_PATH = os.path.join(os.path.expanduser("~"), "mfm_debug.log")
+# 既定はオフ。環境変数 MFM_DEBUG=1 を設定した時だけ ~/mfm_debug.log に診断を書き出す。
+_MFM_DEBUG = bool(os.environ.get("MFM_DEBUG"))
+
+
+def _mfm_log(msg: str):
+    if not _MFM_DEBUG:
+        return
+    try:
+        import datetime
+        with open(_MFM_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3], msg))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Thumbnail Delegate
 # ---------------------------------------------------------------------------
 
@@ -342,6 +362,7 @@ class BrowserPanel(QWidget):
 
     def __init__(self, settings_manager, thumb_manager: ThumbnailManager, parent=None):
         super().__init__(parent)
+        _mfm_log("=== BrowserPanel init (build: shortcut-fix-r3+diag) ===")
         self._sm = settings_manager
         self._thumb_mgr = thumb_manager
         self._thumb_mgr.thumbnail_ready.connect(self._on_thumbnail_ready)
@@ -631,12 +652,19 @@ class BrowserPanel(QWidget):
         col_root = self._column_root_for(path)
         self._column_view.setRootIndex(
             self._proxy.mapFromSource(self._fs_model.index(col_root)))
-        self._column_view.setCurrentIndex(
-            self._proxy.mapFromSource(self._fs_model.index(path)))
+        _init_idx = self._proxy.mapFromSource(self._fs_model.index(path))
+        self._column_view.setCurrentIndex(_init_idx)
         # 深い/別ドライブ/隠し経由のパスは遅延ロードのため、
         # 最上位から1段ずつ読み込みを起動してカラムを伸ばす
         self._pending_current = path
         self._prime_path_loading(path)
+        try:
+            _src = self._fs_model.index(path)
+            _rc = self._fs_model.rowCount(self._fs_model.index(target_dir))
+            _mfm_log("navigate_now: path=%r col_root=%r src_valid=%s target_dir_rowcount=%d"
+                     % (path, col_root, _src.isValid(), _rc))
+        except Exception as _e:
+            _mfm_log("navigate_now: log error %r" % _e)
 
         # サムネ/リストビューは対象フォルダ単体を表示
         self._thumb_view.setRootIndex(
@@ -780,10 +808,67 @@ class BrowserPanel(QWidget):
                     self._fs_model.fetchMore(nidx)
         # 現時点で対象インデックスが有効なら選択を再適用（カラムが伸びる）
         src = self._fs_model.index(target)
-        if src.isValid():
-            self._column_view.setCurrentIndex(self._proxy.mapFromSource(src))
+        proxy_idx = self._proxy.mapFromSource(src)
+        _mfm_log("advance: loaded=%r reached=%s src_valid=%s proxy_valid=%s"
+                 % (loaded_path, t == ld, src.isValid(), proxy_idx.isValid()))
+        if t == ld and _MFM_DEBUG:
+            # 到達時に祖先チェーンを診断（どこで proxy が切れるか）
+            try:
+                for anc in reversed(self._ancestors_of(target)):
+                    si = self._fs_model.index(anc)
+                    pi = self._proxy.mapFromSource(si)
+                    hid = False
+                    try:
+                        hid = self._fs_model.fileInfo(si).isHidden()
+                    except Exception:
+                        pass
+                    fv = os.path.normcase(os.path.normpath(anc)) in self._proxy._force_visible
+                    _mfm_log("  chain anc=%r fs=%s proxy=%s hidden=%s force_visible=%s"
+                             % (anc, si.isValid(), pi.isValid(), hid, fv))
+            except Exception as _e:
+                _mfm_log("  chain diag error %r" % _e)
+        if proxy_idx.isValid():
+            self._column_view.setCurrentIndex(proxy_idx)
         if t == ld:
+            cur = self._column_view.currentIndex()
+            curpath = ""
+            if cur.isValid():
+                curpath = self._fs_model.filePath(self._proxy.mapToSource(cur))
+            _mfm_log("advance(after setCurrent): colview_current=%r" % curpath)
             self._pending_current = None
+            # 内部状態は正しいが表示カラムが古いブランチのまま残る QColumnView の
+            # 描画バグ対策。ロード完全後に「ルート＋現在地」を遅延再適用して
+            # カラムスタックを作り直す（シグナル内での setRootIndex はクラッシュ
+            # するため QTimer で次のイベントループへ逃がす）。
+            tgt = target
+            # カラム除去/構築が落ち着いた後にスクロール範囲を正す（setRootIndexのみ）。
+            for _ms in (120, 350):
+                QTimer.singleShot(_ms, lambda p=tgt: self._force_column_rebuild(p))
+
+    def _force_column_rebuild(self, target: str):
+        """setRootIndex のみ再適用してスクロール範囲(maximum)を正す。
+        setCurrentIndex は呼ばない＝自動スクロールのジャンプ防止。"""
+        # 重要: 既に別パスへ移動済みなら、この古い再構築でカラムを壊さないようスキップ。
+        # 高速クリック時、前のtargetのrebuildが後から発火してルートを巻き戻す事故を防ぐ。
+        try:
+            if os.path.normcase(os.path.normpath(target)) != \
+               os.path.normcase(os.path.normpath(self._current_path or "")):
+                return
+        except Exception:
+            return
+        try:
+            col_root = self._column_root_for(target)
+            ridx = self._proxy.mapFromSource(self._fs_model.index(col_root))
+            if ridx.isValid():
+                self._column_view.setRootIndex(ridx)
+            try:
+                self._column_view.updateGeometries()
+            except Exception:
+                pass
+            _mfm_log("force_rebuild(rootonly): target=%r hbar_max=%d"
+                     % (target, self._column_view.horizontalScrollBar().maximum()))
+        except Exception as _e:
+            _mfm_log("force_rebuild error %r" % _e)
 
     def _on_fs_dir_loaded(self, loaded_path: str):
         """遅延ロード完了時、保留中の対象へ向けて1段ずつ降りる。"""
@@ -931,12 +1016,14 @@ class BrowserPanel(QWidget):
         if self._maybe_follow_shortcut(path):
             return
         if os.path.isdir(path):
-            if self._column_view.isVisible():
-                # 通常フォルダ: QColumnViewのネイティブ列展開に任せ、
-                # ルートは変更しない（変更すると1カラム表示になり、
-                # 内部カラム再構築との競合でクラッシュもする）
+            if self._column_view.isVisible() and self._is_native_expandable(path):
+                # 通常フォルダ(表示中チェーンの子): ネイティブ列展開に任せルート不変
+                _mfm_log("click dir: native expand path=%r" % path)
                 self._set_current_path(path)
             else:
+                # 別ブランチへのジャンプ(ショートカット先など) → トップから全カラム再構築
+                _mfm_log("click dir: cross-branch -> _navigate path=%r current=%r"
+                         % (path, self._current_path))
                 self._navigate(path)
             return
         action = self._sm.get("single_click_action", "preview")
@@ -953,13 +1040,27 @@ class BrowserPanel(QWidget):
         if self._maybe_follow_shortcut(path):
             return
         if os.path.isdir(path):
-            if self._column_view.isVisible():
+            if self._column_view.isVisible() and self._is_native_expandable(path):
                 self._set_current_path(path)  # カラム展開を維持（ルート不変）
             else:
-                self._navigate(path)
+                self._navigate(path)  # 別ブランチへのジャンプはトップから全カラム再構築
             return
         # ダブルクリックは関連付けアプリ（OS既定）で開く
         open_with_default_app(path)
+
+    def _is_native_expandable(self, path: str) -> bool:
+        """clicked ディレクトリが「現在表示中のカラムチェーン上の子」かどうか。
+        親が current_path かその祖先のいずれかなら、QColumnView の
+        ネイティブ列展開でそのまま表示できる（ルート変更不要）。
+        そうでなければ別ブランチへのジャンプ＝トップから再構築が必要。"""
+        try:
+            parent = os.path.normcase(os.path.normpath(os.path.dirname(path)))
+            for anc in self._ancestors_of(self._current_path or ""):
+                if os.path.normcase(os.path.normpath(anc)) == parent:
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _maybe_follow_shortcut(self, path: str) -> bool:
         """Windowsショートカット(.lnk/.url)なら参照先を解決して移動する。
@@ -967,8 +1068,11 @@ class BrowserPanel(QWidget):
         全カラムで再表示する（ファイルは親カラム上で選択表示）。"""
         low = (path or "").lower()
         if not (low.endswith(".lnk") or low.endswith(".url")):
+            _mfm_log("follow_shortcut: 非ショートカット path=%r" % path)
             return False
         target = resolve_windows_shortcut(path)
+        _mfm_log("follow_shortcut: path=%r -> target=%r exists=%s"
+                 % (path, target, (os.path.exists(target) if target else None)))
         if target and os.path.exists(target):
             self.status_message.emit(f"ショートカット解決: {path} → {target}")
             self._navigate(target)
