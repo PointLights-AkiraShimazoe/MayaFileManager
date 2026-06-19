@@ -270,12 +270,19 @@ def launch_maya(installation: MayaInstallation,
 # ---------------------------------------------------------------------------
 
 def is_running_inside_maya() -> bool:
-    """True when this code is executed inside a Maya Python session."""
+    """True only when Maya commands are actually available.
+
+    maya.cmds が import できるだけでは不十分。生の mayapy はモジュールだけ
+    存在し、maya.standalone.initialize() 前は file/about 等のコマンドが無い。
+    その状態を「Maya内」と誤判定すると、ファイル選択時などに cmds.file を呼んで
+    'module maya.cmds has no attribute file' エラーになる。
+    実コマンドの有無で判定する（生mayapy・EXEでは False になる）。
+    """
     try:
-        import maya.cmds  # noqa: F401
-        return True
+        import maya.cmds as cmds
     except ImportError:
         return False
+    return hasattr(cmds, "about") and hasattr(cmds, "file")
 
 
 def get_current_maya_version() -> Optional[str]:

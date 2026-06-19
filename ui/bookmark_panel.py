@@ -76,6 +76,7 @@ class BookmarkTree(QTreeWidget):
     """Internal tree with custom drag-and-drop."""
 
     item_dropped = Signal(str, str, str)  # moved_id, new_parent_id, before_id
+    external_paths_dropped = Signal(list)  # file/dir paths dropped from outside
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,6 +90,14 @@ class BookmarkTree(QTreeWidget):
         self.setIconSize(QSize(18, 18))
 
     def dropEvent(self, event):
+        md = event.mimeData()
+        # 外部(ブラウザ/OS)からのファイル・フォルダのドロップ → ブックマーク追加
+        if md.hasUrls() and event.source() is not self:
+            paths = [u.toLocalFile() for u in md.urls() if u.toLocalFile()]
+            if paths:
+                self.external_paths_dropped.emit(paths)
+                event.acceptProposedAction()
+                return
         dragged_item = self.currentItem()
         if dragged_item is None:
             event.ignore()
@@ -155,6 +164,10 @@ class BookmarkPanel(QWidget):
         super().__init__(parent)
         self._bm = bookmark_manager
         self._bm.register_on_change(self._on_bookmarks_changed)
+        # 表示用の状態（永続データには手を加えない）
+        self._sort_on = False        # ソート表示のOn/Off（元の並びは保持）
+        self._sort_desc = False      # 降順フラグ
+        self._filter_text = ""       # フィルタ文字列
         self._build_ui()
         self._populate()
 
@@ -183,9 +196,49 @@ class BookmarkPanel(QWidget):
 
         layout.addWidget(header)
 
+        # ── Filter / Sort バー ───────────────────────────────────────
+        tools = QWidget()
+        t_layout = QHBoxLayout(tools)
+        t_layout.setContentsMargins(4, 0, 4, 4)
+        t_layout.setSpacing(4)
+
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("🔍 フィルター...")
+        self._filter_edit.setClearButtonEnabled(True)
+        self._filter_edit.textChanged.connect(self._on_filter_changed)
+        t_layout.addWidget(self._filter_edit, 1)
+
+        # ソート On/Off（元の並びは保持。Offで元順に戻る）
+        self._sort_btn = QToolButton()
+        self._sort_btn.setText("↕ ソート")
+        self._sort_btn.setToolTip("名前順で表示（元の並びは保持。OFFで元の順序に戻る）")
+        self._sort_btn.setCheckable(True)
+        self._sort_btn.toggled.connect(self._on_sort_toggled)
+        t_layout.addWidget(self._sort_btn)
+
+        # 昇順/降順トグル（ソートON時のみ有効）
+        self._sort_dir_btn = QToolButton()
+        self._sort_dir_btn.setText("A→Z")
+        self._sort_dir_btn.setToolTip("昇順 / 降順を切替")
+        self._sort_dir_btn.setEnabled(False)
+        self._sort_dir_btn.clicked.connect(self._on_sort_dir_toggled)
+        t_layout.addWidget(self._sort_dir_btn)
+
+        # ソート順を本来の並びとして確定（確定後ソートはOFF）
+        self._apply_sort_btn = QToolButton()
+        self._apply_sort_btn.setText("✓ 確定")
+        self._apply_sort_btn.setToolTip(
+            "現在のソート順を本来の並び順として保存します（適用後ソートはOFF）")
+        self._apply_sort_btn.setEnabled(False)
+        self._apply_sort_btn.clicked.connect(self._apply_sort_to_order)
+        t_layout.addWidget(self._apply_sort_btn)
+
+        layout.addWidget(tools)
+
         # Tree
         self._tree = BookmarkTree()
         self._tree.item_dropped.connect(self._on_item_dropped)
+        self._tree.external_paths_dropped.connect(self._on_external_paths)
         self._tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._show_context_menu)
@@ -195,6 +248,9 @@ class BookmarkPanel(QWidget):
         # Drag-drop from external (file paths)
         self.setAcceptDrops(True)
 
+        # 並べ替えD&Dの有効/無効を現在の状態に合わせて初期化
+        self._update_drag_state()
+
     # ------------------------------------------------------------------
     # Populate
     # ------------------------------------------------------------------
@@ -202,11 +258,115 @@ class BookmarkPanel(QWidget):
     def _populate(self):
         self._tree.blockSignals(True)
         self._tree.clear()
-        for node in self._bm.get_tree():
+        for node in self._ordered_filtered_tree():
             item = self._build_item(node)
             self._tree.addTopLevelItem(item)
         self._tree.expandAll()
         self._tree.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # Sort / Filter （表示のみ。永続データは変更しない）
+    # ------------------------------------------------------------------
+
+    def _ordered_filtered_tree(self) -> List[BookmarkNode]:
+        """ソート(表示用)・フィルタを適用したツリーのコピーを返す。"""
+        tree = self._bm.get_tree()
+        if self._sort_on:
+            tree = self._sort_nodes(tree)
+        if self._filter_text:
+            tree = self._filter_nodes(tree, self._filter_text.lower())
+        return tree
+
+    def _sort_nodes(self, nodes: List[BookmarkNode]) -> List[BookmarkNode]:
+        """各階層を名前順に並べ替える（再帰）。"""
+        ordered = sorted(
+            nodes,
+            key=lambda n: n.get("name", "").lower(),
+            reverse=self._sort_desc,
+        )
+        for n in ordered:
+            if n.get("type") == "folder":
+                n["children"] = self._sort_nodes(n.get("children", []))
+        return ordered
+
+    def _filter_nodes(self, nodes: List[BookmarkNode], text: str) -> List[BookmarkNode]:
+        """名前/パスに text を含むノードのみ残す。一致する子を持つフォルダも残す。"""
+        out: List[BookmarkNode] = []
+        for n in nodes:
+            if n.get("type") == "folder":
+                kids = self._filter_nodes(n.get("children", []), text)
+                if kids or self._match(n, text):
+                    nn = dict(n)
+                    nn["children"] = kids
+                    out.append(nn)
+            elif self._match(n, text):
+                out.append(n)
+        return out
+
+    @staticmethod
+    def _match(node: BookmarkNode, text: str) -> bool:
+        return (text in node.get("name", "").lower()
+                or text in node.get("path", "").lower())
+
+    def _on_filter_changed(self, text: str):
+        self._filter_text = text.strip()
+        self._update_drag_state()
+        self._populate()
+
+    def _on_sort_toggled(self, checked: bool):
+        self._sort_on = checked
+        self._sort_dir_btn.setEnabled(checked)
+        self._apply_sort_btn.setEnabled(checked)
+        self._update_drag_state()
+        self._populate()
+
+    def _on_sort_dir_toggled(self):
+        self._sort_desc = not self._sort_desc
+        self._sort_dir_btn.setText("Z→A" if self._sort_desc else "A→Z")
+        if self._sort_on:
+            self._populate()
+
+    def _update_drag_state(self):
+        """ソートON・フィルタ中は内部の並べ替えD&Dを無効化（表示≠保存順のため）。"""
+        reorder_ok = not self._sort_on and not self._filter_text
+        self._tree.setDragEnabled(reorder_ok)
+        self._tree.setDragDropMode(
+            QAbstractItemView.InternalMove if reorder_ok
+            else QAbstractItemView.DropOnly
+        )
+
+    def _apply_sort_to_order(self):
+        """現在のソート順を本来の並び順として永続化し、ソートをOFFにする。"""
+        if not self._sort_on:
+            return
+        sorted_tree = self._sort_nodes(self._bm.get_tree())
+        self._persist_order(None, sorted_tree)  # 末尾でまとめて save
+        # ソートOFFへ（確定後の本来順 = ソート順 になる）
+        self._sort_on = False
+        self._sort_btn.setChecked(False)   # toggled→_on_sort_toggled が populate も実行
+        self.status_message_safe("ブックマークの並び順を確定しました")
+
+    def _persist_order(self, parent_id: Optional[str], nodes: List[BookmarkNode]):
+        """ソート済みツリーの順序を reorder_in_place で各階層へ反映（再帰）。"""
+        ordered_ids = [n["id"] for n in nodes]
+        # 個々の reorder では保存せず、ルート呼び出しの最後に一括保存する
+        self._bm.reorder_in_place(parent_id, ordered_ids, save=False)
+        for n in nodes:
+            if n.get("type") == "folder":
+                self._persist_order(n["id"], n.get("children", []))
+        if parent_id is None:
+            self._bm.save()  # ここで永続化＋変更通知（→ _populate 再実行）
+
+    def status_message_safe(self, msg: str):
+        """ステータス通知（このパネルにstatusシグナルが無くても安全に握りつぶす）。"""
+        sig = getattr(self, "status_message", None)
+        if sig is not None:
+            try:
+                sig.emit(msg)
+                return
+            except Exception:
+                pass
+        print(f"[BookmarkPanel] {msg}")
 
     def _build_item(self, node: BookmarkNode) -> QTreeWidgetItem:
         item = QTreeWidgetItem()
@@ -337,10 +497,24 @@ class BookmarkPanel(QWidget):
 
     def add_path(self, path: str, btype: str = "directory"):
         """Called by BrowserPanel context menu 'Add bookmark'."""
-        if btype == "directory":
+        import os
+        if not path or self._bm.is_bookmarked(path):
+            return
+        if btype == "directory" or os.path.isdir(path):
             self._bm.add_directory(path)
         else:
             self._bm.add_file(path)
+
+    def _on_external_paths(self, paths):
+        """ブラウザ等からD&Dされたパス群をブックマークに追加。"""
+        import os
+        for p in paths:
+            if not p or self._bm.is_bookmarked(p):
+                continue
+            if os.path.isdir(p):
+                self._bm.add_directory(p)
+            elif os.path.isfile(p):
+                self._bm.add_file(p)
 
     # ------------------------------------------------------------------
     # Accept drops from browser / OS

@@ -18,12 +18,13 @@ Features implemented here
 """
 
 import os
+import struct
 from pathlib import Path
 from typing import List, Optional, Callable
 
 from core.compat import (
     Qt, Signal, QObject,
-    QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QToolButton,
     QSplitter, QTreeView, QColumnView, QListView,
     QSizePolicy, QFrame, QAbstractItemView, QHeaderView,
@@ -32,7 +33,7 @@ from core.compat import (
     QStyledItemDelegate, QStyle, QStyleOption,
     QModelIndex, QSize, QPixmap, QPainter, QColor, QFont,
     QDir, QFileInfo, QUrl, QMimeData, QPoint,
-    QFontMetrics, QTimer
+    QFontMetrics, QTimer, QKeySequence
 )
 from core.compat import QtCore as _QtCore
 from core.path_guard import PathProber, DriveScanner, invalidate_cache
@@ -174,9 +175,77 @@ class CappedColumnView(QColumnView):
     def __init__(self, max_depth: int = 4, parent=None):
         super().__init__(parent)
         self._max_depth = max_depth
+        self._go_up_cb = None
 
     def set_max_depth(self, depth: int):
         self._max_depth = depth
+
+    def set_go_up_callback(self, cb):
+        """◀ボタン押下時に呼ぶコールバック（1階層上げる）を登録。"""
+        self._go_up_cb = cb
+
+    def createColumn(self, index):
+        """各カラム生成時に、左部中央へ『◀ 上の階層へ』ボタンを重ねる。"""
+        view = super().createColumn(index)
+        # 各カラム(子ビュー)へ Explorer 互換のD&D設定を適用。
+        # これを怠るとカラム上でのドロップが効かない。
+        try:
+            view.setDragEnabled(True)
+            view.setAcceptDrops(True)
+            view.setDropIndicatorShown(True)
+            view.setDragDropMode(QAbstractItemView.DragDrop)
+            view.setDefaultDropAction(Qt.MoveAction)
+            view.setDragDropOverwriteMode(False)
+            view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        except Exception:
+            pass
+        btn = QToolButton(view)
+        btn.setText("◀")
+        btn.setToolTip("上の階層へ")
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setFixedSize(18, 24)
+        btn.setStyleSheet(
+            "QToolButton{background:rgba(20,20,20,150);border:none;"
+            "border-radius:3px;color:#dddddd;font-size:11px;}"
+            "QToolButton:hover{background:rgba(90,90,90,220);color:#ffffff;}"
+        )
+        btn.clicked.connect(self._emit_go_up)
+        view._mfm_up_btn = btn
+        view.installEventFilter(self)
+        view.viewport().installEventFilter(self)
+        self._reposition_up_button(view)
+        btn.show()
+        return view
+
+    def _emit_go_up(self):
+        if callable(self._go_up_cb):
+            self._go_up_cb()
+
+    def _reposition_up_button(self, view):
+        btn = getattr(view, "_mfm_up_btn", None)
+        if btn is None:
+            return
+        vp = view.viewport()
+        y = max(0, (vp.height() - btn.height()) // 2)
+        btn.move(2, y)
+        btn.raise_()
+
+    def eventFilter(self, obj, event):
+        et = event.type()
+        if et in (_QtCore.QEvent.Resize, _QtCore.QEvent.Show) \
+                and getattr(obj, "_mfm_up_btn", None) is not None:
+            self._reposition_up_button(obj)
+        elif et == _QtCore.QEvent.MouseButtonPress:
+            # カラムの何もない所をクリックしても選択を解除しない（無反応にする）
+            view = obj.parent()
+            if view is not None and hasattr(view, "indexAt"):
+                try:
+                    pos = event.position().toPoint()
+                except AttributeError:
+                    pos = event.pos()
+                if not view.indexAt(pos).isValid():
+                    return True
+        return super().eventFilter(obj, event)
 
     def currentChanged(self, current: QModelIndex, previous: QModelIndex):
         super().currentChanged(current, previous)
@@ -224,6 +293,7 @@ class BrowserPanel(QWidget):
     directory_changed = Signal(str)
     selection_changed = Signal(list)
     status_message = Signal(str)
+    bookmark_requested = Signal(list)   # paths to add to bookmarks
 
     def __init__(self, settings_manager, thumb_manager: ThumbnailManager, parent=None):
         super().__init__(parent)
@@ -232,6 +302,11 @@ class BrowserPanel(QWidget):
         self._thumb_mgr.thumbnail_ready.connect(self._on_thumbnail_ready)
 
         self._current_path = str(Path.home())
+        # 前回パス復元モードが有効なら前回終了時のパスから開始
+        if self._sm.get("restore_last_path", False):
+            _last = self._sm.get("last_path", "")
+            if _last:
+                self._current_path = _last
         self._max_depth = self._sm.get("column_max_depth", 4)
         self._click_action = self._sm.get("single_click_action", "preview")
         self._dbl_click_action = self._sm.get("double_click_action", "open")
@@ -278,15 +353,28 @@ class BrowserPanel(QWidget):
         self._refresh_drives()
 
         # Back / forward / up
+        # 視認性向上: 大きめ・太字・はっきりした矢印グリフ＋ホバー強調
+        _nav_style = (
+            "QToolButton{"
+            "  background:#3a3a3a; color:#f0f0f0;"
+            "  border:1px solid #555; border-radius:4px;"
+            "  font-size:18px; font-weight:bold; padding:0px;"
+            "}"
+            "QToolButton:hover{ background:#4A90D9; color:#ffffff; border-color:#4A90D9; }"
+            "QToolButton:pressed{ background:#2A5080; }"
+            "QToolButton:disabled{ color:#777; background:#2c2c2c; border-color:#3a3a3a; }"
+        )
         for icon_text, tip, slot in [
-            ("←", "戻る", self._go_back),
-            ("→", "進む", self._go_forward),
-            ("↑", "上へ", self._go_up),
+            ("◀", "戻る", self._go_back),    # ◀ 黒塗り三角（小さな←より視認性が高い）
+            ("▶", "進む", self._go_forward),  # ▶
+            ("▲", "上へ", self._go_up),       # ▲
         ]:
             btn = QToolButton()
             btn.setText(icon_text)
             btn.setToolTip(tip)
-            btn.setFixedSize(28, 28)
+            btn.setFixedSize(36, 30)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(_nav_style)
             btn.clicked.connect(slot)
             tb_layout.addWidget(btn)
 
@@ -330,6 +418,9 @@ class BrowserPanel(QWidget):
         self._fs_model.setFilter(
             QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files
         )
+        # 読み取り専用を解除 → Qt標準のファイルD&D（Explorerとの相互コピー/移動）を有効化。
+        # これにより各アイテムに Drag/Drop フラグが付与される。
+        self._fs_model.setReadOnly(False)
 
         # Proxy model
         self._proxy = FileFilterProxyModel()
@@ -338,14 +429,13 @@ class BrowserPanel(QWidget):
 
         # Column view
         self._column_view = CappedColumnView(self._max_depth)
+        self._column_view.set_go_up_callback(self._column_go_up)
         self._column_view.setModel(self._proxy)
         self._column_view.activated.connect(self._on_item_activated)
         self._column_view.clicked.connect(self._on_item_clicked)
         self._column_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self._column_view.customContextMenuRequested.connect(self._show_context_menu)
-        self._column_view.setDragEnabled(True)
-        self._column_view.setAcceptDrops(True)
-        self._column_view.setDropIndicatorShown(True)
+        self._configure_dnd(self._column_view)
         self._column_view.setSelectionMode(QAbstractItemView.ExtendedSelection)
 
         # Thumbnail list view
@@ -368,7 +458,7 @@ class BrowserPanel(QWidget):
         self._thumb_view.clicked.connect(self._on_item_clicked)
         self._thumb_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self._thumb_view.customContextMenuRequested.connect(self._show_context_menu)
-        self._thumb_view.setDragEnabled(True)
+        self._configure_dnd(self._thumb_view)
         self._thumb_view.setSelectionMode(QAbstractItemView.ExtendedSelection)
 
         self._view_stack.addWidget(self._column_view)
@@ -382,12 +472,16 @@ class BrowserPanel(QWidget):
         self._history: List[str] = []
         self._history_index: int = -1
 
-        # Drag-drop accept onto panel itself
-        self.setAcceptDrops(True)
+        # ファイルのD&Dはビュー(モデル)側で一括処理するため、パネル自身は
+        # ドロップを受け取らない（横取りして「移動だけ」になるのを防ぐ）。
+        self.setAcceptDrops(False)
 
         # N-2: Space Quick Look 用イベントフィルタ
         self._column_view.installEventFilter(self)
         self._thumb_view.installEventFilter(self)
+
+        # Ctrl+C / Ctrl+X / Ctrl+V / Delete（子ビューにフォーカスがあっても発火）
+        self._install_clipboard_actions()
 
     # ------------------------------------------------------------------
     # Navigation
@@ -441,6 +535,7 @@ class BrowserPanel(QWidget):
         """ビューのルートを変えずに現在地の状態だけ更新する（カラム展開用）。"""
         self._current_path = path
         self._addr_bar.setText(path)
+        self._sync_drive_combo(path)
         self.directory_changed.emit(path)
         self.status_message.emit(path)
         if add_to_history:
@@ -454,12 +549,9 @@ class BrowserPanel(QWidget):
             pass
 
     def _navigate_now(self, path: str, add_to_history: bool = True):
-        # symlink/ジャンクションを直接ルートにすると中身が出ないため実体へ解決する
-        if os.path.isdir(path) and self._is_symlink_or_junction(path):
-            path = os.path.realpath(path)
-
         self._current_path = path
         self._addr_bar.setText(path)
+        self._sync_drive_combo(path)
 
         source_index = self._fs_model.index(path)
         proxy_index = self._proxy.mapFromSource(source_index)
@@ -491,6 +583,17 @@ class BrowserPanel(QWidget):
             self._thumb_mgr.prefetch(self._list_visible_files(path))
         except OSError:
             pass
+
+    def _column_go_up(self):
+        """カラムの◀ボタン: ビューのルートを1階層上げる。"""
+        root_idx = self._column_view.rootIndex()
+        src = self._proxy.mapToSource(root_idx)
+        root_path = self._fs_model.filePath(src) if root_idx.isValid() else ""
+        if not root_path:
+            root_path = self._current_path
+        parent = str(Path(root_path).parent)
+        if parent and os.path.normpath(parent) != os.path.normpath(root_path):
+            self._navigate(parent)
 
     def _go_back(self):
         if self._history_index > 0:
@@ -544,6 +647,22 @@ class BrowserPanel(QWidget):
         if root:
             self._navigate(root)  # 到達確認は _navigate 側で非同期に行う
 
+    def _sync_drive_combo(self, path: str):
+        """アドレスのドライブレターに合わせてドライブセレクタの選択を同期する。"""
+        drive = os.path.splitdrive(path)[0]
+        if not drive:
+            return
+        root = drive + os.sep
+        combo = self._drive_combo
+        combo.blockSignals(True)
+        for i in range(combo.count()):
+            data = combo.itemData(i)
+            if data and os.path.normcase(os.path.normpath(str(data))) == \
+                    os.path.normcase(os.path.normpath(root)):
+                combo.setCurrentIndex(i)
+                break
+        combo.blockSignals(False)
+
     # ------------------------------------------------------------------
     # View mode / sort / filter
     # ------------------------------------------------------------------
@@ -577,31 +696,48 @@ class BrowserPanel(QWidget):
     @staticmethod
     def _is_symlink_or_junction(path: str) -> bool:
         """
-        symlink（mklink /D）とWindowsジャンクション（mklink /J）の両方を検出する。
-        os.path.islink はジャンクションを False と返すため、
-        絶対パスと realpath の差で判定する（クロスプラットフォーム）。
+        「最終コンポーネント自身がリンクか」だけを判定する。
+        symlink(mklink /D)とWindowsジャンクション(mklink /J)の両方に対応。
+
+        注意: realpath比較で判定すると、祖先にリンクがある場合に配下の
+        通常フォルダまで常にTrueになり、リンク配下へ入る度にビューが
+        折りたたまれる。islink / readlink は最終要素のみを見るため安全。
         """
         try:
-            ap = os.path.normcase(os.path.normpath(os.path.abspath(path)))
-            rp = os.path.normcase(os.path.normpath(os.path.realpath(path)))
-            return ap != rp
+            if os.path.islink(path):      # symlink（最終要素のみ・ターゲット未接続でもTrue）
+                return True
+        except OSError:
+            pass
+        try:
+            os.readlink(path)             # ジャンクションも検出。リンクでなければOSError
+            return True
         except OSError:
             return False
 
+    def _follow_link(self, path: str):
+        """
+        リンク(symlink/ジャンクション)を実体ドライブへ飛ばさず、
+        リンクのパス(例: C:\\...\\MM-SA)のまま中身を表示する。
+        通常フォルダのネイティブ列展開ではプロキシが子を返さないため、
+        リンクは setRootIndex 方式の _navigate で開く（パスは維持される）。
+        リンク先が未接続で到達不能な場合は _navigate 側がステータスに通知する。
+        """
+        self._navigate(path)
+
     def _on_item_clicked(self, proxy_index: QModelIndex):
         path = self._resolve_path(proxy_index)
+        # リンク(symlink/ジャンクション)を最優先で処理。
+        # リンク先が未接続ドライブ等だと os.path.isdir が False になり、
+        # ファイル扱いで「開く」が誤発火するため isdir 判定より前に捌く。
+        if self._is_symlink_or_junction(path):
+            self._follow_link(path)
+            return
         if os.path.isdir(path):
             if self._column_view.isVisible():
-                if self._is_symlink_or_junction(path):
-                    # symlink/ジャンクションはプロキシ経由のネイティブ列展開だと
-                    # 中身が出ない（下層モデルは列挙できるがプロキシで0件になる）。
-                    # 実体パスへ解決してルートを移動すれば中身をブラウズできる。
-                    self._navigate(path)
-                else:
-                    # 通常フォルダ: QColumnViewのネイティブ列展開に任せ、
-                    # ルートは変更しない（変更すると1カラム表示になり、
-                    # 内部カラム再構築との競合でクラッシュもする）
-                    self._set_current_path(path)
+                # 通常フォルダ: QColumnViewのネイティブ列展開に任せ、
+                # ルートは変更しない（変更すると1カラム表示になり、
+                # 内部カラム再構築との競合でクラッシュもする）
+                self._set_current_path(path)
             else:
                 self._navigate(path)
             return
@@ -612,17 +748,17 @@ class BrowserPanel(QWidget):
 
     def _on_item_activated(self, proxy_index: QModelIndex):
         path = self._resolve_path(proxy_index)
+        if self._is_symlink_or_junction(path):
+            self._follow_link(path)
+            return
         if os.path.isdir(path):
             if self._column_view.isVisible():
-                if self._is_symlink_or_junction(path):
-                    self._navigate(path)  # 実体へ解決して中身を表示
-                else:
-                    self._set_current_path(path)  # カラム展開を維持（ルート不変）
+                self._set_current_path(path)  # カラム展開を維持（ルート不変）
             else:
                 self._navigate(path)
             return
-        action = self._sm.get("double_click_action", "open")
-        self._dispatch_action(action, path)
+        # ダブルクリックは関連付けアプリ（OS既定）で開く
+        open_with_default_app(path)
 
     def _dispatch_action(self, action: str, path: str):
         if action == "open" and self._on_open:
@@ -710,9 +846,10 @@ class BrowserPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _add_to_bookmarks(self, paths: List[str]):
-        self.status_message.emit(f"ブックマークに追加: {len(paths)} 件")
-        # Emit to main window which holds BookmarkManager
-        # (connected externally)
+        # 実際の登録は MainWindow 側の BookmarkManager で行う（signalで依頼）
+        if paths:
+            self.bookmark_requested.emit(list(paths))
+            self.status_message.emit(f"ブックマークに追加: {len(paths)} 件")
 
     def _copy_dialog(self, paths: List[str]):
         dst = QFileDialog.getExistingDirectory(self, "コピー先を選択")
@@ -774,22 +911,109 @@ class BrowserPanel(QWidget):
         QMessageBox.information(self, "プロパティ", msg)
 
     # ------------------------------------------------------------------
-    # Drag & Drop (accept from external)
+    # Drag & Drop / Clipboard （Explorer 互換）
     # ------------------------------------------------------------------
 
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+    @staticmethod
+    def _configure_dnd(view):
+        """ビューに Explorer 互換のドラッグ&ドロップ設定を適用する。"""
+        view.setDragEnabled(True)             # アプリ → Explorer 等へドラッグ可
+        view.setAcceptDrops(True)             # Explorer 等 → アプリへドロップ可
+        view.setDropIndicatorShown(True)
+        view.setDragDropMode(QAbstractItemView.DragDrop)
+        view.setDefaultDropAction(Qt.MoveAction)   # 既定は移動（Ctrlでコピー）
+        view.setDragDropOverwriteMode(False)
+        view.setEditTriggers(QAbstractItemView.NoEditTriggers)  # 誤リネーム防止
 
-    def dropEvent(self, event):
-        for url in event.mimeData().urls():
-            path = url.toLocalFile()
-            if os.path.exists(path):
-                ext = Path(path).suffix.lower()
-                if ext in MAYA_EXTENSIONS and self._on_open:
-                    self._on_open(path)
-                else:
-                    self._navigate(os.path.dirname(path) if os.path.isfile(path) else path)
+    # ---- クリップボード (Ctrl+C / Ctrl+X / Ctrl+V / Delete) ----
+
+    # Windows の "Preferred DropEffect" 値（CF_PREFERREDDROPEFFECT）
+    _DROPEFFECT_COPY = 5   # コピー（Explorerが受理する慣用値）
+    _DROPEFFECT_MOVE = 2   # 移動（切り取り）
+
+    def _install_clipboard_actions(self):
+        """子ビューにフォーカスがあっても効くショートカットを登録する。"""
+        for seq, slot in [
+            (QKeySequence.Copy,  self._clipboard_copy),
+            (QKeySequence.Cut,   self._clipboard_cut),
+            (QKeySequence.Paste, self._clipboard_paste),
+            (QKeySequence.Delete, self._clipboard_delete),
+        ]:
+            act = QAction(self)
+            act.setShortcut(seq)
+            act.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+            act.triggered.connect(slot)
+            self.addAction(act)
+
+    def _set_clipboard(self, paths: List[str], move: bool):
+        """選択ファイルをクリップボードへ。Explorer と相互にペースト可能な形式で格納。"""
+        paths = [p for p in paths if p and os.path.exists(p)]
+        if not paths:
+            return
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        effect = self._DROPEFFECT_MOVE if move else self._DROPEFFECT_COPY
+        mime.setData("Preferred DropEffect",
+                     _QtCore.QByteArray(struct.pack("<I", effect)))
+        QApplication.clipboard().setMimeData(mime)
+        self.status_message.emit(
+            ("切り取り" if move else "コピー") + f": {len(paths)} 件")
+
+    def _clipboard_copy(self):
+        self._set_clipboard(self._get_selected_paths(), move=False)
+
+    def _clipboard_cut(self):
+        self._set_clipboard(self._get_selected_paths(), move=True)
+
+    def _paste_target_dir(self) -> Optional[str]:
+        """貼り付け先: 単一フォルダ選択中ならそのフォルダ、無ければ現在地。"""
+        sel = self._get_selected_paths()
+        if len(sel) == 1 and os.path.isdir(sel[0]):
+            return sel[0]
+        return self._current_path if os.path.isdir(self._current_path) else None
+
+    def _clipboard_paste(self):
+        mime = QApplication.clipboard().mimeData()
+        if not mime or not mime.hasUrls():
+            return
+        paths = [u.toLocalFile() for u in mime.urls() if u.toLocalFile()]
+        paths = [p for p in paths if os.path.exists(p)]
+        if not paths:
+            return
+
+        # 移動/コピー判定（Explorer の Preferred DropEffect を尊重）
+        move = False
+        if mime.hasFormat("Preferred DropEffect"):
+            data = bytes(mime.data("Preferred DropEffect"))
+            if len(data) >= 4:
+                effect = struct.unpack("<I", data[:4])[0]
+                move = bool(effect & self._DROPEFFECT_MOVE)
+
+        target = self._paste_target_dir()
+        if not target:
+            QMessageBox.warning(self, "貼り付け", "貼り付け先フォルダを特定できません。")
+            return
+
+        # 同一フォルダへの移動は無意味なのでコピーへ降格
+        if move and all(os.path.normpath(os.path.dirname(p)) ==
+                        os.path.normpath(target) for p in paths):
+            move = False
+
+        try:
+            if move:
+                results = move_items(paths, target)
+                QApplication.clipboard().clear()  # 切り取りは1回限り
+            else:
+                results = copy_items(paths, target)
+            self.status_message.emit(
+                ("移動" if move else "貼り付け") + f"完了: {len(results)} 件")
+        except FileOperationError as e:
+            QMessageBox.critical(self, "エラー", str(e))
+
+    def _clipboard_delete(self):
+        paths = self._get_selected_paths()
+        if paths:
+            self._delete_confirm(paths)
 
     # ------------------------------------------------------------------
     # Thumbnail refresh

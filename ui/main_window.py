@@ -26,7 +26,7 @@ from typing import Optional, List
 from core.compat import (
     Qt, Signal,
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QComboBox, QToolButton, QAction,
+    QLabel, QPushButton, QComboBox, QToolButton, QAction, QCheckBox,
     QMenu, QMenuBar, QStatusBar, QDockWidget, QToolBar,
     QSizePolicy, QSplitter, QFrame,
     QMessageBox, QFileDialog, QInputDialog,
@@ -226,11 +226,11 @@ class MainWindow(QMainWindow):
         self._browser.directory_changed.connect(self._on_directory_changed)
         self._browser.status_message.connect(self.statusBar().showMessage)
 
-        # Register Maya action callbacks
-        if self._inside_maya:
-            self._browser.set_open_callback(self._maya_open)
-            self._browser.set_import_callback(self._maya_import)
-            self._browser.set_reference_callback(self._maya_reference)
+        # クリック動作(開く/インポート/リファレンス)はMaya内動作。
+        # standaloneでも _maya_* がステータス表示で安全に処理するため常時接続する。
+        self._browser.set_open_callback(self._maya_open)
+        self._browser.set_import_callback(self._maya_import)
+        self._browser.set_reference_callback(self._maya_reference)
 
         self.setCentralWidget(self._browser)
 
@@ -240,12 +240,15 @@ class MainWindow(QMainWindow):
         self._bookmark_panel.open_requested.connect(self._maya_open)
         self._bookmark_panel.import_requested.connect(self._maya_import)
         self._bookmark_panel.reference_requested.connect(self._maya_reference)
+        # ブラウザの右クリック「ブックマークに追加」を反映
+        self._browser.bookmark_requested.connect(self._on_bookmark_requested)
 
         bm_dock = QDockWidget("ブックマーク", self)
         bm_dock.setObjectName("BookmarkDock")
         bm_dock.setWidget(self._bookmark_panel)
         bm_dock.setMinimumWidth(180)
         self.addDockWidget(Qt.LeftDockWidgetArea, bm_dock)
+        self._bm_dock = bm_dock
 
         # ── Right dock: history ───────────────────────────────────────
         self._history_panel = HistoryPanel(self._sm, parent=self)
@@ -256,6 +259,7 @@ class MainWindow(QMainWindow):
         hist_dock.setWidget(self._history_panel)
         hist_dock.setMinimumWidth(180)
         self.addDockWidget(Qt.RightDockWidgetArea, hist_dock)
+        self._hist_dock = hist_dock
 
         # ── Bottom dock: duplicate folder finder ──────────────────────
         self._dup_panel = DuplicateFolderPanel(parent=self)
@@ -285,7 +289,14 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         tb.setIconSize(QSize(20, 20))
 
-        # Action mode selector
+        # Quick-nav bar
+        self._quick_nav = QuickNavBar(self._sm, parent=self)
+        self._quick_nav.navigate_requested.connect(self._browser.navigate_to)
+        tb.addWidget(self._quick_nav)
+
+        tb.addSeparator()
+
+        # クリック動作（Maya内動作の設定）と前回パス復元を、右端のMayaコントロール群にまとめる
         tb.addWidget(QLabel("クリック動作:"))
         self._action_combo = QComboBox()
         self._action_combo.addItems(["プレビュー", "開く", "インポート", "リファレンス"])
@@ -298,12 +309,12 @@ class MainWindow(QMainWindow):
         )
         tb.addWidget(self._action_combo)
 
-        tb.addSeparator()
-
-        # Quick-nav bar
-        self._quick_nav = QuickNavBar(self._sm, parent=self)
-        self._quick_nav.navigate_requested.connect(self._browser.navigate_to)
-        tb.addWidget(self._quick_nav)
+        self._restore_check = QCheckBox("前回のパスを復元")
+        self._restore_check.setChecked(self._sm.get("restore_last_path", False))
+        self._restore_check.toggled.connect(
+            lambda v: self._sm.set("restore_last_path", bool(v))
+        )
+        tb.addWidget(self._restore_check)
 
         tb.addSeparator()
 
@@ -373,13 +384,13 @@ class MainWindow(QMainWindow):
 
         # ── 表示 ──────────────────────────────────────────────────────
         view_menu = mb.addMenu("表示")
+        # findChildはobjectName("BookmarkDock"/"HistoryDock")と表示名が
+        # 一致しないため常にNoneを返していた。保持した参照で確実に再表示する。
         view_menu.addAction("ブックマークパネル").triggered.connect(
-            lambda: self.findChild(QDockWidget, "ブックマーク") and
-                    self.findChild(QDockWidget, "ブックマーク").show()
+            lambda: self._show_dock(self._bm_dock)
         )
         view_menu.addAction("履歴パネル").triggered.connect(
-            lambda: self.findChild(QDockWidget, "履歴") and
-                    self.findChild(QDockWidget, "履歴").show()
+            lambda: self._show_dock(self._hist_dock)
         )
         view_menu.addAction("重複フォルダパネル").triggered.connect(self._toggle_dup_panel)
 
@@ -403,6 +414,19 @@ class MainWindow(QMainWindow):
     def _on_directory_changed(self, path: str):
         self._status_path_label.setText(path)
         self._history_panel.refresh()
+
+    def _on_bookmark_requested(self, paths):
+        """ブラウザの右クリック『ブックマークに追加』を BookmarkManager に反映する。"""
+        added = 0
+        for p in paths:
+            if not p or self._bm_mgr.is_bookmarked(p):
+                continue
+            if os.path.isdir(p):
+                self._bm_mgr.add_directory(p)
+            else:
+                self._bm_mgr.add_file(p)
+            added += 1
+        self.statusBar().showMessage(f"ブックマークに追加: {added} 件")
 
     def _open_dialog(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -553,6 +577,14 @@ class MainWindow(QMainWindow):
             # Pre-fill with current directory
             self._dup_panel.set_root(self._browser.current_path())
 
+    def _show_dock(self, dock):
+        """閉じた/タブ化されたdockを確実に再表示して前面に出す。"""
+        if dock is None:
+            return
+        dock.setVisible(True)
+        dock.show()
+        dock.raise_()
+
     def _about(self):
         QMessageBox.about(
             self, "Maya File Manager",
@@ -585,5 +617,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self._sm.set("window_geometry", self.saveGeometry().toHex().data().decode(), save=False)
         self._sm.set("window_state",    self.saveState().toHex().data().decode(), save=False)
+        try:
+            self._sm.set("last_path", self._browser.current_path(), save=False)
+        except Exception:
+            pass
         self._sm.save()
         super().closeEvent(event)
