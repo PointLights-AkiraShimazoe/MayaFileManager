@@ -85,17 +85,17 @@ def main():
         check(kept, "symlink: リンクのパスを維持している(実体ドライブへ飛ばない)",
               f"current={panel._current_path}")
 
-        root = panel._column_view.rootIndex()
         proxy = panel._proxy
+        link_idx = proxy.mapFromSource(panel._fs_model.index(link))
         deadline = time.time() + 3
         rc = 0
         while time.time() < deadline:
             app.processEvents()
-            rc = proxy.rowCount(root)
+            rc = proxy.rowCount(link_idx)
             if rc > 0:
                 break
             time.sleep(0.03)
-        check(rc == 3, "symlink: 中身(3件)が列に表示される", f"rowCount={rc}")
+        check(rc == 3, "symlink: 中身(3件)がリンク配下に見える", f"rowCount={rc}")
 
     print("-" * 48)
     if _failures:

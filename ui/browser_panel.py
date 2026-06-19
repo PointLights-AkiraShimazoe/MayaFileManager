@@ -331,8 +331,8 @@ class BrowserPanel(QWidget):
             _last = self._sm.get("last_path", "")
             if _last:
                 self._current_path = _last
-        # 0 = 無制限（フルパス分のカラムを消さずに保持。横スクロールで閲覧）
-        self._max_depth = self._sm.get("column_max_depth", 0)
+        # フルパス保持（深度キャップ廃止）。保存設定に関係なく無制限。
+        self._max_depth = 0
         self._click_action = self._sm.get("single_click_action", "preview")
         self._dbl_click_action = self._sm.get("double_click_action", "open")
 
@@ -578,21 +578,24 @@ class BrowserPanel(QWidget):
         self._addr_bar.setText(path)
         self._sync_drive_combo(path)
 
-        source_index = self._fs_model.index(path)
-        proxy_index = self._proxy.mapFromSource(source_index)
+        is_dir = os.path.isdir(path)
+        target_dir = path if is_dir else str(Path(path).parent)
 
-        if os.path.isdir(path):
-            self._column_view.setRootIndex(proxy_index)
-            self._thumb_view.setRootIndex(proxy_index)
+        # カラムビュー: ルートをドライブ最上位に固定し currentIndex で選択。
+        # → トップから現在地までカラムが連続表示され、上位選択で深いカラムが消える。
+        drive = os.path.splitdrive(path)[0]
+        top = (drive + os.sep) if drive else os.sep
+        self._column_view.setRootIndex(
+            self._proxy.mapFromSource(self._fs_model.index(top)))
+        self._column_view.setCurrentIndex(
+            self._proxy.mapFromSource(self._fs_model.index(path)))
+
+        # サムネ/リストビューは対象フォルダ単体を表示
+        self._thumb_view.setRootIndex(
+            self._proxy.mapFromSource(self._fs_model.index(target_dir)))
+
+        if is_dir:
             self.directory_changed.emit(path)
-        else:
-            parent = str(Path(path).parent)
-            source_parent = self._fs_model.index(parent)
-            proxy_parent = self._proxy.mapFromSource(source_parent)
-            self._column_view.setRootIndex(proxy_parent)
-            self._thumb_view.setRootIndex(proxy_parent)
-            # Select the file
-            self._column_view.setCurrentIndex(proxy_index)
 
         if add_to_history:
             # Prune forward history
@@ -610,13 +613,36 @@ class BrowserPanel(QWidget):
             pass
 
     def _column_go_up(self, folder_path=None):
-        """カラムの◀ボタン: そのカラムの階層を1つ上へ（押した階層の親へ移動）。"""
+        """◀: そのカラムを消して1つ上の階層へ（ルート不変のcurrentIndex移動）。"""
         base = folder_path or self._current_path
         if not base:
             return
         parent = str(Path(base).parent)
         if parent and os.path.normpath(parent) != os.path.normpath(base):
-            self._navigate(parent)
+            self._select_in_columns(parent)
+
+    def _select_in_columns(self, path: str):
+        """ルート(ドライブ最上位)は変えず currentIndex を path に移す。
+        上位を選ぶと深いカラムが自動的に消える（フルパスのカラム構成は保持）。"""
+        if not path:
+            return
+        drive = os.path.splitdrive(path)[0]
+        top = (drive + os.sep) if drive else os.sep
+        root_idx = self._column_view.rootIndex()
+        cur_root = (self._fs_model.filePath(self._proxy.mapToSource(root_idx))
+                    if root_idx.isValid() else "")
+        if os.path.normcase(os.path.normpath(cur_root or "")) != \
+                os.path.normcase(os.path.normpath(top)):
+            self._column_view.setRootIndex(
+                self._proxy.mapFromSource(self._fs_model.index(top)))
+        src = self._fs_model.index(path)
+        if src.isValid():
+            self._column_view.setCurrentIndex(self._proxy.mapFromSource(src))
+        self._current_path = path
+        self._addr_bar.setText(path)
+        self._sync_drive_combo(path)
+        self.directory_changed.emit(path)
+        self.status_message.emit(path)
 
     def _go_back(self):
         if self._history_index > 0:
@@ -629,9 +655,10 @@ class BrowserPanel(QWidget):
             self._navigate(self._history[self._history_index], add_to_history=False)
 
     def _go_up(self):
+        # 表示中の最下層(current_path)を1つ上へ。ルート不変で深いカラムが消える。
         parent = str(Path(self._current_path).parent)
-        if parent != self._current_path:
-            self._navigate(parent)
+        if parent and parent != self._current_path:
+            self._select_in_columns(parent)
 
     def navigate_to(self, path: str):
         """Public API – called by bookmark/history panels."""

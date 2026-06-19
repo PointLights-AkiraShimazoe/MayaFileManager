@@ -310,6 +310,11 @@ class MainWindow(QMainWindow):
                     if self._maya_combo.itemData(i) is self._maya_inst:
                         self._maya_combo.setCurrentIndex(i)
                         break
+            # 既定選択（先頭＝最新）を _maya_inst に反映（「Mayaバージョンが選択されていません」防止）
+            if not isinstance(self._maya_inst, MayaInstallation):
+                _d = self._maya_combo.currentData()
+                if isinstance(_d, MayaInstallation):
+                    self._maya_inst = _d
             self._maya_combo.currentIndexChanged.connect(self._on_maya_version_changed)
             tb.addWidget(self._maya_combo)
 
