@@ -619,14 +619,24 @@ class BrowserPanel(QWidget):
         # 経路上の隠しフォルダ(AppData等)を強制表示にしてカラムチェーンを構築可能にする
         self._apply_force_visible(path)
 
+        # QFileSystemModel に対象ディレクトリまでのチェーンを能動的にロードさせる。
+        # これが無いと、別ドライブ/深い/隠し経由のパスは index が無効のままで
+        # カラムが構築されない（クリックしてもカラムが伸びない原因）。
+        try:
+            self._fs_model.setRootPath(target_dir)
+        except Exception:
+            pass
+
         # カラムのルート: パス途中(または自身)にリンクがあれば最上位リンク、無ければドライブ最上位
         col_root = self._column_root_for(path)
         self._column_view.setRootIndex(
             self._proxy.mapFromSource(self._fs_model.index(col_root)))
         self._column_view.setCurrentIndex(
             self._proxy.mapFromSource(self._fs_model.index(path)))
-        # 深いパスは遅延ロードのため、directoryLoaded で再適用する
+        # 深い/別ドライブ/隠し経由のパスは遅延ロードのため、
+        # 最上位から1段ずつ読み込みを起動してカラムを伸ばす
         self._pending_current = path
+        self._prime_path_loading(path)
 
         # サムネ/リストビューは対象フォルダ単体を表示
         self._thumb_view.setRootIndex(
@@ -701,6 +711,7 @@ class BrowserPanel(QWidget):
         if src.isValid():
             self._column_view.setCurrentIndex(self._proxy.mapFromSource(src))
         self._pending_current = path
+        self._prime_path_loading(path)
         self._current_path = path
         self._addr_bar.setText(path)
         self._sync_drive_combo(path)
@@ -727,9 +738,27 @@ class BrowserPanel(QWidget):
         except Exception:
             pass
 
-    def _on_fs_dir_loaded(self, loaded_path: str):
-        """遅延ロード完了時、保留中の現在地がそのフォルダ配下なら
-        setCurrentIndex を再適用してカラムチェーンを最後まで構築する。"""
+    def _prime_path_loading(self, target: str):
+        """深い/別ドライブ/隠しフォルダ経由のパスでも確実にカラムを構築するため、
+        ドライブ最上位から対象まで各階層の読み込みを起動する。
+        QFileSystemModel は遅延ロードのため、最上位を fetchMore して
+        directoryLoaded 連鎖（_on_fs_dir_loaded）で1段ずつ降りていく。"""
+        try:
+            ancestors = self._ancestors_of(target)  # deep→top
+        except Exception:
+            return
+        if not ancestors:
+            return
+        top = ancestors[-1]
+        idx = self._fs_model.index(top)
+        if idx.isValid() and self._fs_model.canFetchMore(idx):
+            self._fs_model.fetchMore(idx)
+        # 既にロード済みの階層がある場合に備え、最初の再適用も試す
+        self._advance_pending_load(top)
+
+    def _advance_pending_load(self, loaded_path: str):
+        """loaded_path（ロード完了済み階層）から対象へ向けて次の階層の
+        読み込みを起動し、可能なら setCurrentIndex を再適用する。"""
         target = self._pending_current
         if not target:
             return
@@ -738,15 +767,27 @@ class BrowserPanel(QWidget):
             ld = os.path.normcase(os.path.normpath(loaded_path))
         except Exception:
             return
-        # ロードされたのが対象の祖先(または対象自身)のときのみ再適用
         if not (t == ld or t.startswith(ld + os.sep)):
             return
+        # 対象まで未達なら、対象へ向かう「次の1階層」をロード起動する
+        if t != ld:
+            rel = os.path.normpath(target)[len(os.path.normpath(loaded_path)):].lstrip("\\/")
+            next_comp = rel.replace("\\", "/").split("/", 1)[0]
+            if next_comp:
+                next_path = os.path.join(loaded_path, next_comp)
+                nidx = self._fs_model.index(next_path)
+                if nidx.isValid() and self._fs_model.canFetchMore(nidx):
+                    self._fs_model.fetchMore(nidx)
+        # 現時点で対象インデックスが有効なら選択を再適用（カラムが伸びる）
         src = self._fs_model.index(target)
         if src.isValid():
             self._column_view.setCurrentIndex(self._proxy.mapFromSource(src))
-        # 対象フォルダ自体がロードされたら保留解除
         if t == ld:
             self._pending_current = None
+
+    def _on_fs_dir_loaded(self, loaded_path: str):
+        """遅延ロード完了時、保留中の対象へ向けて1段ずつ降りる。"""
+        self._advance_pending_load(loaded_path)
 
     def _go_back(self):
         if self._history_index > 0:
