@@ -539,8 +539,16 @@ class BrowserPanel(QWidget):
             self._quick_look.show_for(path)
 
     def _navigate(self, path: str, add_to_history: bool = True):
-        """到達可能性を非同期確認してから移動する（N-1: UIを止めない）。"""
+        """到達可能性を非同期確認してから移動する（N-1: UIを止めない）。
+        ショートカット/リンクは実体(ターゲット)へ解決し、ターゲットのドライブ最上位から
+        全カラムで再表示する。"""
         path = os.path.normpath(path)
+        try:
+            real = os.path.realpath(path)
+            if os.path.normcase(real) != os.path.normcase(path):
+                path = real
+        except OSError:
+            pass
         self._pending_nav = (path, add_to_history)
         self.status_message.emit(f"確認中: {path}")
         self._prober.probe(path)
