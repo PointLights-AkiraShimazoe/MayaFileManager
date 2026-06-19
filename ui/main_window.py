@@ -297,7 +297,10 @@ class MainWindow(QMainWindow):
             lambda v: self._sm.set("restore_last_path", bool(v))
         )
         tb.addWidget(self._restore_check)
-        tb.addSeparator()
+        # 伸縮スペーサーで以降（Maya/起動/クリック動作）を右寄せにする
+        _rspacer = QWidget()
+        _rspacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        tb.addWidget(_rspacer)
 
         # Maya version selector (standalone mode)
         if not self._inside_maya:
