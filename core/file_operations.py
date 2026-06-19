@@ -247,6 +247,122 @@ def open_with_default_app(path: str):
         raise FileOperationError(f"Cannot open {path}: {e}") from e
 
 
+def resolve_windows_shortcut(path: str) -> Optional[str]:
+    """
+    Windowsの .lnk ショートカット / .url を解決し、参照先のローカルパスを返す。
+    解決できない（ショートカットでない・Web URL・破損）場合は None。
+
+    symlink/ジャンクションは os.readlink で別途処理しているため、ここでは
+    「ファイル実体を持つショートカット」(.lnk / .url) を対象にする。
+    """
+    if not path:
+        return None
+    low = path.lower()
+
+    # --- .url (INI形式) : URL=file:///... のみローカルパスとして解決 ---
+    if low.endswith(".url"):
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.lower().startswith("url="):
+                        url = line[4:].strip()
+                        if url.lower().startswith("file:"):
+                            from urllib.parse import urlparse, unquote
+                            p = unquote(urlparse(url).path)
+                            # file:///C:/... → /C:/... の先頭スラッシュを除去
+                            if re.match(r"^/[A-Za-z]:", p):
+                                p = p[1:]
+                            return os.path.normpath(p)
+                        return None
+        except OSError:
+            return None
+        return None
+
+    if not low.endswith(".lnk"):
+        return None
+
+    # --- 1) pywin32 (Maya同梱が多い・最も確実) ---
+    try:
+        import win32com.client  # type: ignore
+        shell = win32com.client.Dispatch("WScript.Shell")
+        sc = shell.CreateShortcut(path)
+        tgt = sc.Targetpath
+        if tgt:
+            return os.path.normpath(tgt)
+    except Exception:
+        pass
+
+    # --- 2) 依存なしのバイナリ解析 (MS-SHLLINK LinkInfo.LocalBasePath) ---
+    try:
+        return _parse_lnk_target(path)
+    except Exception:
+        return None
+
+
+def _parse_lnk_target(path: str) -> Optional[str]:
+    """
+    .lnk バイナリを解析し、LinkInfo 構造の LocalBasePath を取り出す。
+    依存ライブラリ無しの簡易パーサ（ローカルファイル参照のショートカット向け）。
+    参照: [MS-SHLLINK]
+    """
+    import struct
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 76:
+        return None
+    # ShellLinkHeader の HeaderSize は 0x0000004C 固定
+    if struct.unpack_from("<I", data, 0)[0] != 0x0000004C:
+        return None
+    link_flags = struct.unpack_from("<I", data, 20)[0]
+    HAS_LINK_TARGET_IDLIST = 0x00000001
+    HAS_LINK_INFO = 0x00000002
+
+    off = 76  # ヘッダ直後
+    if link_flags & HAS_LINK_TARGET_IDLIST:
+        if off + 2 > len(data):
+            return None
+        idlist_size = struct.unpack_from("<H", data, off)[0]
+        off += 2 + idlist_size  # IDList を読み飛ばす
+
+    if not (link_flags & HAS_LINK_INFO):
+        return None
+    if off + 4 > len(data):
+        return None
+    li_start = off
+    li_size = struct.unpack_from("<I", data, li_start)[0]
+    if li_size < 28 or li_start + li_size > len(data):
+        return None
+    li_flags = struct.unpack_from("<I", data, li_start + 8)[0]
+    VOLUME_ID_AND_LOCAL_BASE_PATH = 0x00000001
+    if not (li_flags & VOLUME_ID_AND_LOCAL_BASE_PATH):
+        return None
+    local_base_off = struct.unpack_from("<I", data, li_start + 16)[0]
+    abs_off = li_start + local_base_off
+    if abs_off >= li_start + li_size:
+        return None
+    # ヌル終端 ANSI 文字列
+    end = data.index(b"\x00", abs_off)
+    base = data[abs_off:end]
+    # 末尾に CommonPathSuffix が続く場合があるが、LocalBasePath 単体でフォルダ参照は足りる
+    suffix_off = struct.unpack_from("<I", data, li_start + 24)[0] if li_size >= 28 else 0
+    suffix = b""
+    if suffix_off and (li_start + suffix_off) < li_start + li_size:
+        s2 = li_start + suffix_off
+        try:
+            e2 = data.index(b"\x00", s2)
+            suffix = data[s2:e2]
+        except ValueError:
+            suffix = b""
+    target = base + suffix
+    try:
+        decoded = target.decode("mbcs")  # Windows ANSI
+    except (LookupError, UnicodeDecodeError):
+        decoded = target.decode("latin-1", errors="ignore")
+    decoded = decoded.strip()
+    return os.path.normpath(decoded) if decoded else None
+
+
 def reveal_in_explorer(path: str):
     """Show the file in the platform file manager."""
     system = platform.system()

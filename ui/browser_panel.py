@@ -41,6 +41,7 @@ from core.file_operations import (
     open_with_default_app, reveal_in_explorer,
     copy_items, move_items, delete_items,
     get_file_type_category, list_drives, format_size,
+    resolve_windows_shortcut,
     FileOperationError, MAYA_EXTENSIONS, SCENE_EXTENSIONS
 )
 from core.thumbnail_generator import ThumbnailManager
@@ -115,6 +116,10 @@ class FileFilterProxyModel(QSortFilterProxyModel):
         super().__init__(parent)
         self._filter = ""
         self._show_hidden = False
+        # 隠し属性でも常に表示するパス集合（normcase済み）。
+        # ショートカット先が AppData 等の隠しフォルダを経由する場合に、
+        # その経路の祖先だけを表示してカラムチェーンを構築可能にする。
+        self._force_visible = set()
         self.setFilterCaseSensitivity(Qt.CaseInsensitive)
 
     def set_filter_string(self, text: str):
@@ -125,15 +130,31 @@ class FileFilterProxyModel(QSortFilterProxyModel):
         self._show_hidden = show
         self.invalidateFilter()
 
+    def set_force_visible(self, paths):
+        """隠し属性でも表示する祖先パス集合を設定する。"""
+        self._force_visible = set(os.path.normcase(os.path.normpath(p)) for p in paths)
+        self.invalidateFilter()
+
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         source_model = self.sourceModel()
         index = source_model.index(source_row, 0, source_parent)
 
-        # Hidden files
+        # Hidden files（隠し属性 or ドット名）。ただし現在ナビ中の経路の祖先は常に表示。
         if not self._show_hidden:
-            name = source_model.fileName(index)
-            if name.startswith("."):
-                return False
+            try:
+                fp = os.path.normcase(os.path.normpath(source_model.filePath(index)))
+            except Exception:
+                fp = ""
+            if fp not in self._force_visible:
+                name = source_model.fileName(index)
+                is_hidden = name.startswith(".")
+                if not is_hidden:
+                    try:
+                        is_hidden = source_model.fileInfo(index).isHidden()
+                    except Exception:
+                        is_hidden = False
+                if is_hidden:
+                    return False
 
         # Text filter
         if self._filter:
@@ -347,6 +368,8 @@ class BrowserPanel(QWidget):
         self._drive_scanner = DriveScanner(self)
         self._drive_scanner.drives_ready.connect(self._on_drives_ready)
         self._pending_nav = None
+        # 深いパス(遅延ロード)へ setCurrentIndex を再適用するための保留先
+        self._pending_current = None
 
         # N-2: Quick Look（遅延生成）
         self._quick_look = None
@@ -440,12 +463,16 @@ class BrowserPanel(QWidget):
         # Shared filesystem model
         self._fs_model = QFileSystemModel()
         self._fs_model.setRootPath("")
+        # QDir.Hidden を含めることで、AppData 等の隠しフォルダもモデルに載せる。
+        # 表示の可否は proxy 側で制御（既定は非表示、ナビ経路の祖先のみ強制表示）。
         self._fs_model.setFilter(
-            QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files
+            QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files | QDir.Hidden
         )
         # 読み取り専用を解除 → Qt標準のファイルD&D（Explorerとの相互コピー/移動）を有効化。
         # これにより各アイテムに Drag/Drop フラグが付与される。
         self._fs_model.setReadOnly(False)
+        # 深いパス(遅延ロード)のカラム構築を確実にするためのリトライ
+        self._fs_model.directoryLoaded.connect(self._on_fs_dir_loaded)
 
         # Proxy model
         self._proxy = FileFilterProxyModel()
@@ -589,12 +616,17 @@ class BrowserPanel(QWidget):
         is_dir = os.path.isdir(path)
         target_dir = path if is_dir else str(Path(path).parent)
 
+        # 経路上の隠しフォルダ(AppData等)を強制表示にしてカラムチェーンを構築可能にする
+        self._apply_force_visible(path)
+
         # カラムのルート: パス途中(または自身)にリンクがあれば最上位リンク、無ければドライブ最上位
         col_root = self._column_root_for(path)
         self._column_view.setRootIndex(
             self._proxy.mapFromSource(self._fs_model.index(col_root)))
         self._column_view.setCurrentIndex(
             self._proxy.mapFromSource(self._fs_model.index(path)))
+        # 深いパスは遅延ロードのため、directoryLoaded で再適用する
+        self._pending_current = path
 
         # サムネ/リストビューは対象フォルダ単体を表示
         self._thumb_view.setRootIndex(
@@ -656,6 +688,7 @@ class BrowserPanel(QWidget):
         上位を選ぶと深いカラムが自動的に消える。"""
         if not path:
             return
+        self._apply_force_visible(path)
         col_root = self._column_root_for(path)
         root_idx = self._column_view.rootIndex()
         cur_root = (self._fs_model.filePath(self._proxy.mapToSource(root_idx))
@@ -667,11 +700,53 @@ class BrowserPanel(QWidget):
         src = self._fs_model.index(path)
         if src.isValid():
             self._column_view.setCurrentIndex(self._proxy.mapFromSource(src))
+        self._pending_current = path
         self._current_path = path
         self._addr_bar.setText(path)
         self._sync_drive_combo(path)
         self.directory_changed.emit(path)
         self.status_message.emit(path)
+
+    @staticmethod
+    def _ancestors_of(path: str):
+        """path 自身からドライブ最上位までの祖先パス一覧（normpath）。"""
+        out = []
+        cur = os.path.normpath(os.path.abspath(path))
+        while True:
+            out.append(cur)
+            parent = os.path.dirname(cur)
+            if not parent or parent == cur:
+                break
+            cur = parent
+        return out
+
+    def _apply_force_visible(self, path: str):
+        """ナビ対象の経路上にある隠しフォルダ(AppData等)だけを強制表示にする。"""
+        try:
+            self._proxy.set_force_visible(self._ancestors_of(path))
+        except Exception:
+            pass
+
+    def _on_fs_dir_loaded(self, loaded_path: str):
+        """遅延ロード完了時、保留中の現在地がそのフォルダ配下なら
+        setCurrentIndex を再適用してカラムチェーンを最後まで構築する。"""
+        target = self._pending_current
+        if not target:
+            return
+        try:
+            t = os.path.normcase(os.path.normpath(target))
+            ld = os.path.normcase(os.path.normpath(loaded_path))
+        except Exception:
+            return
+        # ロードされたのが対象の祖先(または対象自身)のときのみ再適用
+        if not (t == ld or t.startswith(ld + os.sep)):
+            return
+        src = self._fs_model.index(target)
+        if src.isValid():
+            self._column_view.setCurrentIndex(self._proxy.mapFromSource(src))
+        # 対象フォルダ自体がロードされたら保留解除
+        if t == ld:
+            self._pending_current = None
 
     def _go_back(self):
         if self._history_index > 0:
@@ -811,6 +886,9 @@ class BrowserPanel(QWidget):
         if self._is_symlink_or_junction(path):
             self._follow_link(path)
             return
+        # Windows .lnk / .url ショートカット → 参照先をドライブ最上位から全カラム再表示
+        if self._maybe_follow_shortcut(path):
+            return
         if os.path.isdir(path):
             if self._column_view.isVisible():
                 # 通常フォルダ: QColumnViewのネイティブ列展開に任せ、
@@ -830,6 +908,9 @@ class BrowserPanel(QWidget):
         if self._is_symlink_or_junction(path):
             self._follow_link(path)
             return
+        # Windows .lnk / .url ショートカット → 参照先をドライブ最上位から全カラム再表示
+        if self._maybe_follow_shortcut(path):
+            return
         if os.path.isdir(path):
             if self._column_view.isVisible():
                 self._set_current_path(path)  # カラム展開を維持（ルート不変）
@@ -838,6 +919,22 @@ class BrowserPanel(QWidget):
             return
         # ダブルクリックは関連付けアプリ（OS既定）で開く
         open_with_default_app(path)
+
+    def _maybe_follow_shortcut(self, path: str) -> bool:
+        """Windowsショートカット(.lnk/.url)なら参照先を解決して移動する。
+        解決先がフォルダ/ファイルどちらでも _navigate がドライブ最上位から
+        全カラムで再表示する（ファイルは親カラム上で選択表示）。"""
+        low = (path or "").lower()
+        if not (low.endswith(".lnk") or low.endswith(".url")):
+            return False
+        target = resolve_windows_shortcut(path)
+        if target and os.path.exists(target):
+            self.status_message.emit(f"ショートカット解決: {path} → {target}")
+            self._navigate(target)
+            return True
+        if target:
+            self.status_message.emit(f"ショートカット参照先が見つかりません: {target}")
+        return False
 
     def _dispatch_action(self, action: str, path: str):
         if action == "open" and self._on_open:
