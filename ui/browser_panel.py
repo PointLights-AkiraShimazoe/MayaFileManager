@@ -199,27 +199,43 @@ class CappedColumnView(QColumnView):
             view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         except Exception:
             pass
-        btn = QToolButton(view)
+        # このカラムが表示しているフォルダ（◀でこの階層を1つ上へ）
+        folder_path = self._path_for_index(index)
+        btn = QToolButton(view.viewport())   # 項目の上に重ねて確実に見せる
         btn.setText("◀")
         btn.setToolTip("上の階層へ")
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setFixedSize(18, 24)
+        btn.setFixedSize(24, 40)             # 幅を広げて見やすく
         btn.setStyleSheet(
-            "QToolButton{background:rgba(20,20,20,150);border:none;"
-            "border-radius:3px;color:#dddddd;font-size:11px;}"
-            "QToolButton:hover{background:rgba(90,90,90,220);color:#ffffff;}"
+            "QToolButton{background:rgba(40,40,40,215);"
+            "border:1px solid rgba(130,130,130,190);border-radius:4px;"
+            "color:#ffffff;font-size:13px;font-weight:bold;}"
+            "QToolButton:hover{background:rgba(105,105,105,235);}"
         )
-        btn.clicked.connect(self._emit_go_up)
+        btn.clicked.connect(lambda checked=False, p=folder_path: self._emit_go_up(p))
         view._mfm_up_btn = btn
         view.installEventFilter(self)
         view.viewport().installEventFilter(self)
         self._reposition_up_button(view)
         btn.show()
+        btn.raise_()
         return view
 
-    def _emit_go_up(self):
+    def _emit_go_up(self, folder_path=None):
         if callable(self._go_up_cb):
-            self._go_up_cb()
+            self._go_up_cb(folder_path)
+
+    def _path_for_index(self, index):
+        """そのカラムが表示しているフォルダのフルパスを返す（プロキシ→ソース解決）。"""
+        m = self.model()
+        if m is None or not index.isValid():
+            return ""
+        idx = index
+        src = m
+        while hasattr(src, "mapToSource"):
+            idx = src.mapToSource(idx)
+            src = src.sourceModel()
+        return src.filePath(idx) if hasattr(src, "filePath") else ""
 
     def _reposition_up_button(self, view):
         btn = getattr(view, "_mfm_up_btn", None)
@@ -232,9 +248,17 @@ class CappedColumnView(QColumnView):
 
     def eventFilter(self, obj, event):
         et = event.type()
-        if et in (_QtCore.QEvent.Resize, _QtCore.QEvent.Show) \
-                and getattr(obj, "_mfm_up_btn", None) is not None:
-            self._reposition_up_button(obj)
+        if et in (_QtCore.QEvent.Resize, _QtCore.QEvent.Show):
+            view = obj if getattr(obj, "_mfm_up_btn", None) is not None else obj.parent()
+            if view is not None and getattr(view, "_mfm_up_btn", None) is not None:
+                self._reposition_up_button(view)
+        elif et == _QtCore.QEvent.Wheel and (event.modifiers() & Qt.ShiftModifier):
+            # Shift+ホイールでブラウジングエリアを横スクロール（カラム間移動）
+            hbar = self.horizontalScrollBar()
+            if hbar is not None:
+                d = event.angleDelta().y() or event.angleDelta().x()
+                hbar.setValue(hbar.value() - d)
+                return True
         elif et == _QtCore.QEvent.MouseButtonPress:
             # カラムの何もない所をクリックしても選択を解除しない（無反応にする）
             view = obj.parent()
@@ -307,7 +331,8 @@ class BrowserPanel(QWidget):
             _last = self._sm.get("last_path", "")
             if _last:
                 self._current_path = _last
-        self._max_depth = self._sm.get("column_max_depth", 4)
+        # 0 = 無制限（フルパス分のカラムを消さずに保持。横スクロールで閲覧）
+        self._max_depth = self._sm.get("column_max_depth", 0)
         self._click_action = self._sm.get("single_click_action", "preview")
         self._dbl_click_action = self._sm.get("double_click_action", "open")
 
@@ -584,15 +609,13 @@ class BrowserPanel(QWidget):
         except OSError:
             pass
 
-    def _column_go_up(self):
-        """カラムの◀ボタン: ビューのルートを1階層上げる。"""
-        root_idx = self._column_view.rootIndex()
-        src = self._proxy.mapToSource(root_idx)
-        root_path = self._fs_model.filePath(src) if root_idx.isValid() else ""
-        if not root_path:
-            root_path = self._current_path
-        parent = str(Path(root_path).parent)
-        if parent and os.path.normpath(parent) != os.path.normpath(root_path):
+    def _column_go_up(self, folder_path=None):
+        """カラムの◀ボタン: そのカラムの階層を1つ上へ（押した階層の親へ移動）。"""
+        base = folder_path or self._current_path
+        if not base:
+            return
+        parent = str(Path(base).parent)
+        if parent and os.path.normpath(parent) != os.path.normpath(base):
             self._navigate(parent)
 
     def _go_back(self):

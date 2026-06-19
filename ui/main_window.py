@@ -296,28 +296,6 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        # クリック動作（Maya内動作の設定）と前回パス復元を、右端のMayaコントロール群にまとめる
-        tb.addWidget(QLabel("クリック動作:"))
-        self._action_combo = QComboBox()
-        self._action_combo.addItems(["プレビュー", "開く", "インポート", "リファレンス"])
-        action_map = ["preview", "open", "import", "reference"]
-        current_action = self._sm.get("single_click_action", "preview")
-        if current_action in action_map:
-            self._action_combo.setCurrentIndex(action_map.index(current_action))
-        self._action_combo.currentIndexChanged.connect(
-            lambda idx: self._sm.set("single_click_action", action_map[idx])
-        )
-        tb.addWidget(self._action_combo)
-
-        self._restore_check = QCheckBox("前回のパスを復元")
-        self._restore_check.setChecked(self._sm.get("restore_last_path", False))
-        self._restore_check.toggled.connect(
-            lambda v: self._sm.set("restore_last_path", bool(v))
-        )
-        tb.addWidget(self._restore_check)
-
-        tb.addSeparator()
-
         # Maya version selector (standalone mode)
         if not self._inside_maya:
             tb.addWidget(QLabel("Maya:"))
@@ -338,6 +316,28 @@ class MainWindow(QMainWindow):
             launch_btn = QPushButton("🚀 起動")
             launch_btn.clicked.connect(self._launch_maya)
             tb.addWidget(launch_btn)
+
+        tb.addSeparator()
+
+        # クリック動作（Maya内動作の設定）＋前回パス復元 — 最右端に配置
+        tb.addWidget(QLabel("クリック動作:"))
+        self._action_combo = QComboBox()
+        self._action_combo.addItems(["プレビュー", "開く", "インポート", "リファレンス"])
+        action_map = ["preview", "open", "import", "reference"]
+        current_action = self._sm.get("single_click_action", "preview")
+        if current_action in action_map:
+            self._action_combo.setCurrentIndex(action_map.index(current_action))
+        self._action_combo.currentIndexChanged.connect(
+            lambda idx: self._sm.set("single_click_action", action_map[idx])
+        )
+        tb.addWidget(self._action_combo)
+
+        self._restore_check = QCheckBox("前回のパスを復元")
+        self._restore_check.setChecked(self._sm.get("restore_last_path", False))
+        self._restore_check.toggled.connect(
+            lambda v: self._sm.set("restore_last_path", bool(v))
+        )
+        tb.addWidget(self._restore_check)
 
     def _build_menu(self):
         mb = self.menuBar()
