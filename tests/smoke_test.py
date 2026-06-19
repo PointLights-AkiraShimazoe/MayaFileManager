@@ -97,6 +97,21 @@ def main():
             time.sleep(0.03)
         check(rc == 3, "symlink: 中身(3件)がリンク配下に見える", f"rowCount={rc}")
 
+        # --- 4. クリック経路(_follow_link→_navigate)でも実体へ飛ばない（回帰防止）---
+        #   以前 _navigate に os.path.realpath を入れていたためsymlinkが実体へ遷移した。
+        panel._current_path = ""
+        panel._follow_link(link)
+        deadline = time.time() + 4
+        while time.time() < deadline:
+            app.processEvents()
+            if panel._current_path:
+                break
+            time.sleep(0.02)
+        kept2 = (os.path.normcase(os.path.normpath(panel._current_path))
+                 == os.path.normcase(os.path.normpath(link)))
+        check(kept2, "symlink: クリック(_follow_link)でもリンクパス維持(実体へ飛ばない)",
+              f"current={panel._current_path}")
+
     print("-" * 48)
     if _failures:
         print(f"SMOKE TEST FAILED: {len(_failures)} 件 -> {_failures}")

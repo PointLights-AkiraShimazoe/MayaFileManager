@@ -588,15 +588,14 @@ class BrowserPanel(QWidget):
 
     def _navigate(self, path: str, add_to_history: bool = True):
         """到達可能性を非同期確認してから移動する（N-1: UIを止めない）。
-        ショートカット/リンクは実体(ターゲット)へ解決し、ターゲットのドライブ最上位から
-        全カラムで再表示する。"""
+
+        重要: ここでは os.path.realpath による実体解決を行わない。
+        - シンボリックリンク/ジャンクション: リンクのパスを維持して中身を表示する
+          （実体側ドライブへ飛ばさない）。クリックは _follow_link 経由でこの関数に来る。
+        - .lnk/.url ショートカット: 呼び出し元(_maybe_follow_shortcut)が既に
+          参照先(実体パス)へ解決済みのため、ここで再解決する必要はない。
+        以前ここに realpath を入れていたためシンボリックリンクが実体へ遷移していた（回帰）。"""
         path = os.path.normpath(path)
-        try:
-            real = os.path.realpath(path)
-            if os.path.normcase(real) != os.path.normcase(path):
-                path = real
-        except OSError:
-            pass
         self._pending_nav = (path, add_to_history)
         self.status_message.emit(f"確認中: {path}")
         self._prober.probe(path)
@@ -841,15 +840,16 @@ class BrowserPanel(QWidget):
             # カラムスタックを作り直す（シグナル内での setRootIndex はクラッシュ
             # するため QTimer で次のイベントループへ逃がす）。
             tgt = target
-            # カラム除去/構築が落ち着いた後にスクロール範囲を正す（setRootIndexのみ）。
-            for _ms in (120, 350):
+            # ロード/カラム除去が落ち着いた後にチェーンを強制再展開し、
+            # 深いカラムの欠落とスクロール範囲の空白の両方を解消する。
+            for _ms in (90, 320):
                 QTimer.singleShot(_ms, lambda p=tgt: self._force_column_rebuild(p))
 
     def _force_column_rebuild(self, target: str):
-        """setRootIndex のみ再適用してスクロール範囲(maximum)を正す。
-        setCurrentIndex は呼ばない＝自動スクロールのジャンプ防止。"""
-        # 重要: 既に別パスへ移動済みなら、この古い再構築でカラムを壊さないようスキップ。
-        # 高速クリック時、前のtargetのrebuildが後から発火してルートを巻き戻す事故を防ぐ。
+        """ルートと現在地を再適用して QColumnView のカラムを末端まで作り直す。
+        既に current==target だと setCurrentIndex が no-op になり深い階層が
+        展開されないため、一旦 current を無効化してから target を設定し直す。"""
+        # 既に別パスへ移動済みなら、古い再構築でカラムを壊さないようスキップ（高速クリック対策）。
         try:
             if os.path.normcase(os.path.normpath(target)) != \
                os.path.normcase(os.path.normpath(self._current_path or "")):
@@ -859,14 +859,20 @@ class BrowserPanel(QWidget):
         try:
             col_root = self._column_root_for(target)
             ridx = self._proxy.mapFromSource(self._fs_model.index(col_root))
+            cidx = self._proxy.mapFromSource(self._fs_model.index(target))
             if ridx.isValid():
                 self._column_view.setRootIndex(ridx)
+            if cidx.isValid():
+                # 無効→target で current 変更を強制し、深い階層まで再展開させる
+                self._column_view.setCurrentIndex(QModelIndex())
+                self._column_view.setCurrentIndex(cidx)
             try:
                 self._column_view.updateGeometries()
             except Exception:
                 pass
-            _mfm_log("force_rebuild(rootonly): target=%r hbar_max=%d"
-                     % (target, self._column_view.horizontalScrollBar().maximum()))
+            _mfm_log("force_rebuild: target=%r root_valid=%s cur_valid=%s hbar_max=%d"
+                     % (target, ridx.isValid(), cidx.isValid(),
+                        self._column_view.horizontalScrollBar().maximum()))
         except Exception as _e:
             _mfm_log("force_rebuild error %r" % _e)
 
