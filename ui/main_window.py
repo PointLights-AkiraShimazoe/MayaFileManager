@@ -287,6 +287,7 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self):
         tb = self.addToolBar("メイン")
+        tb.setObjectName("MainToolBar")
         tb.setMovable(False)
         tb.setIconSize(QSize(20, 20))
 
@@ -623,13 +624,15 @@ class MainWindow(QMainWindow):
                 pass
         if state:
             try:
-                self.restoreState(bytes.fromhex(state))
+                # version=2: 旧レイアウト(1行ツールバー)の保存状態を無効化し、
+                # コードで定義した2行レイアウトを確実に反映させる
+                self.restoreState(bytes.fromhex(state), 2)
             except Exception:
                 pass
 
     def closeEvent(self, event):
         self._sm.set("window_geometry", self.saveGeometry().toHex().data().decode(), save=False)
-        self._sm.set("window_state",    self.saveState().toHex().data().decode(), save=False)
+        self._sm.set("window_state",    self.saveState(2).toHex().data().decode(), save=False)
         try:
             self._sm.set("last_path", self._browser.current_path(), save=False)
         except Exception:
