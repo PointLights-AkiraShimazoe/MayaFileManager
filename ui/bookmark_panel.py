@@ -132,13 +132,20 @@ class BookmarkTree(QTreeWidget):
         event.accept()
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
-            event.acceptProposedAction()
+        md = event.mimeData()
+        if md.hasUrls() and event.source() is not self:
+            event.acceptProposedAction()        # 外部(ブラウザ/OS)からのファイル
         else:
-            super().dragEnterEvent(event)
+            super().dragEnterEvent(event)        # 内部の並び替え
 
     def dragMoveEvent(self, event):
-        event.acceptProposedAction()
+        md = event.mimeData()
+        if md.hasUrls() and event.source() is not self:
+            event.acceptProposedAction()        # 外部ファイルのドロップ
+        else:
+            # 内部並び替え: 標準処理に委譲してドロップ位置インジケータを更新する
+            # （怠ると dropIndicatorPosition が不正確になり並び替えが効かない）
+            super().dragMoveEvent(event)
 
 
 # ---------------------------------------------------------------------------
