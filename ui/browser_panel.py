@@ -879,6 +879,11 @@ class BrowserPanel(QWidget):
             reveal_act.triggered.connect(lambda: reveal_in_explorer(paths[0]))
             menu.addSeparator()
 
+        # ── パスをコピー（単数/複数対応） ─────────────────────────────
+        copy_path_act = menu.addAction("📋  ファイルパスをコピー")
+        copy_path_act.triggered.connect(lambda: self._copy_paths_to_clipboard(paths))
+        menu.addSeparator()
+
         # ── Bookmark ─────────────────────────────────────────────────
         bm_act = menu.addAction("⭐  ブックマークに追加")
         bm_act.triggered.connect(lambda: self._add_to_bookmarks(paths))
@@ -921,6 +926,16 @@ class BrowserPanel(QWidget):
         if paths:
             self.bookmark_requested.emit(list(paths))
             self.status_message.emit(f"ブックマークに追加: {len(paths)} 件")
+
+    def _copy_paths_to_clipboard(self, paths: List[str]):
+        """選択中のフルパスをクリップボードへコピー（複数は改行区切り）。"""
+        from core.compat import QApplication
+        if not paths:
+            return
+        cb = QApplication.clipboard()
+        if cb is not None:
+            cb.setText("\n".join(paths))
+        self.status_message.emit(f"パスをコピー: {len(paths)} 件")
 
     def _copy_dialog(self, paths: List[str]):
         dst = QFileDialog.getExistingDirectory(self, "コピー先を選択")

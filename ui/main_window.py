@@ -115,14 +115,7 @@ class QuickNavBar(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        self._container = QWidget()
-        self._btn_layout = QHBoxLayout(self._container)
-        self._btn_layout.setContentsMargins(0, 0, 0, 0)
-        self._btn_layout.setSpacing(4)
-        layout.addWidget(self._container)
-        layout.addStretch()
-
-        # Preset selector
+        # プリセット選択＋編集アイコンを最左に配置
         layout.addWidget(QLabel("プリセット:"))
         self._preset_combo = QComboBox()
         self._preset_combo.setFixedWidth(120)
@@ -134,6 +127,14 @@ class QuickNavBar(QWidget):
         edit_btn.setToolTip("クイックナビを編集")
         edit_btn.clicked.connect(self._edit_presets)
         layout.addWidget(edit_btn)
+
+        # その横にナビボタンを並べる
+        self._container = QWidget()
+        self._btn_layout = QHBoxLayout(self._container)
+        self._btn_layout.setContentsMargins(0, 0, 0, 0)
+        self._btn_layout.setSpacing(4)
+        layout.addWidget(self._container)
+        layout.addStretch()
 
         self.refresh()
 
@@ -298,13 +299,6 @@ class MainWindow(QMainWindow):
         tb.addWidget(self._restore_check)
         tb.addSeparator()
 
-        # Quick-nav bar
-        self._quick_nav = QuickNavBar(self._sm, parent=self)
-        self._quick_nav.navigate_requested.connect(self._browser.navigate_to)
-        tb.addWidget(self._quick_nav)
-
-        tb.addSeparator()
-
         # Maya version selector (standalone mode)
         if not self._inside_maya:
             tb.addWidget(QLabel("Maya:"))
@@ -345,6 +339,15 @@ class MainWindow(QMainWindow):
             lambda idx: self._sm.set("single_click_action", action_map[idx])
         )
         tb.addWidget(self._action_combo)
+
+        # クイックナビ（プリセット）は独立した2行目に配置
+        self.addToolBarBreak()
+        nav_tb = self.addToolBar("ナビ")
+        nav_tb.setObjectName("NavToolBar")
+        nav_tb.setMovable(False)
+        self._quick_nav = QuickNavBar(self._sm, parent=self)
+        self._quick_nav.navigate_requested.connect(self._browser.navigate_to)
+        nav_tb.addWidget(self._quick_nav)
 
     def _build_menu(self):
         mb = self.menuBar()
