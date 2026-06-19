@@ -581,21 +581,12 @@ class BrowserPanel(QWidget):
         is_dir = os.path.isdir(path)
         target_dir = path if is_dir else str(Path(path).parent)
 
-        if is_dir and self._is_symlink_or_junction(path):
-            # symlink/ジャンクションはリンク自身をルートにして中身を確実に表示。
-            # （ドライブ最上位+currentIndexだと深いノードのリンク子が列挙されず
-            #   空になる環境があるため。実体ドライブへは飛ばさずパスは維持。）
-            self._column_view.setRootIndex(
-                self._proxy.mapFromSource(self._fs_model.index(path)))
-        else:
-            # カラムビュー: ルートをドライブ最上位に固定し currentIndex で選択。
-            # → トップから現在地までカラムが連続表示され、上位選択で深いカラムが消える。
-            drive = os.path.splitdrive(path)[0]
-            top = (drive + os.sep) if drive else os.sep
-            self._column_view.setRootIndex(
-                self._proxy.mapFromSource(self._fs_model.index(top)))
-            self._column_view.setCurrentIndex(
-                self._proxy.mapFromSource(self._fs_model.index(path)))
+        # カラムのルート: パス途中(または自身)にリンクがあれば最上位リンク、無ければドライブ最上位
+        col_root = self._column_root_for(path)
+        self._column_view.setRootIndex(
+            self._proxy.mapFromSource(self._fs_model.index(col_root)))
+        self._column_view.setCurrentIndex(
+            self._proxy.mapFromSource(self._fs_model.index(path)))
 
         # サムネ/リストビューは対象フォルダ単体を表示
         self._thumb_view.setRootIndex(
@@ -628,28 +619,46 @@ class BrowserPanel(QWidget):
         if parent and os.path.normpath(parent) != os.path.normpath(base):
             self._select_in_columns(parent)
 
+    def _column_root_for(self, path: str) -> str:
+        """カラムビューのルートを決める。パス途中(または自身)に symlink/ジャンクションが
+        あると、その配下はドライブ最上位ルートでは列挙できない環境があるため、
+        最上位のリンク祖先をルートにする。リンクが無ければドライブ最上位。"""
+        p = os.path.normpath(os.path.abspath(path))
+        drive = os.path.splitdrive(p)[0]
+        top = (drive + os.sep) if drive else os.sep
+        comps = []
+        cur = p
+        while True:
+            comps.append(cur)
+            parent = os.path.dirname(cur)
+            if not parent or parent == cur:
+                break
+            cur = parent
+        comps.reverse()
+        for comp in comps:
+            try:
+                if os.path.isdir(comp) and self._is_symlink_or_junction(comp):
+                    return comp
+            except OSError:
+                pass
+        return top
+
     def _select_in_columns(self, path: str):
-        """ルート(ドライブ最上位)は変えず currentIndex を path に移す。
-        上位を選ぶと深いカラムが自動的に消える（フルパスのカラム構成は保持）。"""
+        """ルートは _column_root_for で決め、currentIndex を path に移す。
+        上位を選ぶと深いカラムが自動的に消える。"""
         if not path:
             return
-        if os.path.isdir(path) and self._is_symlink_or_junction(path):
-            # symlink はリンク自身をルートに（深いノードだと子が列挙されないため）
+        col_root = self._column_root_for(path)
+        root_idx = self._column_view.rootIndex()
+        cur_root = (self._fs_model.filePath(self._proxy.mapToSource(root_idx))
+                    if root_idx.isValid() else "")
+        if os.path.normcase(os.path.normpath(cur_root or "")) != \
+                os.path.normcase(os.path.normpath(col_root)):
             self._column_view.setRootIndex(
-                self._proxy.mapFromSource(self._fs_model.index(path)))
-        else:
-            drive = os.path.splitdrive(path)[0]
-            top = (drive + os.sep) if drive else os.sep
-            root_idx = self._column_view.rootIndex()
-            cur_root = (self._fs_model.filePath(self._proxy.mapToSource(root_idx))
-                        if root_idx.isValid() else "")
-            if os.path.normcase(os.path.normpath(cur_root or "")) != \
-                    os.path.normcase(os.path.normpath(top)):
-                self._column_view.setRootIndex(
-                    self._proxy.mapFromSource(self._fs_model.index(top)))
-            src = self._fs_model.index(path)
-            if src.isValid():
-                self._column_view.setCurrentIndex(self._proxy.mapFromSource(src))
+                self._proxy.mapFromSource(self._fs_model.index(col_root)))
+        src = self._fs_model.index(path)
+        if src.isValid():
+            self._column_view.setCurrentIndex(self._proxy.mapFromSource(src))
         self._current_path = path
         self._addr_bar.setText(path)
         self._sync_drive_combo(path)

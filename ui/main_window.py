@@ -289,6 +289,15 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         tb.setIconSize(QSize(20, 20))
 
+        # 前回のパスを復元（最左に配置）
+        self._restore_check = QCheckBox("前回のパスを復元")
+        self._restore_check.setChecked(self._sm.get("restore_last_path", False))
+        self._restore_check.toggled.connect(
+            lambda v: self._sm.set("restore_last_path", bool(v))
+        )
+        tb.addWidget(self._restore_check)
+        tb.addSeparator()
+
         # Quick-nav bar
         self._quick_nav = QuickNavBar(self._sm, parent=self)
         self._quick_nav.navigate_requested.connect(self._browser.navigate_to)
@@ -336,13 +345,6 @@ class MainWindow(QMainWindow):
             lambda idx: self._sm.set("single_click_action", action_map[idx])
         )
         tb.addWidget(self._action_combo)
-
-        self._restore_check = QCheckBox("前回のパスを復元")
-        self._restore_check.setChecked(self._sm.get("restore_last_path", False))
-        self._restore_check.toggled.connect(
-            lambda v: self._sm.set("restore_last_path", bool(v))
-        )
-        tb.addWidget(self._restore_check)
 
     def _build_menu(self):
         mb = self.menuBar()
