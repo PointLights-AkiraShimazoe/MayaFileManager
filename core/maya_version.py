@@ -239,23 +239,58 @@ def best_match(detected_version: Optional[str],
 # Launch Maya
 # ---------------------------------------------------------------------------
 
+# mayapy / Maya standalone が設定し、別バージョンの maya.exe 起動を壊す環境変数。
+# これらを継承したまま maya.exe を起動すると、起動中の Maya（mayapy）の Python/
+# スクリプトパスを参照してしまい、MayaUSD メニュー初期化(capitalizeString)等が
+# 失敗する。launch 時に除去してクリーンに起動する。
+_CONFLICTING_ENV_KEYS = (
+    "PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "PYTHONNOUSERSITE",
+    "MAYA_LOCATION", "MAYA_SCRIPT_PATH", "MAYA_PLUG_IN_PATH",
+    "MAYA_MODULE_PATH", "MAYA_PRESET_PATH", "MAYA_SCRIPT_BASE",
+    "MAYA_CUSTOM_TEMPLATE_PATH", "XBMLANGPATH",
+    "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QT_QPA_PLATFORM",
+    "QT_AUTO_SCREEN_SCALE_FACTOR", "QT_SCALE_FACTOR",
+)
+
+
+def _clean_launch_env() -> Dict[str, str]:
+    """maya.exe を素のシェルから起動したのと同等のクリーンな環境を返す。"""
+    env = dict(os.environ)
+    for k in _CONFLICTING_ENV_KEYS:
+        env.pop(k, None)
+    return env
+
+
 def launch_maya(installation: MayaInstallation,
                 file_path: Optional[str] = None,
-                extra_args: Optional[List[str]] = None) -> subprocess.Popen:
+                extra_args: Optional[List[str]] = None,
+                command_port: Optional[int] = None,
+                clean_env: bool = True) -> subprocess.Popen:
     """
     Launch Maya as a detached subprocess.
+
+    command_port: 指定すると起動後にその Python commandPort を開く
+                  （FileManager から socket 接続して操作を送るため）。
+    clean_env:    mayapy 由来の衝突環境変数を除去してクリーンに起動する（既定 True）。
     Returns the Popen object (already detached).
     """
     if not installation.is_available:
         raise FileNotFoundError(f"Maya executable not found: {installation.path}")
 
     cmd: List[str] = [str(installation.executable)]
+    if command_port:
+        # 起動後に Python commandPort を開く（既に開いていればエラーを握りつぶす）
+        mel = ('catchQuiet(`commandPort -name ":%d" -sourceType "python" '
+               '-echoOutput`);' % int(command_port))
+        cmd += ["-command", mel]
     if file_path:
         cmd += [file_path]
     if extra_args:
         cmd += extra_args
 
     kwargs: Dict = {"close_fds": True}
+    if clean_env:
+        kwargs["env"] = _clean_launch_env()
     system = platform.system()
     if system == "Windows":
         kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

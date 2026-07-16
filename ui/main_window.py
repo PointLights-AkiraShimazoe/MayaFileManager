@@ -221,46 +221,25 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_ui(self):
-        # ── Central: browser ──────────────────────────────────────────
-        self._browser = BrowserPanel(self._sm, self._thumb_mgr, parent=self)
-        self._browser.file_activated.connect(self._on_file_activated)
-        self._browser.directory_changed.connect(self._on_directory_changed)
-        self._browser.status_message.connect(self.statusBar().showMessage)
-
-        # クリック動作(開く/インポート/リファレンス)はMaya内動作。
-        # standaloneでも _maya_* がステータス表示で安全に処理するため常時接続する。
-        self._browser.set_open_callback(self._maya_open)
-        self._browser.set_import_callback(self._maya_import)
-        self._browser.set_reference_callback(self._maya_reference)
-
-        self.setCentralWidget(self._browser)
-
-        # ── Left dock: bookmarks ──────────────────────────────────────
-        self._bookmark_panel = BookmarkPanel(self._bm_mgr, parent=self)
-        self._bookmark_panel.navigate_requested.connect(self._browser.navigate_to)
-        self._bookmark_panel.open_requested.connect(self._maya_open)
-        self._bookmark_panel.import_requested.connect(self._maya_import)
-        self._bookmark_panel.reference_requested.connect(self._maya_reference)
-        # ブラウザの右クリック「ブックマークに追加」を反映
-        self._browser.bookmark_requested.connect(self._on_bookmark_requested)
-
-        bm_dock = QDockWidget("ブックマーク", self)
-        bm_dock.setObjectName("BookmarkDock")
-        bm_dock.setWidget(self._bookmark_panel)
-        bm_dock.setMinimumWidth(180)
-        self.addDockWidget(Qt.LeftDockWidgetArea, bm_dock)
-        self._bm_dock = bm_dock
-
-        # ── Right dock: history ───────────────────────────────────────
-        self._history_panel = HistoryPanel(self._sm, parent=self)
-        self._history_panel.navigate_requested.connect(self._browser.navigate_to)
-
-        hist_dock = QDockWidget("履歴", self)
-        hist_dock.setObjectName("HistoryDock")
-        hist_dock.setWidget(self._history_panel)
-        hist_dock.setMinimumWidth(180)
-        self.addDockWidget(Qt.RightDockWidgetArea, hist_dock)
-        self._hist_dock = hist_dock
+        # ── Central: ブラウザエリア（複数化対応・縦積み） ────────────────
+        # 「プリセット行＋ブックマーク/履歴＋ブラウザ」を1ユニット(BrowserArea)
+        # とし、縦スプリッタで複数配置できる。追加・削除・並び替え可能、
+        # 各エリアの状態(パス・分割幅)は設定に保存する。
+        self._areas = []
+        self._areas_split = QSplitter(Qt.Vertical, self)
+        self._areas_split.setChildrenCollapsible(False)
+        self._areas_split.setHandleWidth(4)
+        states = self._sm.get("browser_areas_state", None)
+        if not isinstance(states, list) or not states:
+            states = [None]
+        for st in states:
+            self._add_area(state=st, save=False)
+        self._browser = self._areas[0].browser   # 互換エイリアス（既存機能の参照先）
+        self._bookmark_panel = self._areas[0].bookmark_panel
+        self._history_panel = self._areas[0].history_panel
+        self._bm_dock = None
+        self._hist_dock = None
+        self.setCentralWidget(self._areas_split)
 
         # ── Bottom dock: duplicate folder finder ──────────────────────
         self._dup_panel = DuplicateFolderPanel(parent=self)
@@ -284,6 +263,90 @@ class MainWindow(QMainWindow):
         sb.addWidget(self._status_path_label)
 
         sb.addPermanentWidget(QLabel(f"Maya {self._maya_ver}" if self._maya_ver else "Standalone"))
+
+    # ------------------------------------------------------------------
+    # ブラウザエリア管理（追加・削除・並び替え・状態保存）
+    # ------------------------------------------------------------------
+
+    def _add_area(self, state=None, after=None, save=True):
+        """新しいブラウザエリアを追加する。after 指定でその直下に挿入。"""
+        from ui.browser_area import BrowserArea
+        area = BrowserArea(self._sm, self._thumb_mgr, self._bm_mgr, parent=self)
+        # Maya連携（クリック動作）
+        area.browser.set_open_callback(self._maya_open)
+        area.browser.set_import_callback(self._maya_import)
+        area.browser.set_reference_callback(self._maya_reference)
+        area.bookmark_panel.open_requested.connect(self._maya_open)
+        area.bookmark_panel.import_requested.connect(self._maya_import)
+        area.bookmark_panel.reference_requested.connect(self._maya_reference)
+        # 共有ハンドラ
+        area.file_activated.connect(self._on_file_activated)
+        area.directory_changed.connect(self._on_directory_changed)
+        area.status_message.connect(self.statusBar().showMessage)
+        area.bookmark_requested.connect(self._on_bookmark_requested)
+        # エリア操作
+        area.add_below_requested.connect(self._on_area_add_below)
+        area.remove_requested.connect(self._on_area_remove)
+        area.move_up_requested.connect(lambda a: self._on_area_move(a, -1))
+        area.move_down_requested.connect(lambda a: self._on_area_move(a, +1))
+
+        if after is not None and after in self._areas:
+            pos = self._areas.index(after) + 1
+        else:
+            pos = len(self._areas)
+        self._areas.insert(pos, area)
+        self._areas_split.insertWidget(pos, area)
+        if isinstance(state, dict):
+            area.apply_state(state)
+        self._refresh_area_headers()
+        if save:
+            self._save_areas_state()
+        return area
+
+    def _on_area_add_below(self, area):
+        self._add_area(after=area)
+
+    def _on_area_remove(self, area):
+        if len(self._areas) <= 1 or area not in self._areas:
+            return
+        self._areas.remove(area)
+        area.setParent(None)
+        area.deleteLater()
+        # 互換エイリアスの付け替え
+        self._browser = self._areas[0].browser
+        self._bookmark_panel = self._areas[0].bookmark_panel
+        self._history_panel = self._areas[0].history_panel
+        self._quick_nav = self._areas[0].quick_nav
+        self._refresh_area_headers()
+        self._save_areas_state()
+
+    def _on_area_move(self, area, delta):
+        if area not in self._areas:
+            return
+        i = self._areas.index(area)
+        j = i + delta
+        if j < 0 or j >= len(self._areas):
+            return
+        self._areas.pop(i)
+        self._areas.insert(j, area)
+        self._areas_split.insertWidget(j, area)
+        self._refresh_area_headers()
+        self._save_areas_state()
+
+    def _refresh_area_headers(self):
+        n = len(self._areas)
+        for i, a in enumerate(self._areas):
+            try:
+                a.set_index(i, n)
+            except Exception:
+                pass
+
+    def _save_areas_state(self):
+        try:
+            self._sm.set("browser_areas_state",
+                         [a.get_state() for a in self._areas], save=False)
+        except Exception:
+            pass
 
     def _build_toolbar(self):
         tb = self.addToolBar("メイン")
@@ -344,14 +407,9 @@ class MainWindow(QMainWindow):
         )
         tb.addWidget(self._action_combo)
 
-        # クイックナビ（プリセット）は独立した2行目に配置
-        self.addToolBarBreak()
-        nav_tb = self.addToolBar("ナビ")
-        nav_tb.setObjectName("NavToolBar")
-        nav_tb.setMovable(False)
-        self._quick_nav = QuickNavBar(self._sm, parent=self)
-        self._quick_nav.navigate_requested.connect(self._browser.navigate_to)
-        nav_tb.addWidget(self._quick_nav)
+        # クイックナビ（プリセット）行は各ブラウザエリアが個別に持つ
+        # （BrowserArea 内に配置。エリアごとに独立して操作できる）
+        self._quick_nav = self._areas[0].quick_nav if self._areas else None
 
     def _build_menu(self):
         mb = self.menuBar()
@@ -398,13 +456,9 @@ class MainWindow(QMainWindow):
 
         # ── 表示 ──────────────────────────────────────────────────────
         view_menu = mb.addMenu("表示")
-        # findChildはobjectName("BookmarkDock"/"HistoryDock")と表示名が
-        # 一致しないため常にNoneを返していた。保持した参照で確実に再表示する。
-        view_menu.addAction("ブックマークパネル").triggered.connect(
-            lambda: self._show_dock(self._bm_dock)
-        )
-        view_menu.addAction("履歴パネル").triggered.connect(
-            lambda: self._show_dock(self._hist_dock)
+        # ブックマーク/履歴は各ブラウザエリアに常設のためdockメニューは廃止
+        view_menu.addAction("ブラウザエリアを追加").triggered.connect(
+            lambda: self._add_area(after=self._areas[-1] if self._areas else None)
         )
         view_menu.addAction("重複フォルダパネル").triggered.connect(self._toggle_dup_panel)
 
@@ -426,8 +480,17 @@ class MainWindow(QMainWindow):
             self._maya_reference(path)
 
     def _on_directory_changed(self, path: str):
-        self._status_path_label.setText(path)
-        self._history_panel.refresh()
+        try:
+            self._status_path_label.setText(path)
+        except Exception:
+            pass
+        # 全エリアの履歴パネルを更新（履歴データは共有のため）
+        for a in getattr(self, "_areas", []):
+            try:
+                a.history_panel.refresh()
+            except Exception:
+                pass
+        self._save_areas_state()
 
     def _on_bookmark_requested(self, paths):
         """ブラウザの右クリック『ブックマークに追加』を BookmarkManager に反映する。"""
@@ -556,9 +619,13 @@ class MainWindow(QMainWindow):
         dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
 
     def _on_settings_changed(self):
-        """Re-apply live settings to browser and thumbnail manager."""
-        self._browser.set_max_depth(self._sm.get("column_max_depth", 4))
-        self._browser.set_thumb_size(self._sm.get("thumbnail_size", 128))
+        """Re-apply live settings to browsers and thumbnail manager."""
+        for a in getattr(self, "_areas", []):
+            try:
+                a.browser.set_max_depth(self._sm.get("column_max_depth", 4))
+                a.browser.set_thumb_size(self._sm.get("thumbnail_size", 128))
+            except Exception:
+                pass
         self._thumb_mgr.set_cache_size(self._sm.get("thumbnail_cache_size", 256))
         self.statusBar().showMessage("設定を適用しました")
 
@@ -624,18 +691,20 @@ class MainWindow(QMainWindow):
                 pass
         if state:
             try:
-                # version=2: 旧レイアウト(1行ツールバー)の保存状態を無効化し、
-                # コードで定義した2行レイアウトを確実に反映させる
-                self.restoreState(bytes.fromhex(state), 2)
+                # version=3: プリセット行のエリア内移動に伴い旧状態を無効化
+                self.restoreState(bytes.fromhex(state), 3)
             except Exception:
                 pass
 
     def closeEvent(self, event):
+        # version=3: ナビツールバー廃止（プリセット行はエリア内へ移動）に伴い
+        # 旧ツールバー状態を無効化
         self._sm.set("window_geometry", self.saveGeometry().toHex().data().decode(), save=False)
-        self._sm.set("window_state",    self.saveState(2).toHex().data().decode(), save=False)
+        self._sm.set("window_state",    self.saveState(3).toHex().data().decode(), save=False)
         try:
             self._sm.set("last_path", self._browser.current_path(), save=False)
         except Exception:
             pass
+        self._save_areas_state()
         self._sm.save()
         super().closeEvent(event)
