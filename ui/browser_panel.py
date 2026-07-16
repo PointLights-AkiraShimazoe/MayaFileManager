@@ -1428,7 +1428,7 @@ class BrowserPanel(QWidget):
 
     def __init__(self, settings_manager, thumb_manager: ThumbnailManager, parent=None):
         super().__init__(parent)
-        _mfm_log("=== BrowserPanel init (build: r15 flat-toggled-signal 2026-07-07) ===")
+        _mfm_log("=== BrowserPanel init (build: r16 nav-finalize-fallback 2026-07-07) ===")
         self._sm = settings_manager
         self._thumb_mgr = thumb_manager
         self._thumb_mgr.thumbnail_ready.connect(self._on_thumbnail_ready)
@@ -1890,6 +1890,44 @@ class BrowserPanel(QWidget):
             self._fs_model.fetchMore(idx)
         # 既にロード済みの階層がある場合に備え、最初の再適用も試す
         self._advance_pending_load(top)
+        # 保険: 対象が«既にロード済み»だと QFileSystemModel は directoryLoaded を
+        # 再発火しない環境がある（pip版Qt。MayaのQtは再発火する）。その場合
+        # advance が永遠に完了せず「クリックしても何も起きない」になるため、
+        # シグナルに依存しない完了判定を遅延で数回試す。
+        for _ms in (120, 400, 900):
+            QTimer.singleShot(_ms, lambda p=target: self._maybe_finalize_navigation(p))
+
+    def _maybe_finalize_navigation(self, target: str):
+        """directoryLoaded 非発火時のフォールバック完了判定。
+        対象 index が有効で子情報が読める状態なら到達扱いで仕上げる。
+        （シンボリックリンク/ジャンクションを«2回目以降»に開く時、モデルが
+        キャッシュ済みでシグナルが来ない事象への対策。EXE版で実際に発生）"""
+        if not self._pending_current:
+            return
+        try:
+            if os.path.normcase(os.path.normpath(self._pending_current)) != \
+               os.path.normcase(os.path.normpath(target)):
+                return
+        except Exception:
+            return
+        tgt_idx = self._fs_model.index(target)
+        if not tgt_idx.isValid():
+            return
+        try:
+            ready = (self._fs_model.rowCount(tgt_idx) > 0
+                     or not self._fs_model.canFetchMore(tgt_idx))
+        except Exception:
+            ready = False
+        if not ready:
+            return
+        _mfm_log("finalize_nav(fallback): target=%r（directoryLoaded未発火対策）"
+                 % target)
+        self._pending_current = None
+        pidx = self._proxy.mapFromSource(tgt_idx)
+        if pidx.isValid():
+            self._column_view.setCurrentIndex(pidx)
+        for _ms in (90, 320):
+            QTimer.singleShot(_ms, lambda p=target: self._force_column_rebuild(p))
 
     def _advance_pending_load(self, loaded_path: str):
         """loaded_path（ロード完了済み階層）から対象へ向けて次の階層の
@@ -2808,4 +2846,4 @@ class BrowserPanel(QWidget):
 
 # ファイル末尾センチネル: 起動ログにこの行が出れば、このファイルは
 # 末尾まで欠損なく読み込まれている（ファイル同期の切り詰め検出用）。
-_mfm_log("browser_panel.py loaded to EOF (r15 complete)")
+_mfm_log("browser_panel.py loaded to EOF (r16 complete)")
