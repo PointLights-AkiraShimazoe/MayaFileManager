@@ -1428,7 +1428,7 @@ class BrowserPanel(QWidget):
 
     def __init__(self, settings_manager, thumb_manager: ThumbnailManager, parent=None):
         super().__init__(parent)
-        _mfm_log("=== BrowserPanel init (build: r17 link-root-selfheal 2026-07-07) ===")
+        _mfm_log("=== BrowserPanel init (build: r18 rebuild-skip-smooth 2026-07-07) ===")
         self._sm = settings_manager
         self._thumb_mgr = thumb_manager
         self._thumb_mgr.thumbnail_ready.connect(self._on_thumbnail_ready)
@@ -2002,6 +2002,36 @@ class BrowserPanel(QWidget):
                 return
         except Exception:
             return
+        # 既に正しく表示できているなら何もしない。
+        # force_rebuild は current 無効化→再設定でカラムを全て組み直すため、
+        # 複数経路（advance / finalize_nav / 二段タイマー）から重複実行されると
+        # カラムがガクガク動く。root・current・対象カラムの可視性まで一致して
+        # いれば再構築は不要（リンククリック時の見た目を通常フォルダと同等にする）。
+        try:
+            cv = self._column_view
+            nt = os.path.normcase(os.path.normpath(target))
+            cur = cv.currentIndex()
+            root = cv.rootIndex()
+            cur_path = (self._fs_model.filePath(self._proxy.mapToSource(cur))
+                        if cur.isValid() else "")
+            root_path = (self._fs_model.filePath(self._proxy.mapToSource(root))
+                         if root.isValid() else "")
+            want_root = self._column_root_for(target)
+            same = (cur_path and
+                    os.path.normcase(os.path.normpath(cur_path)) == nt and
+                    os.path.normcase(os.path.normpath(root_path or "")) ==
+                    os.path.normcase(os.path.normpath(want_root)))
+            if same:
+                for v in cv.findChildren(QListView):
+                    if v.isHidden() or v.model() is None:
+                        continue
+                    fp = cv._path_for_index(v.rootIndex())
+                    if fp and os.path.normcase(os.path.normpath(fp)) == nt:
+                        _mfm_log("force_rebuild skip: already correct target=%r"
+                                 % target)
+                        return
+        except Exception:
+            pass
         try:
             col_root = self._column_root_for(target)
             ridx = self._proxy.mapFromSource(self._fs_model.index(col_root))
@@ -2880,4 +2910,4 @@ class BrowserPanel(QWidget):
 
 # ファイル末尾センチネル: 起動ログにこの行が出れば、このファイルは
 # 末尾まで欠損なく読み込まれている（ファイル同期の切り詰め検出用）。
-_mfm_log("browser_panel.py loaded to EOF (r17 complete)")
+_mfm_log("browser_panel.py loaded to EOF (r18 complete)")
