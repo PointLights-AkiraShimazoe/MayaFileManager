@@ -1428,7 +1428,7 @@ class BrowserPanel(QWidget):
 
     def __init__(self, settings_manager, thumb_manager: ThumbnailManager, parent=None):
         super().__init__(parent)
-        _mfm_log("=== BrowserPanel init (build: r16 nav-finalize-fallback 2026-07-07) ===")
+        _mfm_log("=== BrowserPanel init (build: r17 link-root-selfheal 2026-07-07) ===")
         self._sm = settings_manager
         self._thumb_mgr = thumb_manager
         self._thumb_mgr.thumbnail_ready.connect(self._on_thumbnail_ready)
@@ -2016,9 +2016,43 @@ class BrowserPanel(QWidget):
                 self._column_view.updateGeometries()
             except Exception:
                 pass
-            _mfm_log("force_rebuild: target=%r root_valid=%s cur_valid=%s hbar_max=%d"
+            # ── 診断＋自己修復 ─────────────────────────────────────
+            # Windows実機のpip版Qtで «リンクをルートにすると直下がproxy越しに
+            # 見えない／カラムが構築されない» 事象への対策。
+            rrows = self._proxy.rowCount(ridx) if ridx.isValid() else -1
+            n_cols = 0
+            try:
+                n_cols = sum(1 for v in self._column_view.findChildren(QListView)
+                             if not v.isHidden() and v.model() is not None)
+            except Exception:
+                pass
+            _mfm_log("force_rebuild: target=%r root_valid=%s cur_valid=%s "
+                     "hbar_max=%d proxy_root_rows=%s visible_cols=%d"
                      % (target, ridx.isValid(), cidx.isValid(),
-                        self._column_view.horizontalScrollBar().maximum()))
+                        self._column_view.horizontalScrollBar().maximum(),
+                        rrows, n_cols))
+            if ridx.isValid() and rrows == 0:
+                # 1) プロキシのフィルタ再評価で子のマッピングを作り直す
+                try:
+                    self._proxy.invalidateFilter()
+                except Exception:
+                    pass
+                rrows2 = self._proxy.rowCount(ridx)
+                _mfm_log("force_rebuild retry(invalidateFilter): rows=%s" % rrows2)
+                if rrows2 == 0:
+                    # 2) ドライブ最上位ルートへフォールバック（リンクルートを諦め、
+                    #    最上位からのチェーン表示で target まで開く）
+                    drive = os.path.splitdrive(os.path.normpath(target))[0]
+                    top = (drive + os.sep) if drive else os.sep
+                    tidx = self._proxy.mapFromSource(self._fs_model.index(top))
+                    ci = self._proxy.mapFromSource(self._fs_model.index(target))
+                    if tidx.isValid():
+                        self._column_view.setRootIndex(tidx)
+                        if ci.isValid():
+                            self._column_view.setCurrentIndex(QModelIndex())
+                            self._column_view.setCurrentIndex(ci)
+                    _mfm_log("force_rebuild fallback(drive-top): root=%r cur_valid=%s"
+                             % (top, ci.isValid()))
         except Exception as _e:
             _mfm_log("force_rebuild error %r" % _e)
 
@@ -2846,4 +2880,4 @@ class BrowserPanel(QWidget):
 
 # ファイル末尾センチネル: 起動ログにこの行が出れば、このファイルは
 # 末尾まで欠損なく読み込まれている（ファイル同期の切り詰め検出用）。
-_mfm_log("browser_panel.py loaded to EOF (r16 complete)")
+_mfm_log("browser_panel.py loaded to EOF (r17 complete)")
