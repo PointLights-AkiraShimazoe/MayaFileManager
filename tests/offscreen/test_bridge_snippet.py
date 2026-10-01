@@ -7,11 +7,13 @@ r112 の一括変換が `_swallow()`（Manager のモジュール関数）をス
 ここでは「Manager の名前が混ざっていない」「単体で構文が通る」
 「Maya 相当のスタブで実際にポート選択が動く」を検証する。"""
 import ast
+import io
 import os
 import re
 from _common import *  # noqa: F401,F403
 from _common import finish
 
+from core import maya_bridge as _mb
 from core.maya_bridge import (_US_SNIPPET, _US_BEGIN, _US_END,
                               open_port_snippet, install_usersetup,
                               is_usersetup_installed, usersetup_path,
@@ -48,27 +50,35 @@ print("every except in the snippet is a bare pass: OK")
 # 4) Maya 相当のスタブで実際に動かす: 埋まっているポートは飛ばし、
 #    空いている最初のポートを開いて返すこと
 class _FakeCmds(object):
-    def __init__(self, taken):
-        self.taken = set(taken)
+    """Maya の commandPort の «要点» だけ真似る。
+
+    q=True は «この Maya が開いているか» を答える（他プロセスのポートは
+    False）。open は他プロセスが握っていれば失敗する。この違いを分けて
+    持たないと «同一 Maya の二重オープン» を検出できない（r119b）。
+    """
+
+    def __init__(self, taken, mine=None):
+        self.taken = set(taken)          # 他プロセス含め «使われている»
+        self.mine = set(mine or [])      # この Maya が開いている
         self.opened = []
 
     def commandPort(self, name=None, sourceType=None, q=False, **kw):
-        if q:                       # 問い合わせ: 使用中なら True
-            port = int(str(name).lstrip(":"))
-            return port in self.taken
         port = int(str(name).lstrip(":"))
+        if q:
+            return port in self.mine
         if port in self.taken:
             raise RuntimeError("port in use")
         self.taken.add(port)
+        self.mine.add(port)
         self.opened.append(port)
         return name
 
 
-def _run_snippet(taken):
+def _run_snippet(taken, mine=None):
     """スニペット本体を独立した名前空間で実行し、選ばれたポートを返す。"""
     import sys
     import types
-    fake = _FakeCmds(taken)
+    fake = _FakeCmds(taken, mine)
     mod_cmds = types.ModuleType("maya.cmds")
     mod_cmds.commandPort = fake.commandPort
     mod_maya = types.ModuleType("maya")
@@ -93,15 +103,25 @@ port, fake = _run_snippet(taken=[])
 assert port == PORT_RANGE[0], port
 print("first Maya takes the first port: OK")
 
-# 2台目: 先頭が埋まっていても «次» を取る（r119 の本丸。従来は NameError で
-# ループが即死し、2 台目以降が一切接続できなかった）
-port2, fake2 = _run_snippet(taken=[PORT_RANGE[0]])
+# 2台目: «他の Maya» が先頭を使っている場合。query は False（他プロセスの
+# ポートは見えない）だが open が失敗するので次へ進む。
+# r119 の本丸: 従来は NameError でループが即死し 2 台目が接続できなかった。
+port2, fake2 = _run_snippet(taken=[PORT_RANGE[0]], mine=[])
 assert port2 == PORT_RANGE[1], port2
 assert fake2.opened == [PORT_RANGE[1]], fake2.opened
-print("second Maya skips the taken port and opens the next: OK")
+print("second Maya skips the port another Maya holds: OK")
+
+# r119b: «この Maya が既に開いている» 場合は何もしない。
+# マネージャーから起動した Maya は -command で先にポートを開くので、
+# ここで別のポートを開くと 1 つの Maya が接続リストに 2 回出てしまう。
+port_self, fake_self = _run_snippet(taken=[PORT_RANGE[0]],
+                                    mine=[PORT_RANGE[0]])
+assert port_self == PORT_RANGE[0], port_self
+assert fake_self.opened == [], fake_self.opened
+print("a Maya that already has a port does not open a second one: OK")
 
 # 全部埋まっていても例外を投げない（Maya の起動を止めない）
-port3, _ = _run_snippet(taken=list(PORT_RANGE))
+port3, _ = _run_snippet(taken=list(PORT_RANGE), mine=[])
 assert port3 is None, port3
 print("all ports taken -> returns None without raising: OK")
 
@@ -123,6 +143,29 @@ with open(p, encoding="utf-8") as f:
 assert again.count(_US_BEGIN) == 1, "再インストールでブロックが増えた"
 print("install_usersetup writes a clean, idempotent block: OK")
 
+# r119b: «古い版が入ったまま» を検出できること。
+# 0.9.2 が書いた版は Maya 側で NameError になり、入れ直さない限り
+# «入っているのにポートが開かない» ままだった。
+assert _mb.SNIPPET_VERSION >= 3
+assert _mb.installed_snippet_version() == _mb.SNIPPET_VERSION
+assert not _mb.usersetup_is_outdated() and _mb.outdated_targets() == []
+with io.open(p, encoding="utf-8") as f:
+    cur = f.read()
+# 版表記の無い «古い» ブロックに差し替える
+old_block = cur.split(_US_BEGIN, 1)[1].split(_US_END, 1)[0]
+stale_block = old_block.replace("mfm-snippet-version: %d" % _mb.SNIPPET_VERSION,
+                                "")
+io.open(p, "w", encoding="utf-8").write(
+    cur.split(_US_BEGIN)[0] + _US_BEGIN + stale_block + _US_END + "\n")
+assert _mb.is_usersetup_installed(), "古くても «入っている» ことは変わらない"
+assert _mb.installed_snippet_version() == 0
+assert _mb.usersetup_is_outdated(), "古い版を検出できていない"
+assert _mb.outdated_targets() == [None], _mb.outdated_targets()
+# 入れ直すと解消する
+_mb.install_usersetup()
+assert not _mb.usersetup_is_outdated() and _mb.outdated_targets() == []
+print("an outdated snippet is detected and fixed by reinstalling: OK")
+
 
 # ---------------------------------------------------------------------------
 # r119: userSetup.py の «置き場» を推測で決めない
@@ -130,8 +173,6 @@ print("install_usersetup writes a clean, idempotent block: OK")
 #   internalVar(userAppDir=True) は %USERPROFILE%/Documents/maya だった。
 #   推測で書くと Maya が読まない場所に置くことになる（= 入れたのに効かない）。
 # ---------------------------------------------------------------------------
-from core import maya_bridge as _mb
-
 os.environ.pop("MAYA_APP_DIR", None)
 _mb._app_dir_confirmed = None
 _mb._app_dir_override = None
@@ -254,5 +295,69 @@ assert d2.selected_targets() == [], d2.selected_targets()
 d.deleteLater(); d2.deleteLater()
 print("dialog offers all-versions + each version and never pre-checks "
       "what is already installed: OK")
+
+
+# ---------------------------------------------------------------------------
+# r119c: **userSetup.py は «最初に見つかった 1 つ» しか実行されない**。
+#   userSetup.mel は全部が実行されるが、.py は Python の import で読まれる
+#   ため、sys.path で先に来たものが他を隠す。Maya はバージョン別の scripts を
+#   共通より先に置くので、<appdir>/2026/scripts/userSetup.py があると
+#   <appdir>/scripts/userSetup.py は実行されない。
+#   「全バージョン共通に入れたのに効かない」の正体（ユーザー指摘 2026-10-02）。
+# ---------------------------------------------------------------------------
+_mb._app_dir_confirmed = None
+_mb._app_dir_override = None
+os.environ.pop("MAYA_APP_DIR", None)
+sh = tempfile.mkdtemp(prefix="mfm_shadow_")
+for v in ("2026", "2025"):
+    os.makedirs(os.path.join(sh, v, "scripts"))
+os.makedirs(os.path.join(sh, "scripts"))
+_mb.set_maya_app_dir(sh, confirmed=True)
+
+# まだ誰も自前の userSetup.py を持っていない → 共通で全部に効く
+assert _mb.shadowing_versions() == []
+assert _mb.effective_target_for("2026") is None
+_mb.install_usersetup(None)
+assert _mb.bridge_effective_for("2026") and _mb.bridge_effective_for("2025")
+assert _mb.ineffective_versions() == []
+print("with no version-local userSetup.py, the shared one covers everyone: OK")
+
+# 2026 が «自前の userSetup.py» を持つと、共通はそのバージョンで隠れる
+other = os.path.join(sh, "2026", "scripts", "userSetup.py")
+io.open(other, "w", encoding="utf-8").write("# 既存のユーザー設定\nprint('hi')\n")
+assert _mb.shadowing_versions() == ["2026"], _mb.shadowing_versions()
+assert _mb.effective_target_for("2026") == "2026"
+assert _mb.effective_target_for("2025") is None
+# «入っている» ことは変わらないが «効かない»
+assert _mb.is_usersetup_installed(None)
+assert not _mb.bridge_effective_for("2026"), \
+    "自前の userSetup.py があるのに共通が効く判定になっている"
+assert _mb.bridge_effective_for("2025")
+assert _mb.ineffective_versions() == ["2026"], _mb.ineffective_versions()
+print("a version with its own userSetup.py shadows the shared one: OK")
+
+# そのバージョンへ入れると効くようになる（既存の中身は残る）
+_mb.install_usersetup("2026")
+assert _mb.bridge_effective_for("2026")
+assert _mb.ineffective_versions() == []
+body = io.open(other, encoding="utf-8").read()
+assert "print('hi')" in body, "既存の userSetup.py の中身を消している"
+assert _US_BEGIN in body
+ast.parse(body)
+print("installing into the shadowing version fixes it and keeps its content: OK")
+
+# ダイアログ: 隠している版が既定でチェックされ、警告が出ること
+from ui.maya_bridge_dialog import MayaBridgeDialog
+io.open(other, "w", encoding="utf-8").write("# 既存\n")      # 連携を外す
+_mb._app_dir_confirmed = None
+_mb.set_maya_app_dir(sh, confirmed=True)
+d3 = MayaBridgeDialog()
+picked = d3.selected_targets()
+assert "2026" in picked, ("隠している版が既定で選ばれていない", picked)
+from core.compat import QLabel
+warns = [w for w in d3.findChildren(QLabel) if w.objectName() == "warn"]
+assert warns and "2026" in warns[0].text(), "隠しの警告が出ていない"
+d3.deleteLater()
+print("the dialog pre-selects the shadowing version and warns about it: OK")
 
 finish()

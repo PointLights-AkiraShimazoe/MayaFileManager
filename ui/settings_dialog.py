@@ -145,7 +145,16 @@ class AutoNamingRuleRow(QFrame):
 
         layout.addWidget(QLabel(tr("ディレクトリ:", "Directory:")), 0, 0)
         self._dir_edit = QLineEdit(directory)
-        self._dir_edit.setPlaceholderText("/projects/CHR")
+        self._dir_edit.setPlaceholderText(
+            tr("このフォルダ以下で保存する時に効きます（例 D:/Projects/CHR）",
+               "Applies when saving in this folder or below "
+               "(e.g. D:/Projects/CHR)"))
+        self._dir_edit.setToolTip(tr(
+            "ここに入れたフォルダ «以下» で保存する時に、下のテンプレートで\n"
+            "ファイル名を提案します。\n"
+            "複数のルールが当てはまる場合は «より深い» ルールが優先されます。",
+            "When you save in this folder or below, the template suggests a "
+            "file name.\nIf several rules match, the deepest one wins."))
         layout.addWidget(self._dir_edit, 0, 1)
 
         browse_btn = QToolButton()
@@ -160,19 +169,40 @@ class AutoNamingRuleRow(QFrame):
 
         layout.addWidget(QLabel(tr("テンプレート:", "Template:")), 1, 0)
         self._tmpl_edit = QLineEdit(self._rule.get("template", "{seq:04d}"))
+        self._tmpl_edit.setPlaceholderText("CHR_{seq:04d}")
+        # r119d: «指定方法が分からない» という指摘。使えるトークンは
+        # core.file_operations.AUTO_NAME_TOKENS を唯一の出所にして、
+        # ツールチップと下の説明の両方へ出す（取り残しが起きない）。
+        from core.file_operations import AUTO_NAME_TOKENS
+        from core.i18n import current_lang
+        _ja = current_lang() == "ja"
+        tips = "\n".join("  %-11s %s" % (tok, ja if _ja else en)
+                          for tok, ja, en in AUTO_NAME_TOKENS)
         self._tmpl_edit.setToolTip(
-            "利用可能トークン:\n"
-            "  {seq}      シーケンス番号\n"
-            "  {seq:04d}  ゼロパディング4桁\n"
-            "  {desc}     説明（入力ダイアログ）"
-        )
+            tr("使えるトークン:\n%s", "Available tokens:\n%s") % tips)
         layout.addWidget(self._tmpl_edit, 1, 1)
 
         layout.addWidget(QLabel(tr("開始番号:", "Start number:")), 1, 2)
         self._start_spin = QSpinBox()
         self._start_spin.setRange(0, 99999)
         self._start_spin.setValue(self._rule.get("seq_start", 1))
+        self._start_spin.setToolTip(tr(
+            "連番の最初の番号。実際に保存するたびに 1 ずつ進み、\n"
+            "進んだ値はそのフォルダの .mfm_seq に記録されます。",
+            "The first sequence number. It advances by one on each actual "
+            "save,\nand the current value is kept in .mfm_seq in that folder."))
         layout.addWidget(self._start_spin, 1, 3)
+
+        # 使い方をその場に出す（ツールチップだけでは気付けない）
+        hint = QLabel(tr(
+            "使えるトークン: %s　／　例: CHR_{seq:04d} → CHR_0001",
+            "Tokens: %s　/　e.g. CHR_{seq:04d} \u2192 CHR_0001")
+            % "  ".join(tok for tok, _j, _e in AUTO_NAME_TOKENS))
+        hint.setWordWrap(True)
+        hint.setToolTip(self._tmpl_edit.toolTip())
+        hint.setStyleSheet("color:%(on_surface_dim)s;font-size:%(label_px)spx;"
+                           % _tv())
+        layout.addWidget(hint, 2, 0, 1, 4)
 
     def _browse_dir(self):
         from core.compat import QFileDialog

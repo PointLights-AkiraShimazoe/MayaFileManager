@@ -365,42 +365,120 @@ def batch_rename(paths: List[str], rule: RenameRule,
 # Auto-naming
 # ---------------------------------------------------------------------------
 
-def apply_auto_name(directory: str, rules: dict) -> str:
+AUTO_NAME_COUNTER_FILE = ".mfm_seq"
+
+# テンプレートで使えるトークン（UI のヒントと «唯一の出所» を揃える。r119d）
+AUTO_NAME_TOKENS = [
+    ("{seq}", "連番（1, 2, 3 …）", "Sequence number (1, 2, 3, ...)"),
+    ("{seq:04d}", "連番をゼロ埋め（0001）。桁数は 04 の部分で変える",
+     "Zero-padded sequence (0001); change the padding in 04"),
+    ("{desc}", "説明（保存時に入力した文字）", "Description typed at save time"),
+    ("{name}", "元のファイル名（拡張子なし）", "Original file name without extension"),
+    ("{folder}", "保存先フォルダの名前", "Name of the destination folder"),
+    ("{date}", "日付 20261002", "Date as 20261002"),
+    ("{user}", "Windows のユーザー名", "Windows user name"),
+]
+
+_SEQ_RE = _re_for_auto = None
+
+
+def _auto_name_re():
+    """{seq:04d} のような «書式つき連番» を拾う正規表現（遅延生成）。"""
+    global _SEQ_RE
+    if _SEQ_RE is None:
+        import re
+        _SEQ_RE = re.compile(r"\{seq(?::0?(\d+)d)?\}")
+    return _SEQ_RE
+
+
+def find_auto_name_rule(directory: str, rules: dict):
+    """directory に効くルールを返す (ルールのディレクトリ, ルール)。無ければ (None, None)。
+
+    r119d: 以前は directory.startswith(rule_dir) だったので
+    `/projects/CHR` のルールが `/projects/CHRX` にも効いてしまった。
+    区切りを見て «そのフォルダか、その配下» だけに限定し、
+    複数一致した時は **より深いルールを優先**する（具体的な指定が勝つ）。
     """
-    Given a directory and an auto-naming rule set, generate the next
-    filename according to the matching rule.
+    if not directory or not rules:
+        return None, None
+    target = os.path.normcase(os.path.normpath(directory))
+    best_dir, best_rule, best_len = None, None, -1
+    for rule_dir, rule in (rules or {}).items():
+        if not rule_dir:
+            continue
+        base = os.path.normcase(os.path.normpath(rule_dir))
+        if target == base or target.startswith(base.rstrip(os.sep) + os.sep):
+            if len(base) > best_len:
+                best_dir, best_rule, best_len = rule_dir, rule, len(base)
+    return best_dir, best_rule
 
-    Rule schema example:
-    {
-        "/projects/CHR": {
-            "template": "CHR_{seq:04d}_{desc}",
-            "seq_start": 1,
-            "counter_file": ".seq_counter"
-        }
-    }
-    Returns empty string if no rule matches.
+
+def _counter_path(directory: str, rule: dict) -> str:
+    return os.path.join(directory,
+                        rule.get("counter_file") or AUTO_NAME_COUNTER_FILE)
+
+
+def peek_auto_seq(directory: str, rule: dict) -> int:
+    """次に使う連番。カウンタファイルが無ければ開始番号。"""
+    try:
+        start = int(rule.get("seq_start", 1))
+    except (TypeError, ValueError):
+        start = 1
+    p = _counter_path(directory, rule)
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return int((f.read() or "").strip())
+    except (OSError, ValueError):
+        return start
+
+
+def commit_auto_seq(directory: str, rule: dict, used_seq: int) -> bool:
+    """使った連番を記録して «次» を指しておく。
+
+    提案しただけでは進めない（取り消したのに番号が飛ぶのを防ぐ）。
+    実際に保存できた時だけ呼ぶこと。"""
+    p = _counter_path(directory, rule)
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(str(int(used_seq) + 1))
+        return True
+    except (OSError, ValueError) as _e:
+        _swallow(_e, "core/file_operations.py commit_auto_seq")
+        return False
+
+
+def expand_auto_name(template: str, seq: int, directory: str = "",
+                     desc: str = "", name: str = "") -> str:
+    """テンプレートを展開する。未知のトークンはそのまま残す。"""
+    import datetime
+    out = _auto_name_re().sub(
+        lambda m: str(seq).zfill(int(m.group(1))) if m.group(1) else str(seq),
+        str(template or ""))
+    out = out.replace("{desc}", desc or "")
+    out = out.replace("{name}", name or "")
+    out = out.replace("{folder}", os.path.basename(
+        os.path.normpath(directory)) if directory else "")
+    out = out.replace("{date}", datetime.date.today().strftime("%Y%m%d"))
+    out = out.replace("{user}", os.environ.get("USERNAME")
+                      or os.environ.get("USER") or "")
+    # 空トークンで "__" のように連続した区切りが残るのを畳む
+    while "__" in out:
+        out = out.replace("__", "_")
+    return out.strip(" _-")
+
+
+def apply_auto_name(directory: str, rules: dict, desc: str = "",
+                    name: str = "") -> str:
+    """directory に効くルールで «次のファイル名» を作る。無ければ空文字。
+
+    **番号は進めない**（提案するだけ）。確定したら commit_auto_seq を呼ぶ。
     """
-    directory = os.path.normpath(directory)
-    for rule_dir, rule in rules.items():
-        rule_dir_norm = os.path.normpath(rule_dir)
-        if directory.startswith(rule_dir_norm):
-            return _expand_auto_name_template(directory, rule)
-    return ""
-
-
-def _expand_auto_name_template(directory: str, rule: dict) -> str:
-    template = rule.get("template", "{seq:04d}")
-    counter_file = os.path.join(directory, rule.get("counter_file", ".seq_counter"))
-
-    seq = rule.get("seq_start", 1)
-    if os.path.exists(counter_file):
-        try:
-            with open(counter_file) as f:
-                seq = int(f.read().strip())
-        except Exception as _e:
-            _swallow(_e, "core/file_operations.py:399 _expand_auto_name_template")
-
-    return template.replace("{seq}", str(seq)).replace(f"{{seq:{rule.get('pad','04d')}}}", str(seq).zfill(int(rule.get('pad', '04d').replace('0', '').replace('d', ''))))
+    rule_dir, rule = find_auto_name_rule(directory, rules)
+    if not rule:
+        return ""
+    seq = peek_auto_seq(directory, rule)
+    return expand_auto_name(rule.get("template", "{seq:04d}"), seq,
+                            directory=directory, desc=desc, name=name)
 
 
 # ---------------------------------------------------------------------------

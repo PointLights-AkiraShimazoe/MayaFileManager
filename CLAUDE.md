@@ -1217,6 +1217,27 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   トグルの slot で丸ごと再生成しており、保存が失敗すると «押しても戻る»
   だけの挙動になっていた。`_refresh_display_names(rebuild_footers=False)`。
   `toggled` ではなく `clicked` を使う（プログラムの setChecked で発火しない）。
+- **userSetup.py は «最初に見つかった 1 つ» しか実行されない**（r119c）。
+  `userSetup.mel` は全部が実行されるが、`.py` は Python の import で読まれる
+  ため、sys.path で先に来たものが他を隠す。Maya はバージョン別の scripts を
+  共通より先に置くので、`<appdir>/2026/scripts/userSetup.py` があると
+  `<appdir>/scripts/userSetup.py` は **実行されない**。
+  → «入っているか»（is_usersetup_installed）ではなく
+  **«効くか»（bridge_effective_for / ineffective_versions）で判断する**。
+  インストール画面は shadowing_versions() を出して警告し、既定で
+  そのバージョンを選ぶ。2026-10-02 実機で発覚（ユーザー指摘）。
+- **スニペットには版を埋める**（`mfm-snippet-version`）。古い版が入ったまま
+  だと «入れたのに効かない» が延々続く。`usersetup_is_outdated()` で検出し、
+  起動時に更新を促す。中身を変えたら SNIPPET_VERSION を必ず上げる。
+- **マネージャーが起動した Maya は起動引数で既にポートを開いている**。
+  userSetup 側が «空きポート» を探して追加で開くと、1 つの Maya が接続
+  リストに 2 回出る。`commandPort(q=True)` は «この Maya が開いているか»
+  を答えるので、まずそれを見て «あれば何もしない»。
+- **UI を足したら «繋がっているか» を必ず確かめる**（r119d）。自動命名は
+  設定画面もルール保存もあったのに `apply_auto_name()` の呼び出し元が
+  1 つも無く、**設定しても何も起きない** 状態で放置されていた。
+  回帰テストは «設定が保存される» ではなく «実際に効く» を見ること
+  （tests/offscreen/test_auto_naming_apply.py）。
 - **ダイアログは原則マネージャーを止めない**（ユーザー指示 2026-10-01）。
   `ui/dialog_util.show_tool_window()` を使う。止めてよいのは
   ①返り値を待って処理を続ける ②決めないと操作自体が進まない、の 2 つだけ。

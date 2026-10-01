@@ -125,12 +125,21 @@ _US_END = "# <<< MayaFileManager bridge <<<"
 PORT_SNIPPET_BODY = """
 def _mfm_open_bridge_port():
     import maya.cmds as _cmds
-    for _p in range(%d, %d):
+    _ports = range(%d, %d)
+    # 1) この Maya が «既に» レンジ内のポートを開いているなら何もしない。
+    #    マネージャーから起動した Maya は -command で先にポートを開くので、
+    #    ここで «別の空きポート» を開くと 1 つの Maya が 2 回接続リストに
+    #    出てしまう（r119b）。commandPort(q=True) は «この Maya が開いて
+    #    いるか» を答える（他プロセスのポートは False）。
+    for _p in _ports:
         try:
             if _cmds.commandPort(":%%d" %% _p, q=True):
-                continue          # 既に誰かが使用中のポートは飛ばす
+                return _p
         except Exception:
             pass
+    # 2) 開いていなければ、空いているポートを順に試す。
+    #    他の Maya が使っているポートは open が失敗するので次へ。
+    for _p in _ports:
         try:
             _cmds.commandPort(name=":%%d" %% _p, sourceType="python")
             return _p
@@ -139,9 +148,15 @@ def _mfm_open_bridge_port():
     return None
 """ % (PORT_RANGE[0], PORT_RANGE[-1] + 1)
 
+# スニペットの版。中身を変えたら **必ず上げる**。
+# 古い版が入ったままだと «入れたのに効かない» が起きるので、Manager が
+# 検出して更新を促せるようにする（r119b）。
+SNIPPET_VERSION = 3
+
 _US_SNIPPET = _US_BEGIN + """
 # MayaFileManager: 起動時に連携用commandPortを自動で開く（レンジ内の空きを使用）
-""" + PORT_SNIPPET_BODY + """
+# mfm-snippet-version: %d
+""" % SNIPPET_VERSION + PORT_SNIPPET_BODY + """
 try:
     import maya.utils as _mu
     _mu.executeDeferred(_mfm_open_bridge_port)
@@ -322,9 +337,16 @@ def usersetup_path(version=None):
     version="2026" … そのバージョン専用
       （`<maya app dir>/2026/scripts/userSetup.py`）
 
-    Maya は MAYA_SCRIPT_PATH 上の userSetup.py を «どちらも» 実行するので、
-    どちらに置いても効く。共通は 1 回で全バージョンに効くかわりに、
-    古いバージョンにも影響する。どちらが良いかは環境次第なので選ばせる。"""
+    【重要・r119c】**userSetup.py は «最初に見つかった 1 つ» しか実行されない。**
+    userSetup.mel は見つかった全部が実行されるが、userSetup.py は Python の
+    import で読まれるため、sys.path 上で先に見つかったものが «他を隠す»。
+    Maya はバージョン別の scripts を共通の scripts より先に置くので、
+    `<appdir>/2026/scripts/userSetup.py` があると
+    `<appdir>/scripts/userSetup.py` は **実行されない**。
+
+    つまり «全バージョン共通に入れたのに効かない» が起きる。
+    どこに入れるべきかは shadowing_versions() / effective_target_for() で
+    判断すること（2026-10-02 実機で発覚。ユーザー指摘）。"""
     import os
     base = maya_app_dir()
     if version:
@@ -347,16 +369,90 @@ def installed_versions():
     return out
 
 
-def is_usersetup_installed(version=None) -> bool:
+def _usersetup_text(version=None):
     import os
     p = usersetup_path(version)
     if not os.path.isfile(p):
-        return False
+        return None
     try:
-        with open(p, "r", encoding="utf-8") as f:
-            return _US_BEGIN in f.read()
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
     except OSError:
-        return False
+        return None
+
+
+def is_usersetup_installed(version=None) -> bool:
+    text = _usersetup_text(version)
+    return bool(text and _US_BEGIN in text)
+
+
+def installed_snippet_version(version=None):
+    """入っているスニペットの版。入っていなければ None、版表記が無い古い物は 0。"""
+    text = _usersetup_text(version)
+    if not text or _US_BEGIN not in text:
+        return None
+    import re as _re
+    block = text.split(_US_BEGIN, 1)[1].split(_US_END, 1)[0]
+    m = _re.search(r"mfm-snippet-version:\s*(\d+)", block)
+    return int(m.group(1)) if m else 0
+
+
+def usersetup_is_outdated(version=None) -> bool:
+    """入ってはいるが «古い版» か。
+
+    r119b: 0.9.2 が書いた版には Manager 側の関数（_swallow）が紛れ込んで
+    おり、Maya 側で NameError になってポートが開かなかった。入れ直さない
+    限り直らないので、Manager 側から検出して更新を促す。"""
+    v = installed_snippet_version(version)
+    return v is not None and v < SNIPPET_VERSION
+
+
+def outdated_targets():
+    """古いスニペットが入っている場所の一覧（None=共通 / "2026" …）。"""
+    out = []
+    if usersetup_is_outdated(None):
+        out.append(None)
+    for v in installed_versions():
+        if usersetup_is_outdated(v):
+            out.append(v)
+    return out
+
+
+def has_own_usersetup(version) -> bool:
+    """そのバージョンが «自前の userSetup.py» を持っているか（中身は問わない）。
+
+    持っていると、共通の userSetup.py はそのバージョンでは実行されない。"""
+    import os
+    return os.path.isfile(usersetup_path(version))
+
+
+def shadowing_versions():
+    """共通の userSetup.py を «隠している» バージョンの一覧（r119c）。
+
+    ここに挙がったバージョンでは、共通側に何を書いても実行されない。
+    そのバージョンの userSetup.py に直接入れる必要がある。"""
+    return [v for v in installed_versions() if has_own_usersetup(v)]
+
+
+def effective_target_for(version):
+    """そのバージョンで «実際に実行される» userSetup.py の場所を返す。
+
+    バージョン専用があればそれ、無ければ共通。
+    """
+    return version if has_own_usersetup(version) else None
+
+
+def bridge_effective_for(version) -> bool:
+    """そのバージョンの Maya で連携が «実際に効く» か（r119c）。
+
+    共通側に入っていても、そのバージョンが自前の userSetup.py を持って
+    いれば効かない。«入っている» ではなく «効く» を判定する。"""
+    return is_usersetup_installed(effective_target_for(version))
+
+
+def ineffective_versions():
+    """連携が効かないバージョンの一覧（＝入れるべき場所に入っていない）。"""
+    return [v for v in installed_versions() if not bridge_effective_for(v)]
 
 
 def installed_targets():

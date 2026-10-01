@@ -65,6 +65,7 @@ class MayaBridgeDialog(QDialog):
             "QDialog{background:%(surface)s;}"
             "QLabel{color:%(on_surface)s;}"
             "QLabel#hint{color:%(on_surface_dim)s;font-size:%(label_px)spx;}"
+            "QLabel#warn{color:%(warning)s;font-size:%(label_px)spx;}"
             "QLabel#path{color:%(on_surface_variant)s;}"
             "QLineEdit{background:%(fill_subtle)s;color:%(on_surface)s;"
             "border:1px solid %(hairline)s;border-radius:%(r_s)spx;"
@@ -164,7 +165,14 @@ class MayaBridgeDialog(QDialog):
         return self._dir_edit.text().strip()
 
     def _reload_targets(self):
-        """フォルダを見て «全バージョン共通＋実在するバージョン» を並べ直す。"""
+        """フォルダを見て «全バージョン共通＋実在するバージョン» を並べ直す。
+
+        r119c: **userSetup.py は最初に見つかった 1 つしか実行されない。**
+        バージョン別の scripts が共通より先に来るので、
+        `<appdir>/2026/scripts/userSetup.py` があるバージョンでは
+        共通側に書いても実行されない。«入っているのに効かない» を防ぐため、
+        隠している版は既定でチェックし、その旨を必ず見せる。
+        """
         d = self.directory()
         if d and d != mb.maya_app_dir():
             mb.set_maya_app_dir(d)
@@ -178,22 +186,43 @@ class MayaBridgeDialog(QDialog):
                 w.setParent(None)
                 w.deleteLater()
         self._targets = []
-        rows = [(None, tr("全バージョン共通", "All versions"))]
         versions = mb.installed_versions()
+        shadowing = set(mb.shadowing_versions())
+        rows = [(None, tr("全バージョン共通", "All versions"))]
         for v in versions:
             rows.append((v, "Maya %s" % v))
-        any_installed = False
+
         for ver, label in rows:
             try:
                 p = mb.usersetup_path(ver)
                 done = mb.is_usersetup_installed(ver)
+                stale = mb.usersetup_is_outdated(ver)
             except Exception as _e:
                 _swallow(_e, "ui/maya_bridge_dialog.py _reload_targets")
                 continue
-            any_installed = any_installed or done
-            cb = QCheckBox(label + ("  " + tr("（設定済み）", "(already set up)")
-                                    if done else ""), self)
-            cb.setChecked(ver is None and not done)
+            mark = ""
+            if stale:
+                mark = "  " + tr("（古い版 — 要更新）", "(old version - update)")
+            elif done:
+                mark = "  " + tr("（設定済み）", "(already set up)")
+            if ver is None and shadowing:
+                # 共通側は «隠されている版がある» ことを必ず添える
+                mark += "  " + tr("（%s では実行されません）",
+                                  "(not executed for %s)") \
+                    % "/".join(sorted(shadowing, reverse=True))
+            elif ver in shadowing and not done:
+                mark += "  " + tr("（ここに入れる必要があります）",
+                                  "(must be installed here)")
+            cb = QCheckBox(label + mark, self)
+            # 既定: 古い版は直す / 共通に隠されている版は入れる /
+            #       隠されている版が無ければ共通だけで足りる
+            if stale:
+                want = True
+            elif ver is None:
+                want = not done and len(shadowing) < len(versions)
+            else:
+                want = (ver in shadowing) and not done
+            cb.setChecked(bool(want))
             cb.setToolTip(p)
             self._body_lay.addWidget(cb)
             lb = QLabel(p, self)
@@ -202,6 +231,21 @@ class MayaBridgeDialog(QDialog):
             lb.setIndent(22)
             self._body_lay.addWidget(lb)
             self._targets.append((ver, cb))
+
+        if shadowing:
+            warn = QLabel(tr(
+                "⚠ userSetup.py は «最初に見つかった 1 つ» しか実行されません。\n"
+                "　 %s は自前の userSetup.py を持っているため、\n"
+                "　 「全バージョン共通」に書いても そのバージョンでは効きません。\n"
+                "　 そのバージョンの行にチェックを入れてください。",
+                "\u26a0 Maya runs only the FIRST userSetup.py it finds.\n"
+                "　 %s already has its own, so \u201cAll versions\u201d will not "
+                "run there.\n　 Tick that version's row instead."
+            ) % "/".join(sorted(shadowing, reverse=True)), self)
+            warn.setObjectName("warn")
+            warn.setWordWrap(True)
+            self._body_lay.addWidget(warn)
+
         if not versions:
             hint = QLabel(tr(
                 "このフォルダにバージョンフォルダ（2026 など）が見当たりません。\n"
@@ -211,11 +255,10 @@ class MayaBridgeDialog(QDialog):
             hint.setObjectName("hint")
             hint.setWordWrap(True)
             self._body_lay.addWidget(hint)
-        if any_installed and not any(cb.isChecked() for _v, cb in self._targets):
-            # 全部設定済み: 既定では «更新» の意思表示をさせる
-            self._ok.setText(tr("最新の内容に更新", "Update to latest"))
-        else:
+        if any(cb.isChecked() for _v, cb in self._targets):
             self._ok.setText(tr("書き込む", "Write"))
+        else:
+            self._ok.setText(tr("最新の内容に更新", "Update to latest"))
         self._body_lay.addStretch(1)
 
     def selected_targets(self):

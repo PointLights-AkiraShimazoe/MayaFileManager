@@ -510,23 +510,47 @@ class MainWindowDccMixin:
         「入れたつもりがない」まま «起動済みの Maya が出ない» に悩む経路を
         断つのが目的。«今後聞かない» を選べば二度と出さない。"""
         try:
-            from core.maya_bridge import is_usersetup_installed
-            if is_usersetup_installed():
+            from core.maya_bridge import (outdated_targets,
+                                          ineffective_versions,
+                                          installed_versions)
+            stale = outdated_targets()
+            # r119c: «入っているか» ではなく «効くか» で判断する。
+            # userSetup.py は最初に見つかった 1 つしか実行されないので、
+            # 共通側に入れても自前の userSetup.py を持つ版では効かない。
+            dead = ineffective_versions() if installed_versions() else []
+            if not stale and not dead:
                 return
-            if str(self._sm.get(self.BRIDGE_PROMPT_KEY, "") or "") in (
-                    "never", "done"):
+            if not stale and str(self._sm.get(self.BRIDGE_PROMPT_KEY, "")
+                                 or "") in ("never", "done"):
                 return
             box = QMessageBox(self)
             box.setWindowTitle(tr("Maya連携のセットアップ", "Set Up Maya Bridge"))
-            box.setText(tr(
-                "Maya 連携がまだ設定されていません。\n\n"
-                "設定すると、マネージャー以外から起動した Maya も\n"
-                "「接続:」リストに出て、ファイルを送れるようになります。\n\n"
-                "今すぐ設定しますか？",
-                "The Maya bridge is not set up yet.\n\n"
-                "Once it is, Mayas launched outside this manager also appear\n"
-                "in the Connect list so you can send files to them.\n\n"
-                "Set it up now?"))
+            if stale:
+                # r119b: 0.9.2 が書いた版は Maya 側で NameError になり、
+                # «入っているのにポートが開かない» 状態だった。入れ直さない
+                # 限り直らないので «未導入» とは別の文言で必ず知らせる。
+                box.setText(tr(
+                    "Maya 連携の設定が «古い版» のままです。\n\n"
+                    "この版には不具合があり、マネージャー以外から起動した\n"
+                    "Maya が「接続:」リストに出ません。\n"
+                    "入れ直すと直ります（次回の Maya 起動から有効）。\n\n"
+                    "今すぐ更新しますか？",
+                    "The Maya bridge installed here is an OLD version.\n\n"
+                    "It has a defect: Mayas launched outside this manager do\n"
+                    "not show up in the Connect list. Reinstalling fixes it\n"
+                    "(takes effect from the next Maya launch).\n\n"
+                    "Update it now?"))
+            else:
+                where = "/".join(dead) if dead else ""
+                box.setText(tr(
+                    "Maya 連携が効いていないバージョンがあります: %s\n\n"
+                    "設定すると、マネージャー以外から起動した Maya も\n"
+                    "「接続:」リストに出て、ファイルを送れるようになります。\n\n"
+                    "今すぐ設定しますか？",
+                    "The Maya bridge is not active for: %s\n\n"
+                    "Once set up, Mayas launched outside this manager also\n"
+                    "appear in the Connect list so you can send files to them.\n\n"
+                    "Set it up now?") % (where or tr("（未設定）", "(not set up)")))
             yes = box.addButton(tr("設定する", "Set up"), QMessageBox.AcceptRole)
             later = box.addButton(tr("あとで", "Later"), QMessageBox.RejectRole)
             box.addButton(tr("今後聞かない", "Don't ask again"),

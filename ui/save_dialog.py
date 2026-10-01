@@ -19,6 +19,7 @@ from core.compat import (
     Qt, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QComboBox, QCheckBox, QPushButton, QGroupBox, QMessageBox,
 )
+from core.diag import swallow as _swallow
 from core.i18n import tr, current_lang
 from core import dcc_save
 
@@ -100,8 +101,13 @@ class SaveDialog(QDialog):
         btns.addWidget(self._ok)
         root.addLayout(btns)
 
-        # 初期値: 選択ファイル名 > 直近の形式 > DCC 既定
+        # 初期値: 自動命名 > 選択ファイル名 > 直近の形式 > DCC 既定
+        # r119d: 自動命名は «設定するだけで何も起きない» 機能だった
+        # （apply_auto_name に呼び出し元が無かった）。ここで繋ぐ。
         name = os.path.basename(initial_name or "")
+        auto = self._auto_name_suggestion(os.path.splitext(name)[0])
+        if auto:
+            name = auto + os.path.splitext(name)[1]
         ext = os.path.splitext(name)[1].lower()
         if ext not in dcc_save.exts_for(self._dcc):
             last = self._remembered_ext()
@@ -294,6 +300,9 @@ class SaveDialog(QDialog):
             if ret != QMessageBox.Yes:
                 return
         self._result_path = p
+        # r119d: 自動命名の連番は «保存が確定した時だけ» 進める
+        # （提案しただけで進めると、取り消した分だけ番号が飛ぶ）。
+        self._commit_auto_seq()
         self._result_opts = self.current_options()
         self._store_current_options()
         if self._sm is not None:
@@ -303,6 +312,46 @@ class SaveDialog(QDialog):
             d[self._dcc] = per
             self._sm.set("save_last_ext", d, save=True)   # save_options も同時に永続化
         self.accept()
+
+    # ── 自動命名（r119d）────────────────────────────────────────────
+    def _auto_naming(self):
+        """この保存先に効くルール (ルール, 連番)。無ければ (None, 0)。"""
+        if self._sm is None or not self._folder:
+            return None, 0
+        try:
+            from core.file_operations import find_auto_name_rule, peek_auto_seq
+            enabled, rules = self._sm.get_active_auto_naming()
+            if not enabled or not rules:
+                return None, 0
+            _d, rule = find_auto_name_rule(self._folder, rules)
+            if not rule:
+                return None, 0
+            return rule, peek_auto_seq(self._folder, rule)
+        except Exception as _e:
+            _swallow(_e, "ui/save_dialog.py _auto_naming")
+            return None, 0
+
+    def _auto_name_suggestion(self, base_name: str) -> str:
+        rule, seq = self._auto_naming()
+        if not rule:
+            return ""
+        try:
+            from core.file_operations import expand_auto_name
+            return expand_auto_name(rule.get("template", "{seq:04d}"), seq,
+                                    directory=self._folder, name=base_name)
+        except Exception as _e:
+            _swallow(_e, "ui/save_dialog.py _auto_name_suggestion")
+            return ""
+
+    def _commit_auto_seq(self):
+        rule, seq = self._auto_naming()
+        if not rule:
+            return
+        try:
+            from core.file_operations import commit_auto_seq
+            commit_auto_seq(self._folder, rule, seq)
+        except Exception as _e:
+            _swallow(_e, "ui/save_dialog.py _commit_auto_seq")
 
     def result_path(self) -> str:
         return self._result_path
