@@ -1751,6 +1751,12 @@ class BrowserPanel(QWidget):
         reveal_act.triggered.connect(lambda _c=False: reveal_in_explorer(folder))
         copy_path_act = menu.addAction(tr("📋  フォルダパスをコピー", "📋  Copy folder path"))
         copy_path_act.triggered.connect(lambda _c=False: self._copy_paths_to_clipboard([folder]))
+        menu.addSeparator()
+        # r116: カラムの空白を右クリック → そのカラムの表示名をまとめて編集。
+        # カラム全体が対象なので、項目メニューよりこちらの方が自然な入口。
+        dn_act = menu.addAction(tr("🏷  表示名の変更...", "🏷  ChangeDisplayEdit..."))
+        dn_act.triggered.connect(
+            lambda _c=False, d=folder: self._open_display_names(d))
         try:
             menu.exec_(global_pos)
         except AttributeError:
@@ -1813,6 +1819,25 @@ class BrowserPanel(QWidget):
             return
         gpos = self._flat_col._view.viewport().mapToGlobal(pos)
         self._popup_context_menu(paths, gpos)
+
+    def _open_display_names(self, directory: str):
+        """表示名の編集ウィンドウを開く（r116）。
+
+        **失敗を黙って握り潰さない。** 以前はここで例外が出ると «押しても
+        何も起きない» になり、原因が追えなかった。"""
+        try:
+            if not directory or not os.path.isdir(directory):
+                QMessageBox.information(
+                    self, "表示名",
+                    "対象のフォルダを特定できませんでした。")
+                return
+            self._column_view._open_display_name_dialog(directory)
+        except Exception as e:
+            import traceback
+            _mfm_warn("display name dialog failed: %r\n%s"
+                      % (e, traceback.format_exc()))
+            QMessageBox.critical(self, "表示名",
+                                 "表示名ウィンドウを開けませんでした:\n%s" % e)
 
     def _display_name_target(self, paths):
         """表示名を編集する «対象ディレクトリ»（r115）。
@@ -1988,7 +2013,7 @@ class BrowserPanel(QWidget):
         dn_dir = self._display_name_target(paths)
         dn_act = menu.addAction(tr("🏷  表示名の変更...", "🏷  ChangeDisplayEdit..."))
         dn_act.triggered.connect(
-            lambda _c=False, d=dn_dir: self._column_view._open_display_name_dialog(d))
+            lambda _c=False, d=dn_dir: self._open_display_names(d))
         dn_act.setEnabled(bool(dn_dir))
 
         menu.addSeparator()

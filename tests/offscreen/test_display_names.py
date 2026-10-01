@@ -70,8 +70,10 @@ def s1():
         i = m.index(r, 0, pidx)
         if i.data(Qt.DisplayRole) == "キャラA 最新":
             tip = i.data(Qt.ToolTipRole)
-    assert tip and "CH002_cur" in str(tip), ("ツールチップに実体名が無い", tip)
-    print("tooltip reveals the real name: OK")
+    assert tip and str(tip).strip() == "CH002_cur", \
+        ("ツールチップは実体名だけにする（見出し・余分な行を付けない）", repr(tip))
+    assert "\n" not in str(tip), ("ツールチップが複数行になっている", repr(tip))
+    print("tooltip shows just the real name, single line: OK")
 
     # ── 5) スイッチで無効化すると実体名に戻る ──────────────────────
     dn.set_enabled(root, False)
@@ -114,6 +116,38 @@ def s1():
     assert b._display_name_target([os.path.join(root, "CH002_cur")]) == root, \
         "対象ディレクトリが違う"
     print("context menu entry present and targets the column dir: OK")
+
+    # ── 7b) «空白の右クリック» メニューにも入っている（r116） ──────
+    made.clear()
+    if hasattr(QMenu, "exec"):
+        QMenu.exec = fake
+    QMenu.exec_ = fake
+    try:
+        b._popup_folder_context_menu(root, b.mapToGlobal(b.rect().center()))
+    finally:
+        if hasattr(QMenu, "exec"):
+            QMenu.exec = orig_exec
+        QMenu.exec_ = orig_exec_
+    menu2 = made.get("menu")
+    assert menu2 is not None, "空白メニューが作られていない"
+    act2 = [a for a in menu2.actions()
+            if "表示名" in a.text() or "Display" in a.text()]
+    assert act2 and act2[0].isEnabled(), \
+        ("空白メニューに表示名が無い", [a.text() for a in menu2.actions()])
+    print("empty-space menu also has the entry: OK")
+
+    # ── 7c) 共通入口は «失敗を黙らせない» ──────────────────────────
+    from core.compat import QMessageBox, QDialog
+    shown = {}
+    oi = QMessageBox.information
+    QMessageBox.information = staticmethod(
+        lambda *a, **k: shown.setdefault("info", a[2] if len(a) > 2 else ""))
+    try:
+        b._open_display_names("")                 # 対象不明
+    finally:
+        QMessageBox.information = oi
+    assert shown.get("info"), "対象不明でも無言だった"
+    print("bad target reports instead of doing nothing: OK")
 
     # ── 8) カラム下部のスイッチは «ファイルがある時だけ» 出る ──────
     cv = b._column_view

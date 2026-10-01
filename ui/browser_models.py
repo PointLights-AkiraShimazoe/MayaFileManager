@@ -346,17 +346,16 @@ class FileFilterProxyModel(QSortFilterProxyModel):
                 _swallow(_e, "ui/browser_models.py data(display-name)")
         # ツールチップに連携状態を付加（辞書参照のみ・ホバー時だけ呼ばれる）
         if role == Qt.ToolTipRole:
-            # 表示名が効いている項目は «実体名» を必ず見せる（r115）
+            # 表示名が効いている項目は «実体名だけ» を出す（r116）。
+            # 見出しも既存のツールチップも付けない: 2 行になって、
+            # 文字量に対してツールチップが不自然に大きく見えていた。
             try:
                 si = self.mapToSource(index)
                 m = self._alias_for_parent(si.parent())
                 if m:
                     real = self.sourceModel().fileName(si)
                     if m.get(real):
-                        from core.i18n import tr
-                        base = super().data(index, role)
-                        head = tr("実際の名前: %s", "Actual name: %s") % real
-                        return head + (("\n" + str(base)) if base else "")
+                        return real
             except Exception as _e:
                 _swallow(_e, "ui/browser_models.py data(tooltip-real-name)")
             try:
