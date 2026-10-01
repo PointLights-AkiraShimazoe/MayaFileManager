@@ -118,7 +118,39 @@ def test_apply_theme_switches_mode():
 l_surface = te.qss_vars("light")["surface"]
 
 
+def test_spin_and_check_are_visible():
+    """r119: 暗い面で «上下の三角» と «チェックボックス» が見えること。
+
+    QSS で QSpinBox / QCheckBox に背景と枠を当てると、スタイル既定の
+    矢印・チェックが地と同化して消える（ユーザー報告 2026-10-01:
+    「上下三角マークが見えない」「チェックボックスがただのテキストに見える」）。
+    画像を明示的に置いているかを、両モードで確かめる。
+    """
+    import os as _os
+    for mode in ("dark", "light"):
+        qss = te.build_qss(mode)
+        v = te.qss_vars(mode)
+        # スピンの上下ボタンと «向きの違う» 矢印が指定されていること
+        for sub in ("QSpinBox::up-button", "QSpinBox::down-button",
+                    "QSpinBox::up-arrow", "QSpinBox::down-arrow"):
+            assert sub in qss, (mode, sub)
+        assert v["arrow_png_up"] and v["arrow_png"], mode
+        assert v["arrow_png_up"] != v["arrow_png"], \
+            "%s: 上下で同じ画像を使っている（向きが違わない）" % mode
+        for key in ("arrow_png", "arrow_png_up", "check_png", "dash_png"):
+            assert _os.path.isfile(v[key]), (mode, key, v[key])
+        # チェックボックスは «枠» と «ON の塗り＋印» を持つこと
+        assert "QCheckBox::indicator:checked" in qss, mode
+        assert 'image: url("%s")' % v["check_png"] in qss, mode
+        idx = qss.index("QCheckBox::indicator, QRadioButton::indicator")
+        block = qss[idx:idx + 400]
+        assert "border: 1px solid %s" % v["on_surface_variant"] in block, \
+            "%s: チェックボックスの枠が地と同化している" % mode
+    print("spin arrows and checkbox indicators are drawn explicitly: OK")
+
+
 def step():
+    test_spin_and_check_are_visible()
     test_no_hardcoded_colors()
     test_stylesheet_tokens_exist()
     test_both_modes_build()

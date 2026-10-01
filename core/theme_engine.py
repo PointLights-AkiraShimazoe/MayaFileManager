@@ -116,6 +116,17 @@ def qss_vars(mode=None) -> dict:
         "input_h": t["density"]["input_h"],
         "button_h": t["density"]["button_h"],
     })
+    # r119: 自前で描く印（矢印・チェック）のパスもここから引けるようにする。
+    # ウィジェット個別の setStyleSheet からも同じ画像を使えるようにするため。
+    v.update({
+        "arrow_png": _arrow_png(v["on_surface_variant"]),
+        "arrow_png_dim": _arrow_png(v["on_surface_dim"]),
+        "arrow_png_up": _arrow_png(v["on_surface_variant"], "up"),
+        "arrow_png_up_dim": _arrow_png(v["on_surface_dim"], "up"),
+        "check_png": _check_png(v["on_primary"]),
+        "check_png_dim": _check_png(v["on_surface_dim"]),
+        "dash_png": _check_png(v["on_primary"], "dash"),
+    })
     return v
 
 
@@ -130,12 +141,16 @@ def area_accents(mode=None):
 # コンボボックスの ▼（r86）
 # ---------------------------------------------------------------------------
 
-def _arrow_png(color: str) -> str:
-    """下向き三角（▼）の PNG を作ってパスを返す（色ごとにキャッシュ）。
+def _arrow_png(color: str, direction: str = "down") -> str:
+    """三角（▼ / ▲）の PNG を作ってパスを返す（色・向きごとにキャッシュ）。
 
     QSS は subcontrol に文字を置けず、border で三角を作る CSS の小技も
-    Qt では «小さな四角» にしか描かれない（実機確認）。確実に ▼ を出すには
-    画像を渡すしかないので、テーマ色に合わせた PNG をその場で生成する。"""
+    Qt では «小さな四角» にしか描かれない（実機確認）。確実に出すには
+    画像を渡すしかないので、テーマ色に合わせた PNG をその場で生成する。
+
+    r119: QSpinBox の上下ボタンにも使う。QSS で QSpinBox に背景と枠を
+    当てると、スタイル既定の矢印が «地と同化して見えなくなる» ため
+    （ユーザー報告 2026-10-01）。上向きもここで作る。"""
     try:
         from core.compat import QPixmap, QPainter, QColor, QPoint, Qt, QtGui
         QPolygon = QtGui.QPolygon
@@ -147,7 +162,7 @@ def _arrow_png(color: str) -> str:
         base = SettingsManager._resolve_root()
     except Exception:
         base = Path.home() / ".maya_file_manager"
-    out = Path(base) / "ui" / ("arrow_down_%s.png" % key)
+    out = Path(base) / "ui" / ("arrow_%s_%s.png" % (direction, key))
     if out.exists():
         return out.as_posix()
     try:
@@ -159,7 +174,54 @@ def _arrow_png(color: str) -> str:
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(color))
-        p.drawPolygon(QPolygon([QPoint(0, 0), QPoint(w, 0), QPoint(w // 2, h)]))
+        if direction == "up":
+            pts = [QPoint(0, h), QPoint(w, h), QPoint(w // 2, 0)]
+        else:
+            pts = [QPoint(0, 0), QPoint(w, 0), QPoint(w // 2, h)]
+        p.drawPolygon(QPolygon(pts))
+        p.end()
+        pm.save(str(out), "PNG")
+        return out.as_posix()
+    except Exception:
+        return ""
+
+
+def _check_png(color: str, glyph: str = "check") -> str:
+    """チェックマーク／横棒の PNG（色ごとにキャッシュ）。
+
+    r119: QCheckBox に QSS で枠を当てるとスタイル既定のチェックが
+    消えるため、印も自前で用意する。"""
+    try:
+        from core.compat import QPixmap, QPainter, QColor, Qt, QtGui
+        QPen = QtGui.QPen
+    except Exception:
+        return ""
+    key = color.lstrip("#").lower()
+    try:
+        from core.settings_manager import SettingsManager
+        base = SettingsManager._resolve_root()
+    except Exception:
+        base = Path.home() / ".maya_file_manager"
+    out = Path(base) / "ui" / ("mark_%s_%s.png" % (glyph, key))
+    if out.exists():
+        return out.as_posix()
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        w = h = 14
+        pm = QPixmap(w, h)
+        pm.fill(QColor(0, 0, 0, 0))
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        pen = QPen(QColor(color))
+        pen.setWidth(2)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        if glyph == "dash":
+            p.drawLine(3, h // 2, w - 3, h // 2)
+        else:
+            p.drawLine(3, 7, 6, 10)
+            p.drawLine(6, 10, 11, 4)
         p.end()
         pm.save(str(out), "PNG")
         return out.as_posix()
@@ -225,6 +287,11 @@ def build_qss(mode="dark"):
         "w_strong": typ["weight_strong"],
         "arrow_png": _arrow_png(c["on_surface_variant"]),
         "arrow_png_dim": _arrow_png(c["on_surface_dim"]),
+        "arrow_png_up": _arrow_png(c["on_surface_variant"], "up"),
+        "arrow_png_up_dim": _arrow_png(c["on_surface_dim"], "up"),
+        "check_png": _check_png(c["on_primary"]),
+        "check_png_dim": _check_png(c["on_surface_dim"]),
+        "dash_png": _check_png(c["on_primary"], "dash"),
         # density
         "row_h": den["list_row_h"],
         "tree_row_h": den["tree_row_h"],
@@ -468,7 +535,81 @@ QProgressBar {{
     min-height: 6px;
 }}
 QProgressBar::chunk {{ background-color: {primary}; border-radius: {r_s}px; }}
-QCheckBox::indicator, QRadioButton::indicator {{ width: 16px; height: 16px; }}
+/* ---------- QSpinBox の上下ボタン（r119）----------
+   QSS で QSpinBox に背景・枠を当てると、スタイル既定の小さな矢印が
+   地と同化して «見えない» 状態になる（ユーザー報告 2026-10-01）。
+   コンボの ▼ と同じ方式で、テーマ色の PNG を明示的に置く。 */
+QSpinBox, QDoubleSpinBox {{ padding-right: 20px; }}
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-origin: border;
+    background-color: {fill_subtle};
+    border: none;
+    border-left: 1px solid {hairline};
+    width: 18px;
+}}
+QSpinBox::up-button, QDoubleSpinBox::up-button {{
+    subcontrol-position: top right;
+    margin: 1px 1px 0 0;
+    border-top-right-radius: {r_pill}px;
+}}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-position: bottom right;
+    margin: 0 1px 1px 0;
+    border-bottom-right-radius: {r_pill}px;
+}}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
+    background-color: {fill_subtle_hover};
+}}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+    image: url("{arrow_png_up}"); width: 9px; height: 6px;
+}}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+    image: url("{arrow_png}"); width: 9px; height: 6px;
+}}
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled,
+QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:off {{
+    image: url("{arrow_png_up_dim}");
+}}
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled,
+QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:off {{
+    image: url("{arrow_png_dim}");
+}}
+
+/* ---------- チェックボックス / ラジオ（r119）----------
+   既定のままだと暗い面に暗い枠で «ただの文字» に見える
+   （ユーザー報告 2026-10-01）。枠をはっきり描き、ON は塗りつぶす。 */
+QCheckBox::indicator, QRadioButton::indicator {{
+    width: 16px; height: 16px;
+    background-color: {fill_subtle};
+    border: 1px solid {on_surface_variant};
+}}
+QCheckBox::indicator {{ border-radius: {r_s}px; }}
+QRadioButton::indicator {{ border-radius: 8px; }}
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {{
+    border-color: {primary};
+    background-color: {fill_subtle_hover};
+}}
+QCheckBox::indicator:checked {{
+    background-color: {primary};
+    border-color: {primary};
+    image: url("{check_png}");
+}}
+QCheckBox::indicator:indeterminate {{
+    background-color: {primary};
+    border-color: {primary};
+    image: url("{dash_png}");
+}}
+QRadioButton::indicator:checked {{
+    background-color: {primary};
+    border: 4px solid {fill_subtle};
+}}
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
+    border-color: {hairline};
+    background-color: {surface_low};
+}}
+QCheckBox::indicator:checked:disabled {{ image: url("{check_png_dim}"); }}
 
 /* =====================================================================
    視認性の階層（r56）。objectName で面を分ける:

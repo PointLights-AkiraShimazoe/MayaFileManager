@@ -24,7 +24,7 @@ VSVersionInfo(
             StringStruct(u'FileDescription',  u'Maya File Manager'),
             StringStruct(u'FileVersion',      u'1.0.0.0'),
             StringStruct(u'InternalName',     u'MayaFileManager'),
-            StringStruct(u'LegalCopyright',   u'\xa9 2025 PointLights for entertainment'),
+            StringStruct(u'LegalCopyright',   u'\xa9 2026 PointLights for entertainment Inc.'),
             StringStruct(u'OriginalFilename', u'MayaFileManager.exe'),
             StringStruct(u'ProductName',      u'Maya File Manager'),
             StringStruct(u'ProductVersion',   u'1.0.0.0'),

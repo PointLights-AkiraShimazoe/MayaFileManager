@@ -82,6 +82,10 @@ DEFAULT_GLOBAL_STATE: Dict[str, Any] = {
     },
     "reference_presets": {},
     "auto_naming_rules": {},
+    # {プリセット名: {"enabled": bool, "rules": {...}}}（r119）
+    "auto_naming_by_preset": {},
+    # Maya 起動プロファイル（r119）: 同一バージョンの引数違いを並べられる
+    "maya_launch_profiles": [],
     "drive_history": [],
 }
 
@@ -340,6 +344,22 @@ class SettingsManager:
         self._global_state["quick_nav_presets"] = presets
         self.save()
 
+    # ── Maya launch profiles（r119）──────────────────────────────────────
+    # [{"id","version","label","args"}, ...]
+    # 同じバージョンを複数行置ける（引数違いを使い分けるため）。
+    # 空なら «検出されたバージョンそのまま» ＋ 共通引数で動く（従来どおり）。
+
+    def get_maya_launch_profiles(self):
+        v = self._global_state.get("maya_launch_profiles", [])
+        return [dict(x) for x in v if isinstance(x, dict) and x.get("version")]
+
+    def save_maya_launch_profiles(self, profiles):
+        self._global_state["maya_launch_profiles"] = [
+            {"id": str(p.get("id") or ""), "version": str(p.get("version") or ""),
+             "label": str(p.get("label") or ""), "args": str(p.get("args") or "")}
+            for p in (profiles or []) if p.get("version")]
+        self.save()
+
     # ── Reference presets ────────────────────────────────────────────────
 
     def get_reference_presets(self) -> Dict[str, Any]:
@@ -351,10 +371,64 @@ class SettingsManager:
 
     # ── Auto-naming rules ────────────────────────────────────────────────
 
-    def get_auto_naming_rules(self) -> Dict[str, Any]:
+    # 自動命名は «プリセット毎» に持てる（r119、ユーザー指示）。
+    # 既存の auto_naming_rules / auto_naming_enabled は «共通» として残し、
+    # プリセットに設定が無い時のフォールバックにする（移行なしで動く）。
+
+    def get_auto_naming_rules(self, preset: str = None) -> Dict[str, Any]:
+        """自動命名ルール。preset 指定時はそのプリセットの設定、
+        無ければ共通設定を返す。"""
+        if preset:
+            per = self._global_state.get("auto_naming_by_preset", {})
+            entry = per.get(preset)
+            if isinstance(entry, dict) and "rules" in entry:
+                return entry.get("rules") or {}
         return self._global_state.get("auto_naming_rules", {})
 
+    def get_auto_naming_enabled(self, preset: str = None) -> bool:
+        if preset:
+            per = self._global_state.get("auto_naming_by_preset", {})
+            entry = per.get(preset)
+            if isinstance(entry, dict) and "enabled" in entry:
+                return bool(entry.get("enabled"))
+        return bool(self.get("auto_naming_enabled", True))
+
+    def has_auto_naming_for_preset(self, preset: str) -> bool:
+        """そのプリセットが «自前の» 自動命名設定を持っているか。"""
+        per = self._global_state.get("auto_naming_by_preset", {})
+        return isinstance(per.get(preset), dict)
+
+    def save_auto_naming_for_preset(self, preset: str, rules: Dict[str, Any],
+                                    enabled: bool = True):
+        if not preset:
+            return
+        per = dict(self._global_state.get("auto_naming_by_preset", {}))
+        per[preset] = {"enabled": bool(enabled), "rules": rules or {}}
+        self._global_state["auto_naming_by_preset"] = per
+        self.save()
+
+    def clear_auto_naming_for_preset(self, preset: str):
+        """そのプリセット専用の設定を捨て、共通設定に従わせる。"""
+        per = dict(self._global_state.get("auto_naming_by_preset", {}))
+        if per.pop(preset, None) is not None:
+            self._global_state["auto_naming_by_preset"] = per
+            self.save()
+
+    def rename_auto_naming_preset(self, old_name: str, new_name: str):
+        per = dict(self._global_state.get("auto_naming_by_preset", {}))
+        if old_name in per and old_name != new_name:
+            per[new_name] = per.pop(old_name)
+            self._global_state["auto_naming_by_preset"] = per
+            self.save()
+
+    def get_active_auto_naming(self):
+        """いま選ばれているプリセットの自動命名 (enabled, rules)。"""
+        name = self.get("quick_nav_preset", "default")
+        return (self.get_auto_naming_enabled(name),
+                self.get_auto_naming_rules(name))
+
     def save_auto_naming_rules(self, rules: Dict[str, Any]):
+        """共通（プリセット指定の無い）ルール。"""
         self._global_state["auto_naming_rules"] = rules
         self.save()
 

@@ -139,9 +139,15 @@ class QuickNavPresetEditor(QDialog):
         self._presets: Dict[str, List[Dict]] = {}
         self._current_preset: Optional[str] = None
         self._rows: List[NavItemRow] = []
+        # r119: 自動命名はプリセット毎。保存するまでは «下書き» に貯める
+        # （プリセットを行き来しても編集が消えないようにするため）。
+        self._naming_rows = []
+        self._naming_draft: Dict[str, Dict] = {}
+        self._renamed_presets: Dict[str, str] = {}
+        self._deleted_presets = set()
 
         self.setWindowTitle(tr("クイックナビ プリセットエディタ", "Quick Nav Preset Editor"))
-        self.setMinimumSize(760, 500)
+        self.setMinimumSize(820, 560)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         self._build_ui()
@@ -206,7 +212,19 @@ class QuickNavPresetEditor(QDialog):
         name_row.addWidget(self._name_edit)
         rl.addLayout(name_row)
 
-        rl.addWidget(QLabel(tr("ナビゲーションボタン （上から左ツールバーの順）:",
+        # r119: プリセット毎に «自動命名» も変えたい、というユーザー指示。
+        # ナビゲーションボタンと並べてタブで切り替える。
+        from core.compat import QTabWidget
+        self._tabs = QTabWidget()
+        rl.addWidget(self._tabs, 1)
+
+        nav_tab = QWidget()
+        nl = QVBoxLayout(nav_tab)
+        nl.setContentsMargins(6, 6, 6, 6)
+        nl.setSpacing(6)
+        self._tabs.addTab(nav_tab, tr("ナビゲーション", "Navigation"))
+
+        nl.addWidget(QLabel(tr("ナビゲーションボタン （上から左ツールバーの順）:",
                                "Navigation buttons (top to bottom = left toolbar order):")))
 
         # Item container
@@ -222,12 +240,12 @@ class QuickNavPresetEditor(QDialog):
         scroll.setWidget(self._items_container)
         scroll.setWidgetResizable(True)
         scroll.setAcceptDrops(True)
-        rl.addWidget(scroll)
+        nl.addWidget(scroll, 1)
 
         add_item_btn = QPushButton(tr("＋ ボタンを追加", "+ Add button"))
         # clicked(bool) の checked 引数が label に流れ込むのを防ぐ（lambdaで遮断）
         add_item_btn.clicked.connect(lambda _c=False: self._add_item())
-        rl.addWidget(add_item_btn)
+        nl.addWidget(add_item_btn)
 
         # Quick-add standard directories
         quick_row = QHBoxLayout()
@@ -242,7 +260,10 @@ class QuickNavPresetEditor(QDialog):
             btn.clicked.connect(lambda checked=False, l=label, p=p: self._add_item(label=l, path=p))
             quick_row.addWidget(btn)
         quick_row.addStretch()
-        rl.addLayout(quick_row)
+        nl.addLayout(quick_row)
+
+        self._tabs.addTab(self._build_naming_tab(),
+                          tr("自動命名", "Auto Naming"))
 
         # Buttons
         btn_row2 = QHBoxLayout()
@@ -306,6 +327,110 @@ class QuickNavPresetEditor(QDialog):
     # Preset management
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # 自動命名（プリセット毎。r119）
+    #
+    # 共通設定（設定ダイアログの「自動命名」）はフォールバックとして残す。
+    # プリセットが «自前の設定を持つ» かどうかはチェックボックスで決める。
+    # ------------------------------------------------------------------
+
+    def _build_naming_tab(self):
+        from core.compat import QCheckBox, QScrollArea
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(6)
+
+        self._naming_own_cb = QCheckBox(
+            tr("このプリセット専用の自動命名を使う",
+               "Use auto-naming settings specific to this preset"))
+        self._naming_own_cb.setToolTip(tr(
+            "OFF のときは設定ダイアログの «共通» 設定に従います。",
+            "When off, the shared settings from the Settings dialog apply."))
+        self._naming_own_cb.toggled.connect(self._on_naming_own_toggled)
+        lay.addWidget(self._naming_own_cb)
+
+        self._naming_enabled_cb = QCheckBox(
+            tr("自動命名を有効にする", "Enable auto naming"))
+        lay.addWidget(self._naming_enabled_cb)
+
+        self._naming_container = QWidget()
+        self._naming_layout = QVBoxLayout(self._naming_container)
+        self._naming_layout.setContentsMargins(0, 0, 0, 0)
+        self._naming_layout.setSpacing(4)
+        self._naming_layout.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidget(self._naming_container)
+        scroll.setWidgetResizable(True)
+        lay.addWidget(scroll, 1)
+
+        self._naming_add_btn = QPushButton(tr("＋ ルールを追加", "+ Add rule"))
+        self._naming_add_btn.setAutoDefault(False)
+        self._naming_add_btn.clicked.connect(lambda _c=False: self._add_naming_rule())
+        lay.addWidget(self._naming_add_btn)
+
+        self._naming_rows = []
+        return w
+
+    def _on_naming_own_toggled(self, on):
+        for wdg in (self._naming_enabled_cb, self._naming_container,
+                    self._naming_add_btn):
+            wdg.setEnabled(bool(on))
+
+    def _clear_naming_rows(self):
+        for row in list(getattr(self, "_naming_rows", [])):
+            row.setParent(None)
+            row.deleteLater()
+        self._naming_rows = []
+
+    def _add_naming_rule(self, directory="", rule=None):
+        from ui.settings_dialog import AutoNamingRuleRow
+        row = AutoNamingRuleRow(directory=directory, rule=rule)
+        row.remove_requested.connect(self._remove_naming_rule)
+        self._naming_rows.append(row)
+        self._naming_layout.insertWidget(self._naming_layout.count() - 1, row)
+        return row
+
+    def _remove_naming_rule(self, row):
+        if row in self._naming_rows:
+            self._naming_rows.remove(row)
+        row.setParent(None)
+        row.deleteLater()
+
+    def _load_naming_for(self, preset: str):
+        """プリセットの自動命名設定を画面へ。未保存の編集は _naming_draft に持つ。"""
+        self._clear_naming_rows()
+        draft = self._naming_draft.get(preset)
+        if draft is None:
+            own = self._sm.has_auto_naming_for_preset(preset)
+            draft = {
+                "own": own,
+                "enabled": self._sm.get_auto_naming_enabled(preset if own else None),
+                "rules": dict(self._sm.get_auto_naming_rules(preset) if own else {}),
+            }
+        self._naming_own_cb.blockSignals(True)
+        self._naming_own_cb.setChecked(bool(draft["own"]))
+        self._naming_own_cb.blockSignals(False)
+        self._naming_enabled_cb.setChecked(bool(draft["enabled"]))
+        for d, rule in (draft["rules"] or {}).items():
+            self._add_naming_rule(d, rule)
+        self._on_naming_own_toggled(bool(draft["own"]))
+
+    def _collect_naming(self):
+        rules = {}
+        for row in getattr(self, "_naming_rows", []):
+            d, rule = row.get_data()
+            if d:
+                rules[d] = rule
+        return {"own": self._naming_own_cb.isChecked(),
+                "enabled": self._naming_enabled_cb.isChecked(),
+                "rules": rules}
+
+    def _stash_naming(self):
+        """表示中のプリセットの編集内容を下書きへ退避する。"""
+        if self._current_preset and hasattr(self, "_naming_own_cb"):
+            self._naming_draft[self._current_preset] = self._collect_naming()
+
     def _load_presets(self):
         import copy
         raw = self._sm.get_quick_nav_presets()
@@ -326,8 +451,10 @@ class QuickNavPresetEditor(QDialog):
             self._preset_list.setCurrentRow(0)
 
     def _on_preset_selected(self, row: int):
+        self._stash_naming()           # r119: 切り替える前に編集内容を退避
         if row < 0:
             self._clear_items()
+            self._clear_naming_rows()
             return
         name = self._preset_list.item(row).text()
         self._current_preset = name
@@ -335,6 +462,7 @@ class QuickNavPresetEditor(QDialog):
         self._name_edit.setText(name)
         self._name_edit.blockSignals(False)
         self._populate_items(self._presets.get(name, []))
+        self._load_naming_for(name)
 
     def _apply_rename(self):
         """名前欄の内容を現在のプリセット名に反映する（辞書とリスト項目の両方）。"""
@@ -351,6 +479,9 @@ class QuickNavPresetEditor(QDialog):
             self._name_edit.blockSignals(False)
             return
         self._presets[new_name] = self._presets.pop(cur)
+        if cur in self._naming_draft:      # r119: 自動命名の下書きも改名に追従
+            self._naming_draft[new_name] = self._naming_draft.pop(cur)
+        self._renamed_presets[cur] = new_name
         self._current_preset = new_name
         for it in self._preset_list.findItems(cur, Qt.MatchExactly):
             it.setText(new_name)
@@ -377,6 +508,10 @@ class QuickNavPresetEditor(QDialog):
         import copy
         new_name = self._current_preset + "_copy"
         self._presets[new_name] = copy.deepcopy(self._presets[self._current_preset])
+        self._stash_naming()
+        if self._current_preset in self._naming_draft:
+            self._naming_draft[new_name] = copy.deepcopy(
+                self._naming_draft[self._current_preset])
         self._preset_list.addItem(new_name)
         items = self._preset_list.findItems(new_name, Qt.MatchExactly)
         if items:
@@ -391,6 +526,8 @@ class QuickNavPresetEditor(QDialog):
                                    QMessageBox.Yes | QMessageBox.No)
         if ret != QMessageBox.Yes:
             return
+        self._naming_draft.pop(self._current_preset, None)
+        self._deleted_presets.add(self._current_preset)
         del self._presets[self._current_preset]
         row = self._preset_list.currentRow()
         self._preset_list.takeItem(row)
@@ -475,5 +612,21 @@ class QuickNavPresetEditor(QDialog):
 
         self._sync_current_preset()
         self._sm.save_quick_nav_presets(self._presets)
+        # r119: プリセット毎の自動命名も一緒に保存する
+        self._stash_naming()
+        for old_name, new_nm in self._renamed_presets.items():
+            self._sm.rename_auto_naming_preset(old_name, new_nm)
+        for gone in self._deleted_presets:
+            if gone not in self._presets:
+                self._sm.clear_auto_naming_for_preset(gone)
+        for name, draft in self._naming_draft.items():
+            if name not in self._presets:
+                continue
+            if draft.get("own"):
+                self._sm.save_auto_naming_for_preset(
+                    name, draft.get("rules") or {},
+                    enabled=bool(draft.get("enabled", True)))
+            else:
+                self._sm.clear_auto_naming_for_preset(name)
         self.presets_saved.emit()
         self.accept()

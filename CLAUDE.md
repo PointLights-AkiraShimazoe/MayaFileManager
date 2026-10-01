@@ -1217,6 +1217,24 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   トグルの slot で丸ごと再生成しており、保存が失敗すると «押しても戻る»
   だけの挙動になっていた。`_refresh_display_names(rebuild_footers=False)`。
   `toggled` ではなく `clicked` を使う（プログラムの setChecked で発火しない）。
+- **«次に起動する版を選ぶ» 操作で «保存先の箱» を切り替えない**。
+  `_on_maya_version_changed` が `set_maya_version()` を呼んでいたため、
+  バージョン別の履歴/ブックマークが ON のとき、ヘッダーのプルダウンを
+  触っただけで箱が入れ替わり «ブックマークが消えた» に見えていた。
+  このツールは **スタンドアロンが主な使い方**で、Maya が開いている前提では
+  ない。バージョン別の箱は `is_running_inside_maya()` の時だけ使う。
+  設定の文言も «Maya の中で使う時» と明示する。
+  回帰テスト: tests/offscreen/test_per_version_scope.py
+- **バージョン・著作権は `core/version.py` だけに書く**。about ダイアログに
+  "v1.0" と手書きされており 0.9.x になっても取り残されていた。
+  © の年は «最初に公表した年»（2026）。
+  回帰テスト: tests/offscreen/test_version_and_copyright.py が
+  手書きを機械的に検出する。
+- **QSS で入力部品に背景・枠を当てたら、部品の «印» も自分で描く**。
+  QSpinBox の上下矢印と QCheckBox のチェックがスタイル既定のままだと
+  地と同化して消える（ユーザー報告 2026-10-01）。`_arrow_png(dir)` /
+  `_check_png(glyph)` で PNG を生成して明示的に置く。
+  回帰テスト: test_theme_mercury.test_spin_and_check_are_visible。
 - **`if/elif/else` の付け替えは «else がどこに付くか» を必ず見る**。
   `_on_conn_list` の空リスト分岐に `elif` を足した結果、元の `else`
   （＝接続一覧をコンボに入れる処理そのもの）が乗っ取られ、**Maya が一切

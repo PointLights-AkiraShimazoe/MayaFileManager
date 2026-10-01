@@ -81,10 +81,36 @@ class MainWindowDccMixin:
         mc, bc = self._maya_combo, self._blender_combo
         mc.blockSignals(True)
         mc.clear()
-        for inst in reversed(self._maya_installs):
-            mc.addItem(f"Maya {inst.version}", inst)
-        if not self._maya_installs:
+        # r119: 起動プロファイルがあればそれを並べる（同じバージョンの
+        # 引数違いを «別の行» として選べるようにするため。ユーザー指示）。
+        # 無ければ従来どおり «検出されたバージョンそのまま»。
+        self._maya_profiles = []
+        try:
+            profiles = self._sm.get_maya_launch_profiles()
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _populate_version_combos")
+            profiles = []
+        by_ver = {str(i.version): i for i in self._maya_installs}
+        if profiles:
+            for prof in profiles:
+                inst = by_ver.get(str(prof.get("version")))
+                label = prof.get("label") or (
+                    "Maya %s" % prof.get("version"))
+                if inst is None:
+                    label += tr("（未検出）", " (not found)")
+                mc.addItem(label, inst)
+                tip = tr("Maya %s", "Maya %s") % prof.get("version")
+                if prof.get("args"):
+                    tip += "\n" + prof["args"]
+                mc.setItemData(mc.count() - 1, tip, Qt.ToolTipRole)
+                self._maya_profiles.append(prof)
+        else:
+            for inst in reversed(self._maya_installs):
+                mc.addItem(f"Maya {inst.version}", inst)
+                self._maya_profiles.append(None)
+        if not mc.count():
             mc.addItem(tr("Maya（未検出）", "Maya (not found)"), None)
+            self._maya_profiles.append(None)
         sel = -1
         if self._maya_inst:
             for i in range(mc.count()):
@@ -1339,13 +1365,57 @@ class MainWindowDccMixin:
     # ------------------------------------------------------------------
 
     def _on_maya_version_changed(self, idx: int):
+        """ヘッダーの «起動する Maya» を切り替えた時。
+
+        r119: ここで set_maya_version() を呼んではいけない。
+        これは «次に起動する Maya を選ぶ» だけの操作なのに、
+        «バージョン別の履歴/ブックマーク» の箱まで切り替えてしまい、
+        プルダウンを触っただけでブックマークが消えたように見えていた
+        （ユーザー指摘 2026-10-01）。スタンドアロンが主な使い方なので
+        実害が大きい。バージョン別の箱は «Maya の中で動いている時» に
+        だけ意味を持たせる（起動時に一度だけ決める）。"""
         inst = self._maya_combo.itemData(idx)
         if isinstance(inst, MayaInstallation):
             self._maya_inst = inst
-            self._sm.set_maya_version(inst.version)
-            self.setWindowTitle(f"Maya File Manager  —  Maya {inst.version}")
+            self._sm.set("last_maya_version", str(inst.version), save=False)
         elif isinstance(inst, BlenderInstallation):
             self._blender_inst = inst
+
+    def _current_maya_profile(self):
+        """コンボで選ばれている起動プロファイル（無ければ None）。"""
+        try:
+            i = self._maya_combo.currentIndex()
+            profs = getattr(self, "_maya_profiles", [])
+            if 0 <= i < len(profs):
+                return profs[i]
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _current_maya_profile")
+        return None
+
+    def _maya_launch_args(self):
+        """起動に渡す追加引数。共通引数 → プロファイル個別の順に並べる。"""
+        import shlex
+        out = []
+        for text in (str(self._sm.get("maya_extra_args", "") or ""),
+                     str((self._current_maya_profile() or {}).get("args", ""))):
+            text = text.strip()
+            if not text:
+                continue
+            try:
+                out += shlex.split(text, posix=False)
+            except ValueError:
+                out += text.split()
+        return out
+
+    def _open_maya_launch_setup(self):
+        """Maya の起動設定（バージョン・引数・表示名）。r119。"""
+        from ui.maya_launch_dialog import MayaLaunchDialog
+        versions = [str(i.version) for i in reversed(self._maya_installs)]
+        dlg = MayaLaunchDialog(self._sm, versions, self)
+        ret = dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+        if not ret:
+            return
+        self._populate_version_combos()
 
     def _launch_maya(self):
         inst = self._maya_inst
@@ -1359,13 +1429,15 @@ class MainWindowDccMixin:
             # リファレンスを送り込めるようにする）。複数Maya同時起動に備えて
             # レンジ内の空きポートを割り当て、起動したMayaへ接続先を切り替える。
             port = find_free_port()
-            launch_maya(inst, command_port=port)
+            extra = self._maya_launch_args()
+            launch_maya(inst, extra_args=extra or None, command_port=port)
             self._bridge.set_port(port)
             self._sm.set("maya_command_port", int(port), save=False)
             self.statusBar().showMessage(
-                tr("Maya %s を起動しました（連携ポート :%d）",
-                   "Launched Maya %s (bridge port :%d)")
-                % (inst.version, port))
+                tr("Maya %s を起動しました（連携ポート :%d）%s",
+                   "Launched Maya %s (bridge port :%d)%s")
+                % (inst.version, port,
+                   ("  " + " ".join(extra)) if extra else ""))
             # Maya起動には時間がかかるため、少し置いて接続リストを再スキャン
             for delay in (8000, 20000, 40000):
                 QTimer.singleShot(delay, self._refresh_maya_connections)

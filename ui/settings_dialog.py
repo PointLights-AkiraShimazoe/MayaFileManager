@@ -359,26 +359,49 @@ class SettingsDialog(QDialog):
         layout = QFormLayout(w)
         layout.setSpacing(8)
 
-        layout.addRow(_SectionLabel("履歴"))
+        layout.addRow(_SectionLabel(tr("履歴", "History")))
 
         self._history_max_spin = QSpinBox()
         self._history_max_spin.setRange(5, 1000)
         self._history_max_spin.setSuffix(tr(" 件", " items"))
-        layout.addRow("保持件数:", self._history_max_spin)
+        self._history_max_spin.setToolTip(tr(
+            "履歴に残しておくフォルダの数。超えた分は古いものから消えます。",
+            "How many folders to keep in the history; the oldest drop off."))
+        layout.addRow(tr("保持件数:", "Keep:"), self._history_max_spin)
 
-        self._history_per_maya_cb = QCheckBox(
-            "Maya バージョン別に独立して管理する\n"
-            "（OFF = 全バージョン共通）"
-        )
+        self._history_per_maya_cb = QCheckBox(tr(
+            "Maya の中で使う時、Maya のバージョン別に分ける（OFF = 全て共通）",
+            "Inside Maya, keep a separate list per Maya version (off = shared)"))
+        # r119: «ON だと何が起きるか» が分からない、という指摘。具体例で示す。
+        self._history_per_maya_cb.setToolTip(tr(
+            "«Maya の中から» このツールを開いた時だけ効きます。\n"
+            "スタンドアロン（単体起動）では常に共通の履歴です。\n"
+            "ヘッダーの «起動する Maya» を切り替えても履歴は変わりません。\n\n"
+            "OFF（既定）: Maya 2026 の中でも 2025 の中でも同じ履歴。\n"
+            "ON: Maya 2026 の中で開いたフォルダは 2025 の中では出ません。\n"
+            "　　バージョンごとに扱う案件が完全に分かれている場合向け。",
+            "Applies only when this tool runs INSIDE Maya.\n"
+            "Standalone always uses the shared history, and changing the\n"
+            "“Maya to launch” dropdown never switches it.\n\n"
+            "Off (default): the same history inside 2026 and inside 2025.\n"
+            "On: a folder opened inside 2026 does not appear inside 2025."))
         layout.addRow("", self._history_per_maya_cb)
 
         layout.addRow(_HLine())
-        layout.addRow(_SectionLabel("ブックマーク"))
+        layout.addRow(_SectionLabel(tr("ブックマーク", "Bookmarks")))
 
-        self._bm_per_maya_cb = QCheckBox(
-            "Maya バージョン別に独立して管理する\n"
-            "（OFF = 全バージョン共通）"
-        )
+        self._bm_per_maya_cb = QCheckBox(tr(
+            "Maya の中で使う時、Maya のバージョン別に分ける（OFF = 全て共通）",
+            "Inside Maya, keep a separate set per Maya version (off = shared)"))
+        self._bm_per_maya_cb.setToolTip(tr(
+            "«Maya の中から» このツールを開いた時だけ効きます。\n"
+            "スタンドアロン（単体起動）では常に共通のブックマークです。\n"
+            "ヘッダーの «起動する Maya» を切り替えても変わりません。\n\n"
+            "ON: Maya 2026 の中で登録したものは 2025 の中では出ません。",
+            "Applies only when this tool runs INSIDE Maya.\n"
+            "Standalone always uses the shared bookmarks, and changing the\n"
+            "“Maya to launch” dropdown never switches them.\n\n"
+            "On: what you add inside 2026 does not show up inside 2025."))
         layout.addRow("", self._bm_per_maya_cb)
 
         return w
@@ -390,7 +413,7 @@ class SettingsDialog(QDialog):
         layout = QFormLayout(w)
         layout.setSpacing(8)
 
-        layout.addRow(_SectionLabel("起動"))
+        layout.addRow(_SectionLabel(tr("起動", "Launch")))
 
         self._maya_args_edit = QLineEdit()
         self._maya_args_edit.setPlaceholderText(tr("-batch など（スペース区切り）",
@@ -410,6 +433,21 @@ class SettingsDialog(QDialog):
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(6)
+
+        # r119: 自動命名はプリセット毎にも設定できる（クイックナビ
+        # プリセットエディタの「自動命名」タブ）。ここは «共通» 設定で、
+        # プリセットが自前の設定を持たない時に使われる。
+        scope = QLabel(tr(
+            "ここは «共通» の設定です。プリセット毎に変えたい場合は\n"
+            "ツール →「クイックナビ プリセットエディタ...」→「自動命名」タブで\n"
+            "そのプリセット専用の設定を作れます。",
+            "These are the shared settings, used when a preset has none of its "
+            "own.\nTo vary them per preset, use Tools > \u201cQuick Nav Preset "
+            "Editor...\u201d > \u201cAuto Naming\u201d."))
+        scope.setWordWrap(True)
+        scope.setStyleSheet("color:%(on_surface_dim)s;font-size:%(label_px)spx;"
+                            % _tv())
+        layout.addWidget(scope)
 
         self._auto_naming_enabled_cb = QCheckBox(tr("自動命名を有効にする", "Enable auto naming"))
         layout.addWidget(self._auto_naming_enabled_cb)

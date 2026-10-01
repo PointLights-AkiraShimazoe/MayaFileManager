@@ -80,8 +80,13 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         self._maya_ver = (get_current_maya_version() or
                           (maya_installation.version if maya_installation else ""))
 
-        if self._maya_ver:
-            self._sm.set_maya_version(self._maya_ver)
+        # r119: «バージョン別の履歴/ブックマーク» は «Maya の中で動いている時»
+        # だけのもの。スタンドアロンでは、起動する版を選び直しただけで箱が
+        # 入れ替わると «ブックマークが消えた» に見える（ユーザー指摘）。
+        if self._inside_maya and get_current_maya_version():
+            self._sm.set_maya_version(get_current_maya_version())
+        else:
+            self._sm.set_maya_version(None)
 
         # Sub-managers
         self._bm_mgr = BookmarkManager(self._sm)
@@ -322,6 +327,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         self._dcc_hdr.launch_requested.connect(self._launch_dcc)
         self._dcc_hdr.refresh_requested.connect(self._refresh_connections)
         self._dcc_hdr.front_requested.connect(self._focus_connected_dcc)
+        self._dcc_hdr.maya_setup_requested.connect(self._open_maya_launch_setup)
         self._conn_combo.currentIndexChanged.connect(
             lambda i: self._on_conn_changed(i, "maya"))
         self._bl_conn_combo.currentIndexChanged.connect(
@@ -629,13 +635,15 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         dock.raise_()
 
     def _about(self):
+        # r119: バージョンは core/version.py を唯一の出所にする
+        # （ここに手書きしていたため «v1.0» のまま取り残されていた）。
+        from core.version import version_string, COPYRIGHT
         QMessageBox.about(
             self, "Maya File Manager",
-            "Maya File Manager v1.0\n\n"
-            "Maya 2023 以降対応\n"
-            "PySide2 / PySide6\n\n"
-            "© 2025 PointLights for entertainment"
-        )
+            "Maya File Manager %s\n\n%s\nPySide2 / PySide6\n\n%s"
+            % (version_string(),
+               tr("Maya 2023 以降対応", "Supports Maya 2023 and later"),
+               COPYRIGHT))
 
     # ------------------------------------------------------------------
     # Window state

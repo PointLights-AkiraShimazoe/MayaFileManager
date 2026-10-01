@@ -251,6 +251,7 @@ class DccHeader(QWidget):
     シグナルを出すだけ）。"""
 
     dcc_changed = Signal(str)          # "maya" / "blender"
+    maya_setup_requested = Signal()    # Maya の起動設定を開く（r119）
     launch_requested = Signal()        # 選択中 DCC の起動
     refresh_requested = Signal()       # 両方の接続一覧を更新
     front_requested = Signal()         # 選択中 DCC を最前面へ
@@ -277,11 +278,20 @@ class DccHeader(QWidget):
         self.blender_ver = _PopupCombo()
         self.blender_ver.setFixedWidth(136)
         self.blender_ver.setToolTip(tr("起動する Blender のバージョン", "Blender version to launch"))
+        # r119: Maya の起動設定（バージョン＋引数＋表示名）をここから開く。
+        # 設定ダイアログの奥に埋めず、スイッチのすぐ右に置く（ユーザー指示）。
+        self.maya_setup_btn = _icon_button(
+            "note", "🗒",
+            tr("Maya の起動設定（バージョン・引数・表示名）",
+               "Maya launch settings (version, arguments, display name)"))
+        self.maya_setup_btn.setObjectName("mfmDccBadge")
+        self.maya_setup_btn.clicked.connect(self.maya_setup_requested.emit)
         g.addWidget(self.maya_ver, 0, 0)
         g.addWidget(self.maya_badge, 0, 1, Qt.AlignCenter)
         g.addWidget(self.switch, 0, 2, Qt.AlignCenter)
-        g.addWidget(self.blender_badge, 0, 3, Qt.AlignCenter)
-        g.addWidget(self.blender_ver, 0, 4)
+        g.addWidget(self.maya_setup_btn, 0, 3, Qt.AlignCenter)
+        g.addWidget(self.blender_badge, 0, 4, Qt.AlignCenter)
+        g.addWidget(self.blender_ver, 0, 5)
 
         # 下段
         self.maya_conn = self._conn_combo(tr("接続中の Maya", "Connected Maya"))
@@ -306,7 +316,9 @@ class DccHeader(QWidget):
         g.addWidget(self.refresh_btn, 1, 1, Qt.AlignCenter)
         g.addWidget(self.launch_btn, 1, 2, Qt.AlignCenter)
         g.addWidget(self.front_btn, 1, 3, Qt.AlignCenter)
-        g.addWidget(self.blender_conn, 1, 4)
+        # r119: 上段が 1 列増えた（起動設定アイコン）ので、下段の Blender 側を
+        # 2 列ぶち抜きにして «Blender バッジ＋バージョン» の下に揃える
+        g.addWidget(self.blender_conn, 1, 4, 1, 2)
 
         # 配線
         self.switch.changed.connect(self._on_switch)
