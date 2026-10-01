@@ -1,25 +1,22 @@
 @echo off
 REM ============================================================
-REM Run MayaFileManager from source (no build needed).
+REM Run the offscreen regression suite with mayapy (no display needed).
+REM Result is printed here AND written to mfm_tests.log next to this file,
+REM so Claude can read the log when its sandbox is unavailable.
 REM
-REM mayapy selection:
-REM   1) MFM_MAYA_VER env var (e.g. "set MFM_MAYA_VER=2024") if that Maya exists
-REM   2) otherwise the newest installed Maya (2027 -> 2026 -> 2025 -> 2024 -> 2023)
-REM   3) otherwise "python" on PATH (requires PySide6)
+REM mayapy selection is the same as run_dev.bat
+REM   (MFM_MAYA_VER, else newest Maya 2027 -> 2023, else python on PATH).
 REM
-REM NOTE: keep this file ASCII-only. cmd.exe reads .bat files in the
-REM       console code page (CP932 on Japanese Windows); UTF-8 comments
-REM       get garbled and executed as broken commands.
+REM NOTE: keep this file ASCII-only (CP932 console code page).
 REM ============================================================
 setlocal
 cd /d "%~dp0"
 set "MAYAPY="
+set "QT_QPA_PLATFORM=offscreen"
 
 if defined MFM_MAYA_VER (
     if exist "C:\Program Files\Autodesk\Maya%MFM_MAYA_VER%\bin\mayapy.exe" (
         set "MAYAPY=C:\Program Files\Autodesk\Maya%MFM_MAYA_VER%\bin\mayapy.exe"
-    ) else (
-        echo [warn] mayapy for MFM_MAYA_VER=%MFM_MAYA_VER% not found. Auto-selecting.
     )
 )
 
@@ -35,11 +32,11 @@ if not defined MAYAPY (
 
 if defined MAYAPY (
     echo [info] using: %MAYAPY%
-    "%MAYAPY%" main.py --no-launcher %*
+    "%MAYAPY%" tests\run_offscreen.py
 ) else (
     echo [info] mayapy not found. Falling back to 'python' on PATH ^(requires PySide6^)...
-    python main.py --no-launcher %*
+    python tests\run_offscreen.py
 )
 echo.
-echo ---- Finished. Press any key to close. ----
+echo ---- Finished. Result also in mfm_tests.log. Press any key to close. ----
 pause >nul

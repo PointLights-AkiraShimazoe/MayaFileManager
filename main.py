@@ -36,7 +36,19 @@ def _bootstrap_pyside():
         app = QApplication(sys.argv)
         app.setApplicationName("MayaFileManager")
         app.setOrganizationName("PointLights")
-        _apply_dark_theme(app)
+        # 【重要】スタンドアロンでは OS ネイティブのファイル/フォルダダイアログを
+        # 使わない（r64）。Windows のネイティブダイアログはシェル拡張
+        # （TortoiseSVN/Git の オーバーレイ、Perforce P4EXP 等）をプロセス内へ
+        # 読み込み、mayapy/EXE では QFileDialog.getExistingDirectory の中で
+        # プロセスごとクラッシュした（mfm_freeze.log: _browse の中で 4 秒停止
+        # → プロセス消滅、2026-09-11）。Qt 製ダイアログ（テーマ適用）で統一する。
+        # Maya 内モードでは Maya の QApplication を触らないためここには来ない。
+        try:
+            from core.compat import Qt as _Qt
+            app.setAttribute(_Qt.AA_DontUseNativeDialogs, True)
+        except Exception:
+            pass
+        _apply_theme_from_settings(app)
         return app, True
     return app, False
 
@@ -110,14 +122,24 @@ def _report_window_error(exc):
         f"詳細ログ: {log_file}")
 
 
-def _apply_dark_theme(app):
+def _apply_theme_from_settings(app):
     """
-    Apply the design-token driven M3 theme (config/design_tokens.json).
+    Apply the design-token driven theme (config/design_tokens.json)。
+    モードは設定 "theme"（dark / light）に従う（r82。以前は dark 固定で、
+    設定ダイアログのテーマ選択が効いていなかった）。
     Falls back to the legacy basic palette if the theme engine fails.
     """
+    mode = "dark"
+    try:
+        from core.settings_manager import SettingsManager
+        mode = SettingsManager().get("theme", "dark")
+        if mode not in ("dark", "light"):
+            mode = "dark"
+    except Exception:
+        pass
     try:
         from core.theme_engine import apply_theme
-        apply_theme(app, mode="dark")
+        apply_theme(app, mode=mode)
         return
     except Exception as e:
         print(f"[MayaFileManager] theme_engine failed, using fallback palette: {e}")
@@ -149,15 +171,50 @@ def _apply_fallback_palette(app):
 # Standalone entry
 # ---------------------------------------------------------------------------
 
+def _log_env(tag: str):
+    """実行環境（Python/Qt/PySide/Maya）を起動タイムラインへ記録する。
+    Maya 2027 等、バージョン差の切り分けに使う。"""
+    try:
+        import platform
+        from ui.browser_panel import _mfm_timeline
+        from core.compat import QtCore
+        pyside = ""
+        try:
+            import PySide6
+            pyside = "PySide6 " + PySide6.__version__
+        except Exception:
+            try:
+                import PySide2
+                pyside = "PySide2 " + PySide2.__version__
+            except Exception:
+                pass
+        maya = ""
+        try:
+            import maya.cmds as cmds
+            maya = " / Maya " + str(cmds.about(version=True))
+        except Exception:
+            pass
+        _mfm_timeline("env[%s]: python %s / qt %s / %s%s / %s / exe=%s"
+                      % (tag, sys.version.split()[0], QtCore.qVersion(),
+                         pyside, maya, platform.platform(), sys.executable))
+    except Exception:
+        pass
+
+
 def run_standalone(skip_launcher: bool = False):
     """
     Start as a standalone application.
     """
     app, created = _bootstrap_pyside()
     _setup_error_logging()
+    _log_env("standalone")
 
     from core.settings_manager import SettingsManager
     sm = SettingsManager()
+
+    # UI表示言語を確定（auto=Mayaの言語モード追従 / ja / en。再起動で反映）
+    from core import i18n
+    i18n.init(sm)
 
     if skip_launcher:
         # Open manager immediately without choosing Maya version
@@ -225,12 +282,26 @@ def show_in_maya():
     global _maya_window_instance
 
     app, _ = _bootstrap_pyside()
+    _log_env("in-maya")
 
     from core.maya_version import get_current_maya_version
     from core.settings_manager import SettingsManager
 
     maya_ver = get_current_maya_version()
     sm = SettingsManager(maya_version=maya_ver)
+
+    # UI表示言語を確定（auto=Mayaの言語モード追従 / ja / en）
+    from core import i18n
+    i18n.init(sm)
+
+    # Maya 内では Maya 側の QApplication に stylesheet/palette を «当てない»
+    # （Maya 全体の見た目を壊すため）。ただしウィジェット個別のスタイルが
+    # 参照するテーマモードだけは設定に合わせておく（r82）。
+    try:
+        from core.theme_engine import set_mode
+        set_mode(sm.get("theme", "dark"))
+    except Exception:
+        pass
 
     if _maya_window_instance is not None:
         try:

@@ -44,3 +44,12 @@ desktop.ini
 
 # ── ログ ──────────────────────────────────────────
 *.log
+mfm_freeze.log
+
+# ── コード構造図（Archify のローカル複製・受領ログ） ──
+docs/_archify/
+docs/diagrams/archify_report.txt
+docs/diagrams/.archify-*
+
+# Archify の中間生成物（図の配信用一時ディレクトリ。成果物は docs/*.html のみ追跡する）
+docs/.archify-delivery-*/
