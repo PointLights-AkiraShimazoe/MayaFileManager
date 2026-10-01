@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "MayaFileManager アーキテクチャ",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1300,
+      740
+    ]
+  },
+  "components": [
+    {
+      "id": "entry",
+      "type": "frontend",
+      "label": "main.py / run_in_maya.py",
+      "sublabel": "エントリ（スタンドアロン / Maya内）",
+      "pos": [
+        40,
+        180
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "dcchdr",
+      "type": "frontend",
+      "label": "ui/dcc_header.py",
+      "sublabel": "DCC ブロック・接続コンボ・起動",
+      "pos": [
+        340,
+        40
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "mainwin",
+      "type": "frontend",
+      "label": "ui/main_window.py",
+      "sublabel": "MainWindow・メニュー・DCC 振り分け",
+      "pos": [
+        340,
+        180
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "ui/browser_panel.py",
+      "sublabel": "QColumnView ブラウザ・右クリック",
+      "pos": [
+        340,
+        320
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "savedlg",
+      "type": "frontend",
+      "label": "ui/save_dialog.py",
+      "sublabel": "保存/書き出しダイアログ",
+      "pos": [
+        340,
+        460
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "bridges",
+      "type": "backend",
+      "label": "maya_bridge / blender_bridge",
+      "sublabel": "core/: send_python・IDENTIFY・ポート走査",
+      "pos": [
+        660,
+        40
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "settings",
+      "type": "database",
+      "label": "core/settings_manager.py",
+      "sublabel": "settings.json（日次バックアップ）",
+      "pos": [
+        660,
+        180
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "fileops",
+      "type": "backend",
+      "label": "file_operations / undo_stack",
+      "sublabel": "core/: コピー/移動/削除/複製・Undo",
+      "pos": [
+        660,
+        320
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "integ",
+      "type": "backend",
+      "label": "core/integrations/",
+      "sublabel": "git / svn / p4 / cloud（ワーカー直列）",
+      "pos": [
+        660,
+        460
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "dccsave",
+      "type": "backend",
+      "label": "core/dcc_save.py",
+      "sublabel": "形式別オプション・送信コード生成",
+      "pos": [
+        660,
+        600
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "maya",
+      "type": "external",
+      "label": "Maya",
+      "sublabel": "commandPort :20261-20269",
+      "pos": [
+        980,
+        40
+      ],
+      "size": [
+        220,
+        64
+      ]
+    },
+    {
+      "id": "blender",
+      "type": "external",
+      "label": "Blender",
+      "sublabel": "resources/blender_bridge.py :20271-20279",
+      "pos": [
+        980,
+        180
+      ],
+      "size": [
+        220,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "ui/",
+      "wraps": [
+        "dcchdr",
+        "mainwin",
+        "browser",
+        "savedlg"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "core/",
+      "wraps": [
+        "bridges",
+        "settings",
+        "fileops",
+        "integ",
+        "dccsave"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "entry",
+      "to": "mainwin",
+      "label": "起動"
+    },
+    {
+      "from": "mainwin",
+      "to": "dcchdr"
+    },
+    {
+      "from": "mainwin",
+      "to": "browser"
+    },
+    {
+      "from": "browser",
+      "to": "savedlg",
+      "label": "右クリック",
+      "labelAt": [
+        450,
+        422
+      ]
+    },
+    {
+      "from": "mainwin",
+      "to": "bridges",
+      "label": "送信",
+      "labelAt": [
+        615,
+        130
+      ]
+    },
+    {
+      "from": "mainwin",
+      "to": "settings",
+      "label": "設定",
+      "labelAt": [
+        610,
+        236
+      ]
+    },
+    {
+      "from": "browser",
+      "to": "fileops",
+      "label": "ファイル操作"
+    },
+    {
+      "from": "browser",
+      "to": "integ",
+      "label": "状態/操作"
+    },
+    {
+      "from": "savedlg",
+      "to": "dccsave",
+      "label": "コード生成",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "orthogonal-v"
+    },
+    {
+      "from": "bridges",
+      "to": "maya",
+      "label": "commandPort"
+    },
+    {
+      "from": "bridges",
+      "to": "blender",
+      "label": "TCP"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "UI",
+      "items": [
+        "BrowserArea = プリセット行＋ブックマーク/履歴＋BrowserPanel",
+        "ヘッダ行は setMenuWidget（menuBar() は使わない）",
+        "ダイアログは非ネイティブ（AA_DontUseNativeDialogs）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "DCC 連携",
+      "items": [
+        "commandPort は単一式のみ → exec を式に包む",
+        "送信・応答待ちは必ずワーカースレッド（_bridge_send_async）",
+        ".ma/.mb→Maya、.blend→Blender、共通形式→選択中 DCC"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "ファイル操作",
+      "items": [
+        "長時間処理は _run_file_op（進捗＋キャンセル）",
+        "削除は作業ごみ箱 → OS ごみ箱",
+        "UI スレッドで filePath()/isdir は禁止"
+      ]
+    }
+  ]
+}

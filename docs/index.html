@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>MayaFileManager — 構造図とワークフロー</title>
+<style>
+body{margin:0;padding:32px;background:#0b0d14;color:#d8ecf8;font:14px/1.6 system-ui,"Segoe UI","Yu Gothic UI",sans-serif}
+h1{font-size:20px;margin:0 0 6px}p{opacity:.7;margin:0 0 22px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;max-width:1100px}
+a.card{display:block;padding:16px 18px;border:1px solid rgba(186,215,247,.12);border-radius:12px;background:rgba(186,214,247,.05);color:inherit;text-decoration:none}
+a.card:hover{background:rgba(186,214,247,.11)}a.card b{display:block;font-size:15px;margin-bottom:4px}a.card span{opacity:.7;font-size:13px}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:9px;background:#352081;color:#d1e4fa;margin-bottom:8px}
+</style></head><body>
+<h1>MayaFileManager — 構造図とワークフロー</h1>
+<p>ワークフローは「ユーザーが何をして、ツールが何をするか」の視点。各図の左サイドバー「FILES」から、カードに対応する実装ファイルを VS Code で開けます（Alt+P で開閉）。</p>
+<div class="grid">
+<a class="card" href="workflow_startup.html"><span class="tag">ワークフロー 1</span><b>起動してフォルダを見る</b><span>起動 → 前回の状態を復元 → プリセット / ブックマークで移動 → カラム表示 → 連携バッジ</span></a>
+<a class="card" href="workflow.html"><span class="tag">ワークフロー 2</span><b>ファイルを Maya / Blender へ送る</b><span>送り先を選ぶ → クリック / 右クリック / D&D → 接続中の DCC で開く・取り込む・保存 → 結果表示</span></a>
+<a class="card" href="workflow_fileops.html"><span class="tag">ワークフロー 3</span><b>ファイルを整理する</b><span>選ぶ → コピー / 貼付 / 削除 / 名前変更 / 複製 / 新規作成 → 進捗付きで実行 → Ctrl+Z で元に戻す</span></a>
+<a class="card" href="workflow_integrations.html"><span class="tag">ワークフロー 4</span><b>Git / SVN / Perforce と連携する</b><span>バッジで状態を見る → 右クリックでチェックアウト / Sync / Revert → 結果通知</span></a>
+<a class="card" href="architecture.html"><span class="tag">アーキテクチャ（開発用）</span><b>モジュール構成と依存</b><span>ui/ と core/、Maya / Blender への接続、設定・ファイル操作・連携</span></a>
+</div>
+</body></html>

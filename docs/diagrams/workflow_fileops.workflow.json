@@ -1,0 +1,147 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MayaFileManager: ファイルを整理する（コピー / 移動 / 削除 / 名前変更）",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "user",
+      "label": "ユーザー"
+    },
+    {
+      "id": "tool",
+      "label": "MayaFileManager"
+    },
+    {
+      "id": "ext",
+      "label": "ファイル / 外部サービス"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "u_select",
+      "lane": "user",
+      "col": 0,
+      "type": "frontend",
+      "label": "ファイルを選ぶ",
+      "sublabel": "Ctrl / Shift で複数選択",
+      "width": 120
+    },
+    {
+      "id": "u_key",
+      "lane": "user",
+      "col": 1,
+      "type": "frontend",
+      "label": "操作する",
+      "sublabel": "コピー / 貼付 / 削除 / F2 …",
+      "width": 120
+    },
+    {
+      "id": "t_targets",
+      "lane": "tool",
+      "col": 2,
+      "type": "backend",
+      "label": "対象を確定",
+      "sublabel": "平坦ビューは選択物だけ",
+      "width": 120
+    },
+    {
+      "id": "t_confirm",
+      "lane": "tool",
+      "col": 3,
+      "type": "frontend",
+      "label": "確認する",
+      "sublabel": "削除は対象名を一覧で確認",
+      "width": 120
+    },
+    {
+      "id": "x_exec",
+      "lane": "ext",
+      "col": 4,
+      "type": "external",
+      "label": "ファイルを処理",
+      "sublabel": "進捗バー・キャンセル可",
+      "width": 120
+    },
+    {
+      "id": "t_refresh",
+      "lane": "tool",
+      "col": 5,
+      "type": "frontend",
+      "label": "表示を更新",
+      "sublabel": "名前変更はその場で編集",
+      "width": 120
+    },
+    {
+      "id": "u_undo",
+      "lane": "user",
+      "col": 5,
+      "type": "frontend",
+      "label": "元に戻す",
+      "sublabel": "Ctrl+Z / Ctrl+Y",
+      "width": 120
+    }
+  ],
+  "edges": [
+    {
+      "from": "u_select",
+      "to": "u_key"
+    },
+    {
+      "from": "u_key",
+      "to": "t_targets"
+    },
+    {
+      "from": "t_targets",
+      "to": "t_confirm",
+      "label": "削除のみ"
+    },
+    {
+      "from": "t_confirm",
+      "to": "x_exec",
+      "label": "裏で実行"
+    },
+    {
+      "from": "x_exec",
+      "to": "t_refresh",
+      "variant": "dashed"
+    },
+    {
+      "from": "u_undo",
+      "to": "x_exec",
+      "label": "逆の操作を実行",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "ショートカット",
+      "items": [
+        "Ctrl+C / X / V: Explorer と相互に貼り付けできる",
+        "Delete: 作業ごみ箱へ（Ctrl+Z で戻る）→ 後で OS のごみ箱へ",
+        "F2 / ゆっくり 2 回クリック: その場で名前変更（Tab で次へ）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "作成と複製",
+      "items": [
+        "Ctrl+D: 「名前_Copy」で複製（Replace モードで一括改名）",
+        "Ctrl+Shift+N / T: 新規フォルダ / テキスト → すぐ名前変更",
+        "空白の右クリックにも同じ項目"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "平坦ビュー",
+      "items": [
+        "複数フォルダを選ぶと中身を 1 列に平坦表示",
+        "そこでの Delete / コピー / D&D は選んだファイルだけが対象",
+        "操作後は一覧を自動で作り直す"
+      ]
+    }
+  ]
+}

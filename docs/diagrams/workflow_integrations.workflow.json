@@ -1,0 +1,139 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MayaFileManager: Git / SVN / Perforce と連携する",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "user",
+      "label": "ユーザー"
+    },
+    {
+      "id": "tool",
+      "label": "MayaFileManager"
+    },
+    {
+      "id": "ext",
+      "label": "ファイル / 外部サービス"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "t_show",
+      "lane": "tool",
+      "col": 0,
+      "type": "frontend",
+      "label": "フォルダを表示",
+      "sublabel": "カラム / 平坦ビュー",
+      "width": 120
+    },
+    {
+      "id": "x_status",
+      "lane": "ext",
+      "col": 1,
+      "type": "external",
+      "label": "状態を取得",
+      "sublabel": "p4 fstat / git status（裏で）",
+      "width": 120
+    },
+    {
+      "id": "t_badge2",
+      "lane": "tool",
+      "col": 2,
+      "type": "frontend",
+      "label": "バッジを表示",
+      "sublabel": "P4V と同じ見え方",
+      "width": 120
+    },
+    {
+      "id": "u_rclick",
+      "lane": "user",
+      "col": 3,
+      "type": "frontend",
+      "label": "右クリック",
+      "sublabel": "Git / SVN / Perforce メニュー",
+      "width": 120
+    },
+    {
+      "id": "t_precheck",
+      "lane": "tool",
+      "col": 4,
+      "type": "backend",
+      "label": "事前チェック",
+      "sublabel": "ロック中は不可・要確認は Yes/No",
+      "width": 120
+    },
+    {
+      "id": "x_cmd",
+      "lane": "ext",
+      "col": 5,
+      "type": "external",
+      "label": "コマンド実行",
+      "sublabel": "checkout / sync / revert",
+      "width": 120
+    },
+    {
+      "id": "t_notify",
+      "lane": "tool",
+      "col": 5,
+      "type": "frontend",
+      "label": "結果を通知",
+      "sublabel": "失敗はメッセージそのまま表示",
+      "width": 120
+    }
+  ],
+  "edges": [
+    {
+      "from": "t_show",
+      "to": "x_status",
+      "label": "表示時に 1 回"
+    },
+    {
+      "from": "x_status",
+      "to": "t_badge2",
+      "variant": "dashed"
+    },
+    {
+      "from": "t_badge2",
+      "to": "u_rclick",
+      "label": "複数階層の選択も OK"
+    },
+    {
+      "from": "u_rclick",
+      "to": "t_precheck"
+    },
+    {
+      "from": "t_precheck",
+      "to": "x_cmd",
+      "label": "実行"
+    },
+    {
+      "from": "x_cmd",
+      "to": "t_notify",
+      "label": "完了 → 状態を再取得",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Perforce バッジ",
+      "items": [
+        "チェックアウト中 / 追加 / 削除 / 古い / 他者ロック / 他者が編集中",
+        "最新のファイルには何も付かない（P4V 準拠）",
+        "「連携状態を更新」で手動再取得"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "安全弁",
+      "items": [
+        "他者がロック中のファイルはチェックアウトできない（灰色）",
+        "他者が編集中なら同時編集の確認、Revert は常に確認",
+        "外部コマンドは裏で実行、UI は止まらない"
+      ]
+    }
+  ]
+}

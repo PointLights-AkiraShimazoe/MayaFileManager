@@ -1,0 +1,137 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MayaFileManager: 起動してフォルダを見る",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "user",
+      "label": "ユーザー"
+    },
+    {
+      "id": "tool",
+      "label": "MayaFileManager"
+    },
+    {
+      "id": "ext",
+      "label": "ファイル / 外部サービス"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "u_start",
+      "lane": "user",
+      "col": 0,
+      "type": "frontend",
+      "label": "ツールを起動",
+      "sublabel": "run_dev / EXE / Maya 内",
+      "width": 120
+    },
+    {
+      "id": "t_restore",
+      "lane": "tool",
+      "col": 1,
+      "type": "frontend",
+      "label": "前回の状態を復元",
+      "sublabel": "エリア・プリセット・パス",
+      "width": 120
+    },
+    {
+      "id": "u_go",
+      "lane": "user",
+      "col": 2,
+      "type": "frontend",
+      "label": "フォルダへ移動",
+      "sublabel": "プリセット・ブックマーク・履歴",
+      "width": 120
+    },
+    {
+      "id": "t_probe",
+      "lane": "tool",
+      "col": 3,
+      "type": "backend",
+      "label": "到達できるか確認",
+      "sublabel": "ネットワーク先でも固まらない",
+      "width": 120
+    },
+    {
+      "id": "x_list",
+      "lane": "ext",
+      "col": 4,
+      "type": "external",
+      "label": "フォルダを読み込む",
+      "sublabel": "裏で列挙（スピナー表示）",
+      "width": 120
+    },
+    {
+      "id": "t_columns",
+      "lane": "tool",
+      "col": 4,
+      "type": "frontend",
+      "label": "カラムを表示",
+      "sublabel": "クリックで右へ掘る",
+      "width": 120
+    },
+    {
+      "id": "t_badge",
+      "lane": "tool",
+      "col": 5,
+      "type": "frontend",
+      "label": "連携バッジを表示",
+      "sublabel": "Git / SVN / Perforce",
+      "width": 120
+    }
+  ],
+  "edges": [
+    {
+      "from": "u_start",
+      "to": "t_restore"
+    },
+    {
+      "from": "t_restore",
+      "to": "u_go",
+      "label": "前回のフォルダを開く"
+    },
+    {
+      "from": "u_go",
+      "to": "t_probe"
+    },
+    {
+      "from": "t_probe",
+      "to": "x_list",
+      "label": "到達可"
+    },
+    {
+      "from": "x_list",
+      "to": "t_columns",
+      "variant": "dashed"
+    },
+    {
+      "from": "t_columns",
+      "to": "t_badge",
+      "label": "表示時に 1 回だけ状態取得"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "移動の手段",
+      "items": [
+        "プリセット行（エリアごとに独立、🔗で連動）",
+        "ブックマーク / 履歴パネル、パス欄、◀ 戻る",
+        "フォルダのダブルクリック・ショートカット（.lnk）も追従"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "固まらない設計",
+      "items": [
+        "到達性は裏で確認し、応答の無いパスは開かない",
+        "読み込み中はカラムごとにスピナー",
+        "切断されたドライブやリンク先には触らない"
+      ]
+    }
+  ]
+}

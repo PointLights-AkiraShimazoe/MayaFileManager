@@ -1,0 +1,147 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MayaFileManager: ファイルを Maya / Blender へ送る",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "user",
+      "label": "ユーザー"
+    },
+    {
+      "id": "tool",
+      "label": "MayaFileManager"
+    },
+    {
+      "id": "dcc",
+      "label": "Maya / Blender"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "u_pick",
+      "lane": "user",
+      "col": 0,
+      "type": "frontend",
+      "label": "送り先を選ぶ",
+      "sublabel": "ヘッダで Maya / Blender",
+      "width": 120
+    },
+    {
+      "id": "u_click",
+      "lane": "user",
+      "col": 1,
+      "type": "frontend",
+      "label": "クリック / D&D",
+      "sublabel": "右クリックのメニューも",
+      "width": 120
+    },
+    {
+      "id": "t_route",
+      "lane": "tool",
+      "col": 2,
+      "type": "backend",
+      "label": "送り先を決める",
+      "sublabel": ".ma/.mb→Maya .blend→Blender",
+      "width": 120
+    },
+    {
+      "id": "t_check",
+      "lane": "tool",
+      "col": 3,
+      "type": "backend",
+      "label": "接続を確認",
+      "sublabel": "未接続なら起動を提案",
+      "width": 120
+    },
+    {
+      "id": "t_send",
+      "lane": "tool",
+      "col": 4,
+      "type": "backend",
+      "label": "コマンドを送信",
+      "sublabel": "UI は止まらない（裏で送信）",
+      "width": 120
+    },
+    {
+      "id": "d_run",
+      "lane": "dcc",
+      "col": 5,
+      "type": "external",
+      "label": "開く / 取り込む",
+      "sublabel": "参照・保存・書き出しも",
+      "width": 120
+    },
+    {
+      "id": "t_result",
+      "lane": "tool",
+      "col": 5,
+      "type": "frontend",
+      "label": "結果を表示",
+      "sublabel": "エラーは DCC 側とダイアログ",
+      "width": 120
+    }
+  ],
+  "edges": [
+    {
+      "from": "u_pick",
+      "to": "u_click"
+    },
+    {
+      "from": "u_click",
+      "to": "t_route",
+      "label": "動作: 開く / インポート / 参照"
+    },
+    {
+      "from": "t_route",
+      "to": "t_check"
+    },
+    {
+      "from": "t_check",
+      "to": "t_send",
+      "label": "接続中の DCC へ"
+    },
+    {
+      "from": "t_send",
+      "to": "d_run",
+      "label": "1 行の Python"
+    },
+    {
+      "from": "d_run",
+      "to": "t_result",
+      "label": "応答（成功 / エラー）",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "入口は 3 つ",
+      "items": [
+        "クリック動作（ヘッダ右上のコンボで 開く / インポート / リファレンス / 何もしない）",
+        "右クリック: Maya で開く・インポート・リファレンス、シーン保存・選択の書き出し",
+        "D&D: Maya / Blender のウィンドウへ落とすと D&D 動作を実行"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "送り先のルール",
+      "items": [
+        ".ma / .mb は常に Maya、.blend は常に Blender",
+        "fbx / obj / abc / usd はヘッダのスイッチで選んだ DCC",
+        "D&D は落とした先のアプリで決まる"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "つながらない時",
+      "items": [
+        "「起動」から起動した DCC か、ツールメニューで連携をインストールした DCC だけ接続できる",
+        "接続一覧（⟳）で接続先を選び直せる",
+        "エラーは Maya / Blender 側のダイアログにも出る"
+      ]
+    }
+  ]
+}
