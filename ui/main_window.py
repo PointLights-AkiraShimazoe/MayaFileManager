@@ -327,6 +327,13 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         self._bl_conn_combo.currentIndexChanged.connect(
             lambda i: self._on_conn_changed(i, "blender"))
         QTimer.singleShot(1000, self._refresh_connections)
+        # r119: Maya 連携は «セットアップの一部» なので、メニューを探させずに
+        # 初回起動で聞く。ここで聞くのは «Maya が起動していなくても»
+        # 実在するバージョンフォルダから場所を決められるから。
+        # 後で Maya が繋がった時に食い違えば
+        # _check_bridge_location_against_maya() が拾う。
+        if not self._inside_maya:
+            QTimer.singleShot(3500, self._maybe_offer_maya_bridge)
 
         # クリック動作 / D&D動作
         action_map = ["open", "import", "reference", "none"]

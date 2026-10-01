@@ -178,12 +178,11 @@ class MainWindowDccMixin:
 
         def _run():
             items = []
+            reported = []          # Maya が答えた userAppDir（UI 側で照合）
             try:
                 from core.maya_bridge import (bridge_log, usersetup_path,
                                               is_usersetup_installed,
-                                              APP_DIR_CODE, parse_app_dir,
-                                              set_maya_app_dir,
-                                              app_dir_confirmed as _app_dir_known)
+                                              APP_DIR_CODE, parse_app_dir)
                 ports = scan_open_ports()
                 try:
                     bridge_log("scan: open ports=%r / userSetup=%r installed=%s"
@@ -214,13 +213,14 @@ class MainWindowDccMixin:
                             # 聞く。既知フォルダ（OneDrive 等）が Maya の
                             # userAppDir と一致しない環境があり、推測で書くと
                             # «入れたのに効かない» になる。一度聞けば足りる。
-                            if not _app_dir_known():
+                            if not reported:
                                 try:
                                     ok2, rep2 = MayaBridge(port).send_python(
                                         APP_DIR_CODE, timeout=1.0)
                                     d = parse_app_dir(rep2) if ok2 else None
                                     if d:
-                                        set_maya_app_dir(d, confirmed=True)
+                                        # 照合は UI スレッドで（ダイアログを出し得る）
+                                        reported.append(d)
                                 except Exception as _e:
                                     _swallow(_e, "ui/main_window_dcc.py _run(appdir)")
                     except Exception:
@@ -240,6 +240,11 @@ class MainWindowDccMixin:
             finally:
                 self._scan_running["maya"] = False
             self._bridge_notify.conn_list.emit(items, "maya")
+            if reported:
+                # ワーカーからは UI を触らない。次のイベントループで照合する。
+                d0 = reported[0]
+                QTimer.singleShot(
+                    0, lambda d=d0: self._check_bridge_location_against_maya(d))
 
         threading.Thread(target=_run, daemon=True,
                          name="mfm-maya-scan").start()
@@ -316,9 +321,9 @@ class MainWindowDccMixin:
                     "The bridge port opens when Maya starts. For a Maya that\n"
                     "was already running, use Tools > \u201cConnect a running\n"
                     "Maya now...\u201d to connect without restarting it."))
-        elif dcc != "blender":
-            combo.setToolTip("")
         else:
+            if dcc != "blender":
+                combo.setToolTip("")
             combo.setEnabled(True)
             pids = {it[0]: it[3] for it in items if it[3]}
             if dcc == "blender":
@@ -468,111 +473,132 @@ class MainWindowDccMixin:
         threading.Thread(target=_watch, daemon=True,
                          name="mfm-freeze-watchdog").start()
 
-    def _install_maya_bridge(self):
-        """userSetup.py に連携スニペットを書き込み、ショートカット等から
-        起動したMayaでも自動で commandPort が開くようにする。
+    BRIDGE_PROMPT_KEY = "maya_bridge_prompt"      # "" / "later" / "never" / "done"
+    # 場所の食い違いを聞くのは 1 セッションに 1 回だけ（クラス属性＝既定値）
+    _bridge_mismatch_asked = False
 
-        r119: «書き込み先» を必ず見せて、違えば変更できるようにした。
-        Windows の «ドキュメント» が OneDrive 等へリダイレクトされていても
-        Maya がそこを使うとは限らず、推測で書くと «入れたのに効かない»
-        （2026-10 実機で発生）。接続中の Maya があればその場で聞いて確定する。"""
-        from core.maya_bridge import (install_usersetup, usersetup_path,
-                                      is_usersetup_installed, maya_app_dir,
-                                      set_maya_app_dir, app_dir_confirmed,
-                                      app_dir_source,
-                                      APP_DIR_CODE, parse_app_dir, MayaBridge)
-        # 接続中の Maya があれば «本人に» 聞く（最も確実）
-        if not app_dir_confirmed() and getattr(self._bridge, "port", None):
-            try:
-                ok, reply = self._bridge.send_python(APP_DIR_CODE, timeout=2.0)
-                d = parse_app_dir(reply) if ok else None
-                if d:
-                    set_maya_app_dir(d, confirmed=True)
-            except Exception as _e:
-                _swallow(_e, "ui/main_window_dcc.py _install_maya_bridge(ask)")
+    def _maybe_offer_maya_bridge(self):
+        """未導入なら «こちらから» 連携の導入を持ちかける（r119）。
 
-        while True:
-            path = usersetup_path()
-            src = {
-                "confirmed": tr("接続中の Maya に確認済み",
-                                "confirmed by a running Maya"),
-                "manual": tr("手動で指定した場所", "chosen by you"),
-                "env": tr("環境変数 MAYA_APP_DIR の値（Maya 側と一致するかは未確認）",
-                          "from MAYA_APP_DIR (not verified against Maya)"),
-                "found": tr("実在するフォルダから推定（Maya が未接続のため）",
-                            "inferred from an existing folder (no Maya connected)"),
-                "guess": tr("推測（Maya が未接続で、該当フォルダも未作成）",
-                            "a guess (no Maya connected, folder not created yet)"),
-            }.get(app_dir_source(), "")
-            # MAYA_APP_DIR は Maya.env や起動バッチで «Maya 側にだけ» 設定
-            # されていることがあり、Manager から見えている値が正しいとは
-            # 限らない。確認できていない時は «聞けば確実» と伝える。
-            hint = ("" if app_dir_source() == "confirmed" else tr(
-                "　※ Maya を 1 つ起動した状態でもう一度実行すると、\n"
-                "　　 Maya 本人が答えた場所を使います（最も確実）。\n\n",
-                "　* Start one Maya and run this again to use the location\n"
-                "　　 Maya itself reports (most reliable).\n\n"))
-            msg = tr(
-                "全てのMayaが起動時に連携ポートを自動で開くように、\n"
-                "以下のファイルへスニペットを書き込みます。\n\n"
-                "　%s\n"
-                "　（この場所は %s）\n\n"
-                "これにより、マネージャー以外から起動したMayaも\n"
-                "「接続:」リストに表示されるようになります。\n"
-                "（次回のMaya起動から有効。作業中のMayaは\n"
-                "　「起動中の Maya を今すぐ接続...」で繋げます）\n\n"
-                "%s"
-                "この場所で良いですか？",
-                "Writes a snippet to the file below so every Maya opens a\n"
-                "bridge port automatically at startup.\n\n"
-                "　%s\n"
-                "　(this location is %s)\n\n"
-                "Mayas launched outside this manager will then appear in\n"
-                "the Connect list.\n"
-                "(Takes effect from the next Maya launch; for a Maya that is\n"
-                "　already running, use \u201cConnect a running Maya now...\u201d)\n\n"
-                "%s"
-                "Use this location?") % (path, src, hint)
+        従来はツールメニューの奥にあり、存在に気付けなかった。
+        「入れたつもりがない」まま «起動済みの Maya が出ない» に悩む経路を
+        断つのが目的。«今後聞かない» を選べば二度と出さない。"""
+        try:
+            from core.maya_bridge import is_usersetup_installed
             if is_usersetup_installed():
-                msg = tr("（既にインストール済みです。最新の内容に更新します）\n\n",
-                         "(Already installed; will update to the latest snippet)\n\n"
-                         ) + msg
+                return
+            if str(self._sm.get(self.BRIDGE_PROMPT_KEY, "") or "") in (
+                    "never", "done"):
+                return
             box = QMessageBox(self)
-            box.setWindowTitle(tr("Maya連携のインストール", "Install Maya Bridge"))
-            box.setText(msg)
-            yes = box.addButton(tr("書き込む", "Write"), QMessageBox.AcceptRole)
-            other = box.addButton(tr("別の場所を指定...", "Choose another location..."),
-                                  QMessageBox.ActionRole)
-            box.addButton(tr("キャンセル", "Cancel"), QMessageBox.RejectRole)
+            box.setWindowTitle(tr("Maya連携のセットアップ", "Set Up Maya Bridge"))
+            box.setText(tr(
+                "Maya 連携がまだ設定されていません。\n\n"
+                "設定すると、マネージャー以外から起動した Maya も\n"
+                "「接続:」リストに出て、ファイルを送れるようになります。\n\n"
+                "今すぐ設定しますか？",
+                "The Maya bridge is not set up yet.\n\n"
+                "Once it is, Mayas launched outside this manager also appear\n"
+                "in the Connect list so you can send files to them.\n\n"
+                "Set it up now?"))
+            yes = box.addButton(tr("設定する", "Set up"), QMessageBox.AcceptRole)
+            later = box.addButton(tr("あとで", "Later"), QMessageBox.RejectRole)
+            box.addButton(tr("今後聞かない", "Don't ask again"),
+                          QMessageBox.DestructiveRole)
             box.exec_() if hasattr(box, "exec_") else box.exec()
             clicked = box.clickedButton()
-            if clicked is other:
-                # Maya の «ユーザー設定フォルダ»（中に 2026 等のフォルダがある階層）
-                d = QFileDialog.getExistingDirectory(
-                    self,
-                    tr("Maya のユーザー設定フォルダを選択（中に 2026 等があります）",
-                       "Select Maya's user application directory (it contains 2026, ...)"),
-                    maya_app_dir())
-                if d:
-                    set_maya_app_dir(d)
-                continue
-            if clicked is not yes:
-                return
-            break
+            if clicked is yes:
+                self._sm.set(self.BRIDGE_PROMPT_KEY, "later")
+                self._install_maya_bridge()
+            elif clicked is later:
+                self._sm.set(self.BRIDGE_PROMPT_KEY, "later")
+            else:
+                self._sm.set(self.BRIDGE_PROMPT_KEY, "never")
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _maybe_offer_maya_bridge")
 
-        try:
-            p = install_usersetup()
+    def _install_maya_bridge(self):
+        """連携スニペットの書き込み（r119: 場所と対象を選ばせる）。
+
+        セットアップ時に Maya が起動していないことの方が多いので、
+        «Maya に聞く» に頼らず «実在するバージョンフォルダ» で決める。
+        後で Maya が繋がった時の食い違いは
+        _check_bridge_location_against_maya() が拾う。"""
+        from ui.maya_bridge_dialog import MayaBridgeDialog
+        from core.maya_bridge import install_usersetup
+        dlg = MayaBridgeDialog(self)
+        ret = dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+        if not ret:
+            return
+        targets = dlg.selected_targets()
+        if not targets:
             QMessageBox.information(
-                self, tr("完了", "Done"),
-                tr("インストールしました:\n%s\n\n"
-                   "次回以降に起動したMayaが自動で接続可能になります。\n"
-                   "今 開いているMayaは「起動中の Maya を今すぐ接続...」で繋げます。",
-                   "Installed:\n%s\n\nMayas launched from now on will be "
-                   "connectable automatically.\nFor a Maya that is already "
-                   "running, use \u201cConnect a running Maya now...\u201d.") % p)
-        except Exception as e:
+                self, tr("Maya連携", "Maya Bridge"),
+                tr("書き込み先が選ばれていません。",
+                   "No install target was selected."))
+            return
+        written, failed = [], []
+        for ver in targets:
+            try:
+                written.append(install_usersetup(ver))
+            except Exception as e:
+                failed.append("%s: %s" % (ver or tr("共通", "all"), e))
+        if written:
+            self._sm.set(self.BRIDGE_PROMPT_KEY, "done")
+        if failed:
             QMessageBox.critical(
-                self, tr("インストール失敗", "Install Failed"), str(e))
+                self, tr("インストール失敗", "Install Failed"),
+                "\n".join(failed))
+            return
+        QMessageBox.information(
+            self, tr("完了", "Done"),
+            tr("インストールしました:\n%s\n\n"
+               "次回以降に起動した Maya が自動で接続可能になります。\n"
+               "今 開いている Maya は「起動中の Maya を今すぐ接続...」で繋げます。",
+               "Installed:\n%s\n\nMayas launched from now on will be "
+               "connectable automatically.\nFor a Maya that is already "
+               "running, use \u201cConnect a running Maya now...\u201d.")
+            % "\n".join(written))
+
+    def _check_bridge_location_against_maya(self, reported_dir: str):
+        """Maya が繋がった時、«連携を入れた場所» と Maya の設定フォルダが
+        食い違っていないか確かめる（r119）。
+
+        セットアップは Maya 未起動で行われることが多く、その時点では
+        場所を確定できない。食い違っていれば «効かない連携» が残るので、
+        繋がった今こそ気付かせる。聞くのは 1 回だけ。"""
+        from core.maya_bridge import (installed_targets, maya_app_dir,
+                                      set_maya_app_dir, is_usersetup_installed)
+        try:
+            if not reported_dir or self._bridge_mismatch_asked:
+                return
+            before = maya_app_dir()
+            if os.path.normcase(os.path.normpath(before)) == \
+                    os.path.normcase(os.path.normpath(reported_dir)):
+                return
+            had = bool(installed_targets())      # 前の場所に入っていたか
+            set_maya_app_dir(reported_dir, confirmed=True)
+            if is_usersetup_installed(None) or installed_targets():
+                return                           # 新しい場所にも既に入っている
+            self._bridge_mismatch_asked = True
+            if not had:
+                return                           # そもそも未導入なら初回案内に任せる
+            ret = QMessageBox.question(
+                self, tr("Maya連携の場所", "Maya Bridge Location"),
+                tr("接続した Maya は別の設定フォルダを使っています。\n\n"
+                   "　連携を入れた場所: %s\n"
+                   "　この Maya の場所: %s\n\n"
+                   "このままでは連携が効きません。こちらにも入れますか？",
+                   "The Maya that just connected uses a different user folder.\n\n"
+                   "　Bridge installed in: %s\n"
+                   "　This Maya uses:      %s\n\n"
+                   "The bridge will not work as is. Install it there too?")
+                % (before, reported_dir),
+                QMessageBox.Yes | QMessageBox.No)
+            if ret == QMessageBox.Yes:
+                self._install_maya_bridge()
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _check_bridge_location_against_maya")
 
     def _connect_running_maya(self):
         """«既に起動している» Maya を、再起動せずに接続リストへ出す（r119）。

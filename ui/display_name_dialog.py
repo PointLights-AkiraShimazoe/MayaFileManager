@@ -66,6 +66,24 @@ class DisplayNameDialog(QDialog):
         lay.setSpacing(8)
 
         lay.addWidget(QLabel(self._dir))
+
+        # ── カラムタイトル（r119）────────────────────────────────────
+        # 空なら出さない。入れるとカラム下部のバーへ «左揃えで» 出る。
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        tl = QLabel(tr("カラムタイトル", "Column title"))
+        tl.setMinimumWidth(96)
+        title_row.addWidget(tl, 0)
+        self._title_edit = QLineEdit()
+        self._title_edit.setPlaceholderText(
+            tr("（空欄＝タイトルを表示しない）", "(empty = no title shown)"))
+        self._title_edit.setToolTip(
+            tr("このカラムの見出し。入力するとカラム下部へ左揃えで表示します。",
+               "A heading for this column, shown left-aligned at the bottom "
+               "of the column."))
+        title_row.addWidget(self._title_edit, 1)
+        lay.addLayout(title_row)
+
         hint = QLabel(tr(
             "右を空にすると実際の名前で表示します。"
             "ファイルのコピーやパスの扱いは常に実際の名前のままです。",
@@ -133,6 +151,7 @@ class DisplayNameDialog(QDialog):
         names = data.get("names", {}) if isinstance(data, dict) else {}
         self._enabled_cb.setChecked(bool(data.get("enabled", True))
                                     if data else True)
+        self._title_edit.setText((data.get("title", "") or "") if data else "")
         self._del_btn.setEnabled(display_names.has_file(self._dir))
         for real in display_names.subdirectories(self._dir):
             row = QHBoxLayout()
@@ -156,9 +175,25 @@ class DisplayNameDialog(QDialog):
     def collect(self) -> dict:
         return {real: ed.text().strip() for real, ed in self._rows}
 
+    def column_title(self) -> str:
+        return self._title_edit.text().strip()
+
     def _save(self):
-        display_names.save(self._dir, self.collect(),
-                           enabled=self._enabled_cb.isChecked())
+        ok = display_names.save(self._dir, self.collect(),
+                                enabled=self._enabled_cb.isChecked(),
+                                title=self.column_title())
+        if not ok and (self.collect() or self.column_title()):
+            # r119: 以前はここが黙って失敗し «保存したのに戻る» になっていた
+            QMessageBox.warning(
+                self, tr("保存できません", "Could not Save"),
+                tr("表示名の設定を保存できませんでした:\n%s\n\n"
+                   "書き込み権限や、ファイルが読み取り専用になっていないかを"
+                   "確認してください。",
+                   "Could not save the display-name settings:\n%s\n\n"
+                   "Check write permissions and whether the file is "
+                   "read-only.") % os.path.join(self._dir,
+                                                display_names.FILE_NAME))
+            return
         self.changed.emit(self._dir)
         self.accept()
 

@@ -194,4 +194,65 @@ finally:
 print("falls back to the candidate that actually looks like Maya's dir: OK")
 
 
+# ---------------------------------------------------------------------------
+# r119: 全バージョン共通 / バージョン別 を選べること
+#   セットアップ時に Maya は起動していないことの方が多いので、
+#   «実在するバージョンフォルダ» を見て対象を出す。
+# ---------------------------------------------------------------------------
+_mb._app_dir_confirmed = None
+_mb._app_dir_override = None
+os.environ.pop("MAYA_APP_DIR", None)
+appdir = tempfile.mkdtemp(prefix="mfm_appdir2_")
+for v in ("2024", "2026", "2025", "notaversion", "1999"):
+    os.makedirs(os.path.join(appdir, v))
+os.makedirs(os.path.join(appdir, "scripts"))
+_mb.set_maya_app_dir(appdir, confirmed=True)
+
+assert _mb.installed_versions() == ["2026", "2025", "2024"], _mb.installed_versions()
+common = _mb.usersetup_path()
+per = _mb.usersetup_path("2026")
+assert common == os.path.join(appdir, "scripts", "userSetup.py"), common
+assert per == os.path.join(appdir, "2026", "scripts", "userSetup.py"), per
+assert common != per
+print("version folders are listed and each has its own userSetup path: OK")
+
+assert not _mb.is_usersetup_installed() and not _mb.is_usersetup_installed("2026")
+assert _mb.installed_targets() == []
+_mb.install_usersetup("2026")
+assert _mb.is_usersetup_installed("2026")
+assert not _mb.is_usersetup_installed(), "バージョン別が共通まで «済み» にしている"
+assert _mb.installed_targets() == ["2026"], _mb.installed_targets()
+_mb.install_usersetup()
+assert _mb.installed_targets() == [None, "2026"], _mb.installed_targets()
+for t in (None, "2026"):
+    with open(_mb.usersetup_path(t), encoding="utf-8") as f:
+        body = f.read()
+    assert "_swallow" not in body
+    ast.parse(body)
+print("install targets are independent and both write a clean snippet: OK")
+
+# 対象を選ぶダイアログ: 共通＋実在バージョンが並び、既定は «共通» だけ
+from ui.maya_bridge_dialog import MayaBridgeDialog
+_mb._app_dir_confirmed = None
+_mb.set_maya_app_dir(appdir, confirmed=True)
+fresh = tempfile.mkdtemp(prefix="mfm_appdir3_")
+os.makedirs(os.path.join(fresh, "2027"))
+_mb._app_dir_confirmed = None
+_mb.set_maya_app_dir(fresh, confirmed=True)
+d = MayaBridgeDialog()
+vers = [v for v, _cb in d._targets]
+assert vers == [None, "2027"], vers
+assert d.selected_targets() == [None], d.selected_targets()
+# バージョン別だけを選べる
+d._targets[0][1].setChecked(False)
+d._targets[1][1].setChecked(True)
+assert d.selected_targets() == ["2027"], d.selected_targets()
+# 設定済みのものは既定でチェックしない（勝手に上書きしない）
+_mb.install_usersetup(None)
+d2 = MayaBridgeDialog()
+assert d2.selected_targets() == [], d2.selected_targets()
+d.deleteLater(); d2.deleteLater()
+print("dialog offers all-versions + each version and never pre-checks "
+      "what is already installed: OK")
+
 finish()

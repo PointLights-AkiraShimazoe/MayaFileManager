@@ -33,6 +33,26 @@ def s1():
     assert w._menubar.parent() is w._header_widget and w._menubar.actions(), "menubar lost"
     w._on_conn_list([], "maya"); w._on_conn_list([], "blender")     # コンボが生存
     assert w._conn_combo.count() == 1 and w._bl_conn_combo.count() == 1
+    assert not w._conn_combo.isEnabled(), "接続ゼロなのにコンボが有効"
+
+    # r119: «コンボに実際に入ったか» まで見る。
+    # 以前は emit された items しか検証しておらず、_on_conn_list の中で
+    # 分岐を壊した（if/elif/else の付け替え）回帰を素通りさせた。
+    # 症状は «Maya が一切接続リストに出ない» という全損。
+    for dcc, combo in (("maya", w._conn_combo), ("blender", w._bl_conn_combo)):
+        w._on_conn_list([(20261, "%s A (:20261)" % dcc, True, 111, dcc),
+                         (20262, "%s B (:20262)" % dcc, True, 222, dcc)], dcc)
+        assert combo.count() == 2, (dcc, combo.count())
+        assert combo.isEnabled(), "%s: 接続があるのにコンボが無効" % dcc
+        assert combo.itemData(0) == 20261 and combo.itemData(1) == 20262, dcc
+        assert "A (:20261)" in combo.itemText(0), combo.itemText(0)
+        if dcc == "maya":   # 案内は Maya 側だけ（Blender は元から別の説明を持つ）
+            assert not combo.toolTip(), "接続があるのに案内が残っている"
+        # 空に戻すと «なし» 1 件・無効・案内あり
+        w._on_conn_list([], dcc)
+        assert combo.count() == 1 and not combo.isEnabled(), dcc
+    assert w._conn_combo.toolTip(), "接続ゼロの時の案内が出ていない"
+    print("connection combo is actually populated / emptied: OK")
     # r78: 識別済みの接続は無応答（ビジー）でも一覧に残り、ポートが閉じたら消える
     import core.maya_bridge as _mb
     import ui.main_window as _mw

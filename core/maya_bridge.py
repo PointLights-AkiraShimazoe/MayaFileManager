@@ -315,15 +315,41 @@ def maya_app_dir():
             else os.path.join(os.path.expanduser("~"), "Documents", "maya"))
 
 
-def usersetup_path():
-    """全Mayaバージョン共通の userSetup.py のパス（<maya app dir>/scripts）。"""
+def usersetup_path(version=None):
+    """userSetup.py のパス。
+
+    version=None … **全バージョン共通**（`<maya app dir>/scripts/userSetup.py`）
+    version="2026" … そのバージョン専用
+      （`<maya app dir>/2026/scripts/userSetup.py`）
+
+    Maya は MAYA_SCRIPT_PATH 上の userSetup.py を «どちらも» 実行するので、
+    どちらに置いても効く。共通は 1 回で全バージョンに効くかわりに、
+    古いバージョンにも影響する。どちらが良いかは環境次第なので選ばせる。"""
     import os
-    return os.path.join(maya_app_dir(), "scripts", "userSetup.py")
+    base = maya_app_dir()
+    if version:
+        return os.path.join(base, str(version), "scripts", "userSetup.py")
+    return os.path.join(base, "scripts", "userSetup.py")
 
 
-def is_usersetup_installed() -> bool:
+def installed_versions():
+    """Maya の設定フォルダ直下にあるバージョンフォルダ（新しい順）。"""
     import os
-    p = usersetup_path()
+    out = []
+    try:
+        for name in os.listdir(maya_app_dir()):
+            if len(name) == 4 and name.isdigit() and 2015 <= int(name) <= 2039:
+                if os.path.isdir(os.path.join(maya_app_dir(), name)):
+                    out.append(name)
+    except OSError as _e:
+        _swallow(_e, "core/maya_bridge.py installed_versions")
+    out.sort(reverse=True)
+    return out
+
+
+def is_usersetup_installed(version=None) -> bool:
+    import os
+    p = usersetup_path(version)
     if not os.path.isfile(p):
         return False
     try:
@@ -333,11 +359,22 @@ def is_usersetup_installed() -> bool:
         return False
 
 
-def install_usersetup() -> str:
+def installed_targets():
+    """連携が入っている場所の一覧。[None(=共通), "2026", ...]。"""
+    out = []
+    if is_usersetup_installed(None):
+        out.append(None)
+    for v in installed_versions():
+        if is_usersetup_installed(v):
+            out.append(v)
+    return out
+
+
+def install_usersetup(version=None) -> str:
     """連携スニペットを userSetup.py へ追記（既存ブロックは置換）。
-    書き込んだファイルのパスを返す。"""
+    書き込んだファイルのパスを返す。version=None で全バージョン共通。"""
     import os
-    p = usersetup_path()
+    p = usersetup_path(version)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     text = ""
     if os.path.isfile(p):

@@ -164,10 +164,82 @@ def s1():
     assert hit, "ファイルがあるのにフッタが出ない"
     sw = getattr(hit[0], "_mfm_dn_switch", None)
     assert sw is not None and sw.isChecked(), "スイッチが有効状態でない"
-    sw.setChecked(False)
+    # r119: «実際にクリックする»。以前は setChecked でしか検証しておらず、
+    # クリック経路（保存の失敗で元に戻る）を取りこぼしていた。
+    QTest.mouseClick(sw, Qt.LeftButton)
     _settle(300)
-    assert not dn.is_enabled(root), "スイッチで無効化されない"
-    print("column footer appears only when the file exists: OK")
+    assert not sw.isChecked(), "クリックでスイッチが切り替わらない"
+    assert not dn.is_enabled(root), "スイッチで無効化されない（保存が効いていない）"
+    QTest.mouseClick(sw, Qt.LeftButton)
+    _settle(300)
+    assert sw.isChecked() and dn.is_enabled(root), "クリックで戻せない"
+    print("column footer appears only when the file exists, and its switch "
+          "survives a real click: OK")
+
+    # ── 6) 既存ファイルへの «2 回目以降» の保存（r119 の本丸）───────
+    # Windows では隠し属性の付いた既存ファイルを open(..., "w") できず
+    # （WinError 5）、2 回目以降の保存が黙って失敗していた。
+    # その結果スイッチが毎回元に戻り «押せない» ように見えた。
+    for i in range(3):
+        assert dn.save(root, {"CH002_cur": "改訂%d" % i}), "%d 回目の保存が失敗" % i
+        assert dn.load(root)["names"]["CH002_cur"] == "改訂%d" % i
+    assert dn.set_enabled(root, False) and not dn.is_enabled(root)
+    assert dn.set_enabled(root, True) and dn.is_enabled(root)
+    print("saving over an existing (hidden) file keeps working: OK")
+
+    # 保存は «隠し属性を外してから書き、書いたら付け直す»
+    calls = []
+    orig = dn._set_hidden
+    dn._set_hidden = lambda path, on: calls.append(bool(on))
+    try:
+        dn.save(root, {"CH002_cur": "属性確認"})
+    finally:
+        dn._set_hidden = orig
+    assert calls and calls[0] is False and calls[-1] is True, calls
+    print("save unhides before writing and re-hides after: OK")
+
+    # ── 7) カラムタイトル ──────────────────────────────────────────
+    assert dn.title(root) == "", dn.title(root)
+    assert dn.save(root, {"CH002_cur": "キャラA"}, title="衣装バリエーション")
+    assert dn.title(root) == "衣装バリエーション"
+    # 見出しだけでもファイルは残る（表示名が空でも消さない）
+    assert dn.save(root, {}, title="見出しのみ")
+    assert dn.has_file(root) and dn.title(root) == "見出しのみ"
+    # 見出しも表示名も空なら削除
+    assert dn.save(root, {}, title="")
+    assert not dn.has_file(root), "両方空なのにファイルが残っている"
+    print("column title round-trips and keeps the file alive on its own: OK")
+
+    # ── 8) フッタの並び: 見出しは左、操作ボタンは右 ────────────────
+    dn.save(root, {"CH002_cur": "キャラA"}, title="衣装バリエーション")
+    cv._refresh_display_names()
+    _settle(400)
+    hit = [v for v in cv._live_columns()
+           if getattr(v, "_mfm_dn_footer", None) is not None]
+    assert hit, "フッタが出ない"
+    v = hit[0]
+    lb = getattr(v, "_mfm_dn_title", None)
+    sw = getattr(v, "_mfm_dn_switch", None)
+    assert lb is not None and lb.text() == "衣装バリエーション"
+    assert sw is not None
+    ft = v._mfm_dn_footer
+    cfgs = [w for w in ft.findChildren(type(sw)) if w is not sw]
+    assert cfgs, "歯車ボタンが無い"
+    cfg = cfgs[0]
+    assert lb.x() < sw.x() and sw.x() < cfg.x(), (lb.x(), sw.x(), cfg.x())
+    # 右詰め: 歯車の右端がフッタ右端の近く、見出しは左端の近く
+    assert ft.width() - (cfg.x() + cfg.width()) <= 8, "歯車が右詰めになっていない"
+    assert lb.x() <= 8, "見出しが左詰めになっていない"
+    # 見出しが無ければラベルも作らない
+    dn.save(root, {"CH002_cur": "キャラA"}, title="")
+    cv._refresh_display_names()
+    _settle(400)
+    hit = [w for w in cv._live_columns()
+           if getattr(w, "_mfm_dn_footer", None) is not None]
+    assert hit and getattr(hit[0], "_mfm_dn_title", None) is None, \
+        "見出しが空なのにラベルが出ている"
+    print("footer lays out title left / buttons right, and hides an empty "
+          "title: OK")
     finish(True)
 
 

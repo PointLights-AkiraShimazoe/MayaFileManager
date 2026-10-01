@@ -13,7 +13,7 @@ from core.compat import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QComboBox, QLineEdit, QToolButton,
     QColumnView, QListView,
-    QFrame, QAbstractItemView, QSlider,
+    QFrame, QAbstractItemView, QSlider, QSizePolicy,
     QMenu, QInputDialog, QStyle, QModelIndex, QSize, QRect, QPixmap, QPainter, QColor, QFileInfo, QUrl, QMimeData, QPoint,
     QFontMetrics, QTimer, QDrag, QCursor,
 )
@@ -666,8 +666,16 @@ class CappedColumnView(QColumnView):
                 self._integrations().request_status(folder_path)
         except Exception as _e:
             _swallow(_e, "ui/browser_column_view.py:676 createColumn")
+        # r119: このフォルダの表示モードを復元する（カラム毎に記憶）。
+        # ヘッダより先にやると表示ボタンの見た目が合わないので、ヘッダの後。
         # カラム上部に「このカラムだけに効く」フィルタ／ソートのヘッダを設置
         self._build_column_header(view, folder_path)
+        try:
+            saved = self.saved_view_mode(folder_path)
+            if saved == "thumb":
+                self._set_column_view_mode(view, "thumb")
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py createColumn(view mode)")
         # 右端のリサイズハンドル（幅変更・ダブルクリックで自動調整）
         view._mfm_resize_handle = _ColumnResizeHandle(self, view)
         view._mfm_resize_handle.show()
@@ -819,6 +827,51 @@ class CappedColumnView(QColumnView):
         if self._size_popup is None:
             self._size_popup = _ColumnSizePopup(self)
         return self._size_popup
+
+    # ── 表示モード（リスト／サムネイル）のフォルダ別記憶（r119）────────
+    # ユーザー指示: «サムネイル表示の有無もカラム毎に記憶してほしい»。
+    # 同じフォルダを開き直した時・別エリアで開いた時も同じ見え方になる。
+    VIEW_MODE_KEY = "column_view_modes"
+    VIEW_MODE_MAX = 400        # 際限なく溜めない（古いものから捨てる）
+
+    def _mode_key(self, folder_path: str) -> str:
+        return os.path.normcase(os.path.abspath(folder_path or ""))
+
+    def _view_modes(self) -> dict:
+        sm = getattr(self, "_sm_widths", None)
+        if sm is None:
+            return {}
+        try:
+            d = sm.get(self.VIEW_MODE_KEY, None)
+            return dict(d) if isinstance(d, dict) else {}
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py _view_modes")
+            return {}
+
+    def saved_view_mode(self, folder_path: str):
+        """そのフォルダに記憶された表示モード。無ければ None（＝既定のリスト）。"""
+        if not folder_path:
+            return None
+        v = self._view_modes().get(self._mode_key(folder_path))
+        return v if v in ("list", "thumb") else None
+
+    def remember_view_mode(self, folder_path: str, mode: str):
+        """表示モードを覚える。既定（list）は «覚えない» のではなく明示的に
+        保存する — «一度サムネにしてから戻した» を次回も再現するため。"""
+        sm = getattr(self, "_sm_widths", None)
+        if sm is None or not folder_path:
+            return
+        try:
+            d = self._view_modes()
+            k = self._mode_key(folder_path)
+            d.pop(k, None)                 # 入れ直して «最近使った順» にする
+            d[k] = "thumb" if mode == "thumb" else "list"
+            if len(d) > self.VIEW_MODE_MAX:
+                for old_k in list(d.keys())[:len(d) - self.VIEW_MODE_MAX]:
+                    d.pop(old_k, None)
+            sm.set(self.VIEW_MODE_KEY, d)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py remember_view_mode")
 
     def _size_key(self, mode: str) -> str:
         return "column_icon_size_thumb" if mode == "thumb" else "column_icon_size_list"
@@ -1118,6 +1171,7 @@ class CappedColumnView(QColumnView):
         from core import display_names
         if not folder_path or not display_names.has_file(folder_path):
             view._mfm_dn_footer = None
+            view._mfm_dn_switch = None
             return
         ft = QWidget(view)
         ft.setObjectName("mfmDnFooter")
@@ -1127,6 +1181,7 @@ class CappedColumnView(QColumnView):
             "#mfmDnFooter{background:%(plane_flat_header)s;"
             "border-top:1px solid %(hairline)s;}"
             "QLabel{color:%(on_surface_variant)s;font-size:%(label_px)spx;}"
+            "QLabel#mfmColTitle{color:%(on_surface)s;font-weight:%(w_strong)s;}"
             "QToolButton{background:%(fill_subtle)s;color:%(on_surface)s;"
             "border:1px solid %(hairline)s;border-radius:9px;"
             "min-height:16px;max-height:18px;padding:0px 6px;}"
@@ -1136,15 +1191,29 @@ class CappedColumnView(QColumnView):
         row = QHBoxLayout(ft)
         row.setContentsMargins(6, 2, 4, 2)
         row.setSpacing(4)
+        # r119: 見出しは «左詰め»、操作ボタンは «右詰め»。
+        ttl = display_names.title(folder_path)
+        if ttl:
+            lb = QLabel(ttl, ft)
+            lb.setObjectName("mfmColTitle")
+            lb.setToolTip(ttl)
+            # 幅が足りない時は見出しが縮む（ボタンは縮ませない）
+            lb.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            row.addWidget(lb, 1)
+            view._mfm_dn_title = lb
+        else:
+            view._mfm_dn_title = None
+        row.addStretch(1)
         sw = QToolButton(ft)
         sw.setCheckable(True)
         sw.setChecked(display_names.is_enabled(folder_path))
         sw.setText(tr("表示名", "Alias"))
         sw.setToolTip(tr("表示名の有効／無効", "Enable / disable display names"))
-        sw.toggled.connect(
+        # r119: toggled だとプログラムからの setChecked でも発火し、
+        # 再入で «押せていない» ように見えた。利用者の操作だけを拾う。
+        sw.clicked.connect(
             lambda on, d=folder_path: self._on_display_names_toggled(d, on))
         row.addWidget(sw, 0)
-        row.addStretch(1)
         cfg = QToolButton(ft)
         cfg.setText("⚙")
         cfg.setToolTip(tr("表示名の設定を開く", "Open display-name settings"))
@@ -1157,9 +1226,36 @@ class CappedColumnView(QColumnView):
         ft.raise_()
 
     def _on_display_names_toggled(self, folder_path, on):
+        """有効／無効スイッチ。
+
+        r119: 以前はここから _refresh_display_names() を呼び、**押した当の
+        ボタンごとフッタを作り直して** いた。保存が失敗していると作り直しで
+        元の状態に戻るため «押しても反応しない» ように見えた（実際には
+        隠し属性のせいで保存が毎回失敗していた）。
+        フッタは作り直さず、保存できなければ戻した理由を必ず伝える。"""
         from core import display_names
-        display_names.set_enabled(folder_path, bool(on))
-        self._refresh_display_names()
+        if not display_names.set_enabled(folder_path, bool(on)):
+            sw = None
+            for v in self._live_columns():
+                if self._path_for_index(v.rootIndex()) == folder_path:
+                    sw = getattr(v, "_mfm_dn_switch", None)
+                    break
+            if sw is not None:
+                sw.blockSignals(True)
+                sw.setChecked(not bool(on))
+                sw.blockSignals(False)
+            from core.compat import QMessageBox
+            QMessageBox.warning(
+                self.window(), tr("表示名", "Display Names"),
+                tr("表示名の設定を保存できませんでした:\n%s\n\n"
+                   "書き込み権限や、ファイルが読み取り専用になっていないかを"
+                   "確認してください。",
+                   "Could not save the display-name settings:\n%s\n\n"
+                   "Check write permissions and whether the file is "
+                   "read-only.")
+                % os.path.join(folder_path, display_names.FILE_NAME))
+            return
+        self._refresh_display_names(rebuild_footers=False)
 
     def _open_display_name_dialog(self, folder_path):
         from ui.display_name_dialog import DisplayNameDialog
@@ -1167,28 +1263,43 @@ class CappedColumnView(QColumnView):
         dlg.changed.connect(lambda _d: self._refresh_display_names())
         dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
 
-    def _refresh_display_names(self):
-        """対応表を捨てて全カラムを描き直す（フッタの有無も作り直す）。"""
+    def _refresh_display_names(self, rebuild_footers=True):
+        """対応表を捨てて全カラムを描き直す。
+
+        rebuild_footers=False は «フッタのボタン自身から呼ばれた» 場合用。
+        押したボタンを作り直すと、そのクリックの処理中にウィジェットが
+        消えることになる（r119）。
+        """
+        from core import display_names
         m = self.model()
         if hasattr(m, "invalidate_display_names"):
             m.invalidate_display_names()
         for v in self._live_columns():
             try:
-                ft = getattr(v, "_mfm_dn_footer", None)
-                if ft is not None:
-                    ft.setParent(None)
-                    ft.deleteLater()
-                    v._mfm_dn_footer = None
-                self._install_display_name_footer(
-                    v, self._path_for_index(v.rootIndex()))
-                self._reposition_column_header(v)
+                if rebuild_footers:
+                    ft = getattr(v, "_mfm_dn_footer", None)
+                    if ft is not None:
+                        ft.setParent(None)
+                        ft.deleteLater()
+                        v._mfm_dn_footer = None
+                    self._install_display_name_footer(
+                        v, self._path_for_index(v.rootIndex()))
+                    self._reposition_column_header(v)
+                else:
+                    sw = getattr(v, "_mfm_dn_switch", None)
+                    if sw is not None:
+                        d = self._path_for_index(v.rootIndex())
+                        sw.blockSignals(True)
+                        sw.setChecked(display_names.is_enabled(d))
+                        sw.blockSignals(False)
                 v.viewport().update()
             except Exception as _e:
                 _swallow(_e, "ui/browser_column_view.py _refresh_display_names")
 
     def _toggle_view_mode(self, view):
         cur = getattr(view, "_mfm_view_mode", "list")
-        self._set_column_view_mode(view, "thumb" if cur == "list" else "list")
+        self._set_column_view_mode(view, "thumb" if cur == "list" else "list",
+                                   remember=True)
 
     def _toggle_flatten(self, view, on, folder_path=None):
         """このカラムの平坦化トグル。ON時はそのカラムの選択フォルダ（無ければ
@@ -1235,9 +1346,16 @@ class CappedColumnView(QColumnView):
             if was_active:
                 self._request_flat([])
 
-    def _set_column_view_mode(self, view, mode):
-        """そのカラムをリスト／サムネイル表示に切り替える。"""
+    def _set_column_view_mode(self, view, mode, remember=False):
+        """そのカラムをリスト／サムネイル表示に切り替える。
+
+        remember=True で、そのフォルダの表示モードとして記憶する（r119）。
+        «復元して適用する» 時に呼ぶ分では保存しない（同じ値を書き直すだけで
+        «最近使った順» が壊れるため）。"""
         try:
+            if remember:
+                self.remember_view_mode(self._path_for_index(view.rootIndex()),
+                                        mode)
             if mode == "thumb":
                 view._mfm_view_mode = "thumb"
                 view.setViewMode(QListView.IconMode)

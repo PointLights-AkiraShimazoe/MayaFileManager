@@ -14,10 +14,20 @@
 
     {
       "enabled": true,
+      "title": "衣装バリエーション",
       "names": { "CH002_cur": "キャラA 最新", "old_bk": "" }
     }
 
 `names` の値が空文字のエントリは «表示名なし»（実体名をそのまま表示）。
+`title` はカラム下部のバーへ左揃えで出す見出し（空なら出さない）。
+
+Windows の落とし穴（r119）
+--------------------------
+このファイルには **隠し属性** を付ける。隠し属性の付いた既存ファイルを
+`open(path, "w")` で開くと、Windows は **アクセス拒否（WinError 5）** を返す
+（CREATE_ALWAYS が属性不一致で弾かれる）。そのため 2 回目以降の保存が
+«黙って失敗» し、「有効／無効スイッチを押しても何も起きない」になっていた。
+書く前に必ず隠し属性を外し、書いた後で付け直すこと。
 """
 
 import json
@@ -72,6 +82,7 @@ def load(directory: str):
             names = raw.get("names")
             data = {
                 "enabled": bool(raw.get("enabled", True)),
+                "title": str(raw.get("title", "") or "").strip(),
                 "names": {str(a): str(b) for a, b in names.items()}
                 if isinstance(names, dict) else {},
             }
@@ -109,31 +120,50 @@ def is_enabled(directory: str) -> bool:
     return bool(data and data.get("enabled"))
 
 
+def title(directory: str) -> str:
+    """カラム見出し。未設定なら空文字（＝見出しを出さない）。
+
+    有効／無効スイッチの影響は受けない（見出しは «どのフォルダか» の目印で、
+    表示名の置換とは役割が違うため）。"""
+    data = load(directory)
+    return (data or {}).get("title", "") or ""
+
+
 def set_enabled(directory: str, on: bool) -> bool:
     """有効／無効スイッチ。ファイルが無ければ何もしない。"""
     data = load(directory)
     if data is None:
         return False
-    data["enabled"] = bool(on)
-    return save(directory, data["names"], enabled=bool(on))
+    return save(directory, data.get("names") or {}, enabled=bool(on),
+                title=data.get("title", ""))
 
 
-def save(directory: str, names: dict, enabled: bool = True) -> bool:
-    """表示名を書き込む。**中身が空なら書かずに削除**する（余計なファイルを残さない）。"""
+def save(directory: str, names: dict, enabled: bool = True,
+         title: str = "") -> bool:
+    """表示名を書き込む。
+
+    **表示名も見出しも空なら書かずに削除**する（余計なファイルを残さない）。
+    見出しだけ設定したい場合もあるので、判定は «両方空» のときだけ。
+    """
     clean = {str(a): str(b).strip() for a, b in (names or {}).items()
              if str(b).strip()}
+    ttl = str(title or "").strip()
     p = _path_for(directory)
-    if not clean:
+    if not clean and not ttl:
         return remove(directory)
     try:
+        # r119: 隠し属性の付いた既存ファイルは "w" で開けない（WinError 5）。
+        # 先に外してから書き、最後に付け直す。
+        _set_hidden(p, False)
         with open(p, "w", encoding="utf-8") as f:
-            json.dump({"enabled": bool(enabled), "names": clean},
-                      f, ensure_ascii=False, indent=2)
+            json.dump({"enabled": bool(enabled), "title": ttl,
+                       "names": clean}, f, ensure_ascii=False, indent=2)
         _hide(p)
         _cache.pop(_key(directory), None)
         return True
     except Exception as _e:
         _swallow(_e, "core/display_names.py save %s" % p)
+        _hide(p)            # 失敗しても隠し属性は戻す
         return False
 
 
@@ -159,17 +189,37 @@ def invalidate(directory: str = None):
         _cache.pop(_key(directory), None)
 
 
-def _hide(path: str):
-    """Windows で隠し属性を付ける（先頭ドットだけでは隠れないため）。"""
+_FILE_ATTRIBUTE_HIDDEN = 0x02
+_FILE_ATTRIBUTE_NORMAL = 0x80
+_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+
+
+def _set_hidden(path: str, on: bool):
+    """Windows の隠し属性を付け外しする。
+
+    **外す方も必要**: 隠し属性の付いた既存ファイルは `open(path, "w")` が
+    アクセス拒否になるため、保存のたびに «外す→書く→付ける» をする。"""
     if os.name != "nt":
         return
     try:
         import ctypes
-        FILE_ATTRIBUTE_HIDDEN = 0x02
-        ctypes.windll.kernel32.SetFileAttributesW(str(path),
-                                                  FILE_ATTRIBUTE_HIDDEN)
+        k32 = ctypes.windll.kernel32
+        cur = k32.GetFileAttributesW(str(path))
+        if cur == _INVALID_FILE_ATTRIBUTES:
+            return                      # まだ無い＝何もしなくてよい
+        new = (cur | _FILE_ATTRIBUTE_HIDDEN) if on \
+            else (cur & ~_FILE_ATTRIBUTE_HIDDEN)
+        if new == 0:
+            new = _FILE_ATTRIBUTE_NORMAL
+        if new != cur:
+            k32.SetFileAttributesW(str(path), new)
     except Exception as _e:
-        _swallow(_e, "core/display_names.py _hide")
+        _swallow(_e, "core/display_names.py _set_hidden")
+
+
+def _hide(path: str):
+    """Windows で隠し属性を付ける（先頭ドットだけでは隠れないため）。"""
+    _set_hidden(path, True)
 
 
 def subdirectories(directory: str):
