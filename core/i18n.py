@@ -31,8 +31,10 @@ def _detect_auto() -> str:
                 return "ja"
             if ui:
                 return "en"
+    except ImportError:
+        pass                  # Maya 外では当然 import できない（想定内）
     except Exception as _e:
-        _swallow(_e, "core/i18n.py:33 _detect_auto")
+        _swallow(_e, "core/i18n.py _detect_auto(maya)")
     # 2) スタンドアロン: Mayaの言語設定を引き継ぐ環境変数
     env = os.environ.get("MAYA_UI_LANGUAGE", "")
     if env.lower().startswith("ja"):

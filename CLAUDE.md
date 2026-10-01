@@ -1073,6 +1073,36 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
 - `HistoryPanel` / `QuickNavBar` は `ui/browser_area.py` も import するため、
   `ui/main_window.py` から再エクスポートして既存の import を維持している。
 
+## 表示名（実体名とは別の表示）（r115、2026-10-01）
+
+- **大前提: パスに関わる処理は必ず実体名。** 表示名は DisplayRole だけを
+  差し替える。コピー・移動・パスのコピー・DCC への受け渡しは影響しない。
+- 保存先は対象ディレクトリ直下の隠しファイル `.mfm_display_names.json`
+  （`core/display_names.py`）。フォルダと一緒に移動するので設定が離れない。
+  Windows では隠し属性も付ける（先頭ドットだけでは隠れない）。
+- **ファイルが無ければ機能ごと動かさない。** 存在判定はキャッシュし、
+  行ごとの stat を避ける。プロキシ側も «親カラム単位» で対応表を持つ
+  （`FileFilterProxyModel._alias_for_parent`）。
+- ツールチップには **必ず実体名** を出す（表示名が効いている時のみ先頭に付加）。
+- 入口:
+  * 右クリック「表示名の変更 / ChangeDisplayEdit」→ `ui/display_name_dialog.py`
+  * ファイルがあるカラムだけ **下部にスイッチ＋⚙** を出す
+    （`_install_display_name_footer`）。これが «表示名が効いている印» も兼ねる
+- 削除は確認付きで **ファイルごと** 消す。消したら `_refresh_display_names()`
+  でフッタも畳む。
+- 回帰テスト: tests/offscreen/test_display_names.py（素通し／表示の差し替え／
+  **実体パスが変わらないこと**／ツールチップ／スイッチ／削除／メニュー／フッタ）
+
+## 言語設定は «既にあった»（r115 で OS 判定を修復）
+
+- 設定 → 言語で「システム（OS / Maya に追従）／日本語／English」。
+  `core/i18n.py` が Maya の UI 言語 → `MAYA_UI_LANGUAGE` → OS ロケールの順で判定。
+- **ただし OS ロケール判定が動いていなかった**。`core/compat.py` が `QLocale` を
+  export しておらず、`from core.compat import QLocale` が常に失敗していた
+  （r112 の握り潰し診断が検出）。両バインディングの export に追加して修復。
+- Maya 外で `import maya.cmds` が失敗するのは想定内なので `except ImportError`
+  で受け、診断ログを汚さないようにした。
+
 ## 開発・デバッグの約束事
 
 - 起動: `run_dev.bat`（インストール済み最新Maya 2027→2023 の mayapy を自動選択。

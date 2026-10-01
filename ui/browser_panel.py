@@ -1814,6 +1814,23 @@ class BrowserPanel(QWidget):
         gpos = self._flat_col._view.viewport().mapToGlobal(pos)
         self._popup_context_menu(paths, gpos)
 
+    def _display_name_target(self, paths):
+        """表示名を編集する «対象ディレクトリ»（r115）。
+
+        カラムが表示しているフォルダ（＝右クリックした項目の親）を対象にする。
+        そこに並ぶサブフォルダの表示名をまとめて編集するため。"""
+        try:
+            if paths:
+                first = paths[0].rstrip("/\\")
+                parent = os.path.dirname(first)
+                if parent and os.path.isdir(parent):
+                    return parent
+            cur = self._current_path or ""
+            return cur if os.path.isdir(cur) else ""
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _display_name_target")
+            return ""
+
     def _popup_context_menu(self, paths, global_pos):
         from core.i18n import tr
         menu = QMenu(self)
@@ -1966,6 +1983,13 @@ class BrowserPanel(QWidget):
         batch_act = menu.addAction(tr("✏✏  バッチリネーム...", "✏✏  Batch Rename..."))
         batch_act.triggered.connect(
             lambda _c=False, ps=list(paths): self.batch_rename_requested.emit(ps))
+
+        # r115: 表示名（実体名はそのままで、カラムへ出す名前だけ変える）
+        dn_dir = self._display_name_target(paths)
+        dn_act = menu.addAction(tr("🏷  表示名の変更...", "🏷  ChangeDisplayEdit..."))
+        dn_act.triggered.connect(
+            lambda _c=False, d=dn_dir: self._column_view._open_display_name_dialog(d))
+        dn_act.setEnabled(bool(dn_dir))
 
         menu.addSeparator()
 

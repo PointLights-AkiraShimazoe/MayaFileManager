@@ -19,7 +19,7 @@ PYSIDE_VERSION = None
 try:
     from PySide6 import QtWidgets, QtCore, QtGui
     from PySide6.QtCore import (
-        Qt, Signal, Slot, QThread, QTimer, QModelIndex,
+        Qt, Signal, Slot, QThread, QTimer, QModelIndex, QLocale,
         QDir, QFileInfo, QUrl, QMimeData, QSortFilterProxyModel,
         QPoint, QSize, QRect, QObject, QRunnable, QThreadPool,
         QSettings, QStandardPaths
@@ -53,7 +53,7 @@ try:
 except ImportError:
     from PySide2 import QtWidgets, QtCore, QtGui
     from PySide2.QtCore import (
-        Qt, Signal, Slot, QThread, QTimer, QModelIndex,
+        Qt, Signal, Slot, QThread, QTimer, QModelIndex, QLocale,
         QDir, QFileInfo, QUrl, QMimeData, QSortFilterProxyModel,
         QPoint, QSize, QRect, QObject, QRunnable, QThreadPool,
         QSettings, QStandardPaths

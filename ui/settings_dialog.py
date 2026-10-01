@@ -258,7 +258,7 @@ class SettingsDialog(QDialog):
         layout.addRow(_SectionLabel(tr("言語 / Language", "Language")))
         self._lang_combo = QComboBox()
         self._lang_combo.addItems([
-            tr("システム（Mayaに合わせる）", "System (follow Maya)"),
+            tr("システム（OS / Maya に追従）", "System (follow OS / Maya)"),
             "日本語",
             "English",
         ])

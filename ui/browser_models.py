@@ -300,9 +300,65 @@ class FileFilterProxyModel(QSortFilterProxyModel):
             _swallow(_e, "ui/browser_models.py:313 hasChildren")
         return super().hasChildren(parent)
 
+    # ── 表示名（r115） ────────────────────────────────────────────────
+    # 実体名とは別に «カラムへ出す名前» を持てる。パスに関わる処理は一切
+    # 影響を受けない（表示だけを差し替える）。
+    # 親カラム単位で対応表をキャッシュし、行ごとの stat を避ける。
+    _alias_cache = {}          # 親の internalId -> (dir, {実体名: 表示名} or None)
+
+    def invalidate_display_names(self):
+        self._alias_cache.clear()
+        try:
+            from core import display_names
+            display_names.invalidate()
+        except Exception as _e:
+            _swallow(_e, "ui/browser_models.py invalidate_display_names")
+
+    def _alias_for_parent(self, source_parent):
+        """その親ディレクトリの表示名対応表。無ければ None。"""
+        if not source_parent.isValid():
+            return None
+        key = source_parent.internalId()
+        hit = self._alias_cache.get(key)
+        if hit is not None:
+            return hit[1]
+        sm = self.sourceModel()
+        d = _safe_file_path(sm, source_parent)
+        m = None
+        if d:
+            from core import display_names
+            m = display_names.alias_map(d)
+        self._alias_cache[key] = (d, m)
+        return m
+
     def data(self, index, role=Qt.DisplayRole):
+        # 表示名: DisplayRole だけ差し替える（実体名は EditRole 等に残る）
+        if role == Qt.DisplayRole and index.column() == 0:
+            try:
+                si = self.mapToSource(index)
+                m = self._alias_for_parent(si.parent())
+                if m:
+                    real = self.sourceModel().fileName(si)
+                    alias = m.get(real)
+                    if alias:
+                        return alias
+            except Exception as _e:
+                _swallow(_e, "ui/browser_models.py data(display-name)")
         # ツールチップに連携状態を付加（辞書参照のみ・ホバー時だけ呼ばれる）
         if role == Qt.ToolTipRole:
+            # 表示名が効いている項目は «実体名» を必ず見せる（r115）
+            try:
+                si = self.mapToSource(index)
+                m = self._alias_for_parent(si.parent())
+                if m:
+                    real = self.sourceModel().fileName(si)
+                    if m.get(real):
+                        from core.i18n import tr
+                        base = super().data(index, role)
+                        head = tr("実際の名前: %s", "Actual name: %s") % real
+                        return head + (("\n" + str(base)) if base else "")
+            except Exception as _e:
+                _swallow(_e, "ui/browser_models.py data(tooltip-real-name)")
             try:
                 from core.integrations import get_manager
                 mgr = get_manager()

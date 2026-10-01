@@ -1104,9 +1104,89 @@ class CappedColumnView(QColumnView):
         row2.addWidget(view_btn, 0)
         vlay.addLayout(row2)
         view._mfm_header = hdr
+        self._install_display_name_footer(view, folder_path)
         self._reposition_column_header(view)
         hdr.show()
         hdr.raise_()
+
+    _COL_FOOTER_H = 24
+
+    def _install_display_name_footer(self, view, folder_path):
+        """表示名の設定ファイルがあるカラムにだけ、下部へ操作列を出す（r115）。
+
+        «表示名が変わっている印» を兼ねる。ファイルが無ければ作らない
+        （＝通常のフォルダでは一切コストが掛からない）。"""
+        from core import display_names
+        from core.i18n import tr
+        if not folder_path or not display_names.has_file(folder_path):
+            view._mfm_dn_footer = None
+            return
+        ft = QWidget(view)
+        ft.setObjectName("mfmDnFooter")
+        from core.theme_engine import qss_vars
+        tv = qss_vars()
+        ft.setStyleSheet(
+            "#mfmDnFooter{background:%(plane_flat_header)s;"
+            "border-top:1px solid %(hairline)s;}"
+            "QLabel{color:%(on_surface_variant)s;font-size:%(label_px)spx;}"
+            "QToolButton{background:%(fill_subtle)s;color:%(on_surface)s;"
+            "border:1px solid %(hairline)s;border-radius:9px;"
+            "min-height:16px;max-height:18px;padding:0px 6px;}"
+            "QToolButton:hover{background:%(fill_subtle_hover)s;}"
+            "QToolButton:checked{background:%(cta_tint)s;"
+            "border-color:%(primary)s;}" % tv)
+        row = QHBoxLayout(ft)
+        row.setContentsMargins(6, 2, 4, 2)
+        row.setSpacing(4)
+        sw = QToolButton(ft)
+        sw.setCheckable(True)
+        sw.setChecked(display_names.is_enabled(folder_path))
+        sw.setText(tr("表示名", "Alias"))
+        sw.setToolTip(tr("表示名の有効／無効", "Enable / disable display names"))
+        sw.toggled.connect(
+            lambda on, d=folder_path: self._on_display_names_toggled(d, on))
+        row.addWidget(sw, 0)
+        row.addStretch(1)
+        cfg = QToolButton(ft)
+        cfg.setText("⚙")
+        cfg.setToolTip(tr("表示名の設定を開く", "Open display-name settings"))
+        cfg.clicked.connect(
+            lambda _c=False, d=folder_path: self._open_display_name_dialog(d))
+        row.addWidget(cfg, 0)
+        view._mfm_dn_footer = ft
+        view._mfm_dn_switch = sw
+        ft.show()
+        ft.raise_()
+
+    def _on_display_names_toggled(self, folder_path, on):
+        from core import display_names
+        display_names.set_enabled(folder_path, bool(on))
+        self._refresh_display_names()
+
+    def _open_display_name_dialog(self, folder_path):
+        from ui.display_name_dialog import DisplayNameDialog
+        dlg = DisplayNameDialog(folder_path, parent=self.window())
+        dlg.changed.connect(lambda _d: self._refresh_display_names())
+        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+
+    def _refresh_display_names(self):
+        """対応表を捨てて全カラムを描き直す（フッタの有無も作り直す）。"""
+        m = self.model()
+        if hasattr(m, "invalidate_display_names"):
+            m.invalidate_display_names()
+        for v in self._live_columns():
+            try:
+                ft = getattr(v, "_mfm_dn_footer", None)
+                if ft is not None:
+                    ft.setParent(None)
+                    ft.deleteLater()
+                    v._mfm_dn_footer = None
+                self._install_display_name_footer(
+                    v, self._path_for_index(v.rootIndex()))
+                self._reposition_column_header(v)
+                v.viewport().update()
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py _refresh_display_names")
 
     def _toggle_view_mode(self, view):
         cur = getattr(view, "_mfm_view_mode", "list")
@@ -1473,6 +1553,16 @@ class CappedColumnView(QColumnView):
             x, w = 0, view.width()
         hdr.setGeometry(x, 0, max(40, w), self._COL_HEADER_H)
         hdr.raise_()
+        # r115: 表示名フッタはカラムの最下部に貼り付ける
+        ft = getattr(view, "_mfm_dn_footer", None)
+        if ft is not None:
+            try:
+                ft.setGeometry(x, max(0, view.height() - self._COL_FOOTER_H),
+                               max(40, w), self._COL_FOOTER_H)
+                ft.setVisible(view.isVisible())
+                ft.raise_()
+            except RuntimeError:
+                pass
         # 右端のリサイズハンドル（ヘッダの下からカラム下端まで）
         handle = getattr(view, "_mfm_resize_handle", None)
         if handle is not None:
