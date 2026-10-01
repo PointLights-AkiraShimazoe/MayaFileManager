@@ -531,9 +531,27 @@ class MayaBridge:
                          （長時間処理で応答待ちを打ち切った場合は None）
               ok=False … 接続/送信失敗。reply はエラーメッセージ
         """
+        # r119e: «誰が・いつ・何を» 送ったかを必ず残す。
+        # 「シーンを開いた後にもう一度コマンドが走る」の調査で、送信の記録が
+        # 無いために推測しかできなかった。二重送信はログで一発で分かる。
+        try:
+            import threading as _th
+            import traceback as _tb
+            head = (code or "").strip().splitlines()[0][:120] if code else ""
+            caller = ""
+            for fr in reversed(_tb.extract_stack()[:-1]):
+                if "maya_bridge.py" not in fr.filename:
+                    caller = "%s:%d %s" % (_os.path.basename(fr.filename),
+                                           fr.lineno, fr.name)
+                    break
+            bridge_log("send port=%s thread=%s from=%s code=%r"
+                       % (self.port, _th.current_thread().name, caller, head))
+        except Exception:
+            pass
         try:
             s = self._connect(1.5)
         except OSError as e:
+            bridge_log("send port=%s FAILED connect: %s" % (self.port, e))
             return False, f"Mayaに接続できません: {e}"
         try:
             s.settimeout(timeout)

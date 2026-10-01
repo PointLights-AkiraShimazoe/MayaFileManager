@@ -58,7 +58,7 @@ class _W:
     def statusBar(self):
         return types.SimpleNamespace(showMessage=lambda *a, **k: None)
 
-    def _maya_send_or_prompt(self, code, label, log=None):
+    def _maya_send_or_prompt(self, code, label, log=None, guard=False):
         self.sent.append(code); return True
 
     def _focus_connected_maya(self):

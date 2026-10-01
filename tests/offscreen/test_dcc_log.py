@@ -37,6 +37,17 @@ def _levels():
     return [lv for lv, _ in LOG]
 
 
+def _forget_recent():
+    """r119e の «DCC 側二重実行ガード» の記録を捨てる。
+
+    このテストは同じ (操作, パス) を «ログの形» を見るために連続で評価する。
+    ガードは «前回の完了から 8 秒以内の同一操作» を止めるので、
+    ケースごとに忘れさせないと 2 件目以降が実行されない。
+    （ガード自体の検証は test_dcc_duplicate_guard.py）"""
+    import __main__
+    __main__.__dict__.pop("_mfm_recent_ops", None)
+
+
 def test_maya_simple_results():
     _install_fake_maya()
     for code, want in (("None", ["info", "info"]),
@@ -44,6 +55,7 @@ def test_maya_simple_results():
                        ("'Error: disk full'", ["info", "error"]),
                        ("'Cancelled'", ["info", "warning"])):
         LOG.clear()
+        _forget_recent()
         eval(dcc_log.wrap_maya(code, "リファレンス", "D:/proj/chr_A.ma"), {})
         assert _levels() == want, (code, LOG)
     assert LOG[0][1].startswith("[MayaFileManager] リファレンス: D:/proj/chr_A.ma"), LOG[0]
@@ -71,6 +83,7 @@ def test_maya_real_reference_code():
              "    cmds.confirmDialog(title='x', message=u'fail\\n' + str(_e), button=['OK'])\n"
              "    _mfm_result = 'Failed: ' + str(_e)\n")
     LOG.clear()
+    _forget_recent()
     res = eval(dcc_log.wrap_maya(expr % inner, "リファレンス", "D:/p/a.ma"), {})
     assert str(res).startswith("Failed:"), res
     lv = _levels()
@@ -83,11 +96,13 @@ def test_blender_logs():
     got = []
     ns = {"mfm_log": lambda m, lv="info": got.append((lv, m)),
           "mfm_import": lambda p: "error: bad file"}
+    _forget_recent()
     res = eval(dcc_log.wrap_blender("mfm_import('D:/x.fbx')", "インポート", "D:/x.fbx"), ns)
     assert res == "error: bad file", res
     assert [g[0] for g in got] == ["info", "error"], got
     # 古いブリッジ（mfm_log 無し）は print にフォールバックして落ちない
     ns2 = {"mfm_open": lambda p: "confirm"}
+    _forget_recent()
     assert eval(dcc_log.wrap_blender("mfm_open('D:/a.blend')", "開く", "D:/a.blend"),
                 ns2) == "confirm"
     print("blender: logs via mfm_log, falls back to print on old bridges: OK")

@@ -65,6 +65,16 @@ from ui.reference_editor import ReferenceEditor
 
 
 
+# «シーンを開く» のように後戻りできない操作は、重ねて送ったら事故になる。
+# 1.2 秒の窓だけでは «開き終わってから» の二重送信を止められない
+# （実機報告 2026-10-02: シーンを開いた後にもう一度コマンドが走りかけた）。
+# → この種別は «前の送信が片付くまで» 一切受け付けない（r119e）。
+# クラス属性ではなくモジュール定数にしてあるのは、Mixin を «部分的に»
+# 真似た呼び出し元（テストの軽量スタブ等）でも必ず効かせるため。
+DESTRUCTIVE_KINDS = ("open", "run_script")
+DESTRUCTIVE_HOLD_SEC = 120.0      # 応答が来ない時の最後の砦
+
+
 class MainWindowDccMixin:
     """MainWindow の **DCC 連携・ブリッジ・フリーズ監視** 部分（r114）。
 
@@ -761,7 +771,13 @@ class MainWindowDccMixin:
         Mayaがビジーだと commandPort の応答は数秒〜返ってこないことがあり、
         UIスレッドで recv を待つとクリックのたびにフリーズする。"""
         import threading
+        import time as _t
         bridge = bridge or self._bridge
+        # r119e: «実際に DCC へ渡る» のはここだけ。予約を «実行中» に昇格させる。
+        arm = getattr(self, "_dcc_arm", None)
+        if arm:
+            self._dcc_pending = (arm[0], _t.monotonic())
+            self._dcc_arm = None
 
         def _run():
             ok, reply = bridge.send_python(code, timeout=timeout)
@@ -771,6 +787,8 @@ class MainWindowDccMixin:
                          name="mfm-dcc-send").start()
 
     def _on_bridge_done(self, ok: bool, label: str, reply):
+        # r119e: 応答が返った＝前の操作は片付いた。«実行中» の印を落とす。
+        self._clear_dcc_pending()
         if ok:
             msg = tr("送信: %s", "Sent: %s") % label
             if reply is None:
@@ -976,18 +994,21 @@ class MainWindowDccMixin:
         code = "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_result'))[1])({})" % inner
         if self._maya_send_or_prompt(
                 code, tr("スクリプト実行 %s", "Run script %s") % Path(path).name,
-                log=(tr("スクリプト実行", "Run script"), path)):
+                log=(tr("スクリプト実行", "Run script"), path), guard=True):
             QTimer.singleShot(400, self._focus_connected_maya)
 
     def _dcc_once(self, kind: str, path: str, app: str) -> bool:
-        """«1操作＝1回» を保証するガード（r86）。
+        """«1操作＝1回» を保証するガード（r86 / r119e で強化）。
 
-        同じ (種別, パス, 送り先) が 1.2 秒以内に再度来たら False を返して捨てる。
-        Maya へのリファレンスが同一ファイルで2回実行される報告（2026-09-18）への
-        対策。クリック動作・右クリック・D&D のどの経路から来ても、DCC へ送る
-        直前のここを必ず通るので、発火元がどれでも止まる。
-        捨てた時はログに残すので、mfm ログを見れば «どの経路が二重に呼んでいるか»
-        を後から特定できる。"""
+        * 同じ (種別, パス, 送り先) が 1.2 秒以内に再度来たら捨てる。
+          クリック動作・右クリック・D&D のどの経路から来ても、DCC へ送る
+          直前のここを必ず通るので、発火元がどれでも止まる。
+        * **シーンを開く等の «後戻りできない» 種別は、パスが違っても
+          前の送信が終わるまで受け付けない。** 開くのに数十秒かかる間に
+          2 回目を送ると、読み込み終了後にもう一度実行されてしまう
+          （commandPort は受け取ったデータを «後で» 処理するため）。
+        捨てた時はログに残すので、mfm ログを見れば «どの経路が二重に呼んで
+        いるか» を後から特定できる。"""
         import time as _time_mod
         from ui.browser_panel import _mfm_log
         try:
@@ -995,6 +1016,24 @@ class MainWindowDccMixin:
         except Exception:
             key = (kind, path, app or "")
         now = _time_mod.monotonic()
+
+        if kind in DESTRUCTIVE_KINDS:
+            pend_key, pend_t = getattr(self, "_dcc_pending", (None, 0.0))
+            if pend_key is not None and (now - pend_t) < DESTRUCTIVE_HOLD_SEC:
+                _mfm_log("dcc-send: 実行中のため抑止 kind=%s app=%s dt=%.1f "
+                         "pending=%r path=%r"
+                         % (kind, app, now - pend_t, pend_key, path))
+                self.statusBar().showMessage(
+                    tr("前の「%s」がまだ終わっていないため送りませんでした",
+                       "Not sent: the previous \u201c%s\u201d has not finished")
+                    % Path(pend_key[1]).name, 8000)
+                return False
+            # ここでは «予約» するだけ。実際に DCC へ送る瞬間
+            # （_bridge_send_async）で «実行中» に昇格させる。
+            # こうしないと、Maya 内実行や途中で止めた経路で印が残り続け、
+            # 以後 2 分間 «開く» が効かなくなる。
+            self._dcc_arm = (key, kind)
+
         last_key, last_t = getattr(self, "_last_dcc_send", (None, 0.0))
         if key == last_key and (now - last_t) < 1.2:
             _mfm_log("dcc-send: 二重発火を抑止 kind=%s app=%s dt=%.3f path=%r"
@@ -1002,9 +1041,16 @@ class MainWindowDccMixin:
             self.statusBar().showMessage(
                 tr("連続した同一操作を1回にまとめました: %s",
                    "Merged a repeated action into one: %s") % Path(path).name, 4000)
+            self._dcc_arm = None
             return False
         self._last_dcc_send = (key, now)
         return True
+
+    def _clear_dcc_pending(self, kind=None):
+        """«実行中» の印を落とす。応答が返った時／送信できなかった時に呼ぶ。"""
+        if kind is None or kind in DESTRUCTIVE_KINDS:
+            self._dcc_pending = (None, 0.0)
+            self._dcc_arm = None
 
     def _dcc_accepts(self, command: str, path: str, app: str) -> bool:
         """«そのコマンドの対象か» の関所（r91、ユーザー指示: 対象外には絶対に
@@ -1057,18 +1103,22 @@ class MainWindowDccMixin:
         else:
             self._maya_reference(path, ask_ns=ask_ns)
 
-    def _maya_send_or_prompt(self, code: str, label: str, log=None) -> bool:
+    def _maya_send_or_prompt(self, code: str, label: str, log=None,
+                             guard: bool = False) -> bool:
         """起動済みMaya（commandPort）へPythonコードを送る。未接続なら
         Mayaの起動を提案する。送信を開始できたら True。
-        log=(操作名, パス) を渡すと Maya のスクリプトエディタにログを残す（r88）。"""
+        log=(操作名, パス) を渡すと Maya のスクリプトエディタにログを残す（r88）。
+        guard=True で «直前に同じ操作が走っていたら実行しない» 栓を付ける
+        （r119e。開く/スクリプト実行のような «重ねたら事故» の操作だけ）。"""
         if log:
             from core.dcc_log import wrap_maya
-            code = wrap_maya(code, log[0], log[1])
+            code = wrap_maya(code, log[0], log[1], guard=guard)
         if self._bridge.is_connected(timeout=0.3):
             self.statusBar().showMessage(
                 tr("Mayaへ送信中: %s …", "Sending to Maya: %s …") % label)
             self._bridge_send_async(code, label)
             return True
+        self._dcc_arm = None           # 送れていないので «実行中» ではない
         ver = self._maya_inst.version if self._maya_inst else ""
         _port_hint = (f'  cmds.commandPort(name=":{self._bridge.port}", '
                       'sourceType="python")')
@@ -1143,7 +1193,7 @@ class MainWindowDccMixin:
             code = "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_result'))[1])({})" % inner
             self._maya_send_or_prompt(
                 code, tr("開く %s", "Open %s") % Path(path).name,
-                log=(tr("開く", "Open"), path))
+                log=(tr("開く", "Open"), path), guard=True)
             return
         act = tr("開く", "Open")
         self._maya_local_log(act, path, "start")

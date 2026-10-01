@@ -69,7 +69,7 @@ class _W:
         self._inside_maya = False
         self.sent = []
 
-    def _maya_send_or_prompt(self, code, label, log=None):
+    def _maya_send_or_prompt(self, code, label, log=None, guard=False):
         from core.dcc_log import wrap_maya
         self.sent.append(wrap_maya(code, log[0], log[1]) if log else code)
         return True

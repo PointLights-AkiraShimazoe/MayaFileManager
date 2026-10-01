@@ -37,32 +37,69 @@ def _messages(action: str, path: str):
             PREFIX, tr("確認待ち", "Waiting"), action, name,
             tr("未保存の変更があるため DCC 側で確認中",
                "unsaved changes — confirm in the DCC")),
+        # r119e: 二重実行ガード用。«同じ操作か» の判定キーと、止めた時の文言。
+        "key": "%s|%s" % (action, shown),
+        "dup": "%s %s: %s %s（%s）" % (
+            PREFIX, tr("二重実行を防止", "Duplicate blocked"), action, name,
+            tr("直前に同じ操作を受け取っているため実行しませんでした",
+               "the same action arrived moments ago, so it was not run")),
     }
 
 
 # 結果判定と出力（DCC 側で exec される本体。_l(msg, level) は DCC ごとに差し替え）
-_BODY = r'''
-_l(_M["start"], "info")
-try:
+# r119e: **DCC 側の二重実行ガード**。
+# commandPort は受け取ったデータを «後で» 処理するため、Maya がシーンを
+# 読み込んでいる間に届いた 2 通目は «読み込みが終わってから» 実行される。
+# 送信側のガードをすり抜けた分をここで止める（実機報告 2026-10-02:
+# シーンを開き終わった直後にもう一度コマンドが走りかけた）。
+#
+# 判定は «前回の完了からの経過» で行う。開始時刻で測ると、読み込みに 60 秒
+# かかった場合に «直後に走る 2 通目» が窓から外れて素通りしてしまう。
+# 溜まっていた 2 通目は «完了の直後» に走るので、窓は短くてよい。
+# 短いことが重要で、«わざと同じシーンを開き直す» のは塞がない。
+_GUARD_SEC = 8.0
+
+_GUARD = r"""
+import time as _mfm_time, __main__ as _mfm_main
+_mfm_seen = _mfm_main.__dict__.setdefault("_mfm_recent_ops", {})
+_mfm_key = _M.get("key") or _M["start"]
+_mfm_now = _mfm_time.monotonic()
+for _k in [k for k, t in _mfm_seen.items() if _mfm_now - t > 600.0]:
+    _mfm_seen.pop(_k, None)
+_mfm_last = _mfm_seen.get(_mfm_key)
+_mfm_dup = _mfm_last is not None and (_mfm_now - _mfm_last) < %r
+""" % _GUARD_SEC
+
+# 結果判定と出力（DCC 側で exec される本体。_l(msg, level) は DCC ごとに差し替え）
+_BODY = r"""
+if _mfm_dup:
+    _l(_M["dup"], "warning")
+    _mfm_r = "Cancelled: duplicate"
+else:
+ _l(_M["start"], "info")
+ try:
     try:
         _mfm_r = eval(_CODE)
     except SyntaxError:
         exec(_CODE)
         _mfm_r = None
-except Exception as _e:
+ except Exception as _e:
+    _mfm_seen[_mfm_key] = _mfm_time.monotonic()
     _l(_M["fail"] + str(_e), "error")
     raise
-_s = "" if _mfm_r is None else str(_mfm_r)
-_low = _s.strip().lower()
-if _low.startswith("error:") or _low.startswith("failed:"):
+ _mfm_seen[_mfm_key] = _mfm_time.monotonic()   # «完了» 時刻を記録する
+ _s = "" if _mfm_r is None else str(_mfm_r)
+ _low = _s.strip().lower()
+ if _low.startswith("error:") or _low.startswith("failed:"):
     _l(_M["fail"] + _s.split(":", 1)[1].strip(), "error")
-elif _low.startswith("cancelled"):
+ elif _low.startswith("cancelled"):
     _l(_M["cancel"], "warning")
-elif _low == "confirm":
+ elif _low == "confirm":
     _l(_M["confirm"], "info")
-else:
+ else:
     _l(_M["done"], "info")
-'''
+"""
+
 
 _MAYA_LOGGER = r'''
 import maya.api.OpenMaya as _om
@@ -92,23 +129,39 @@ def _l(m, lv):
 '''
 
 
-def _wrap(code: str, action: str, path: str, logger: str, ns_expr: str) -> str:
+# ガードを付けない時も、本体が «完了時刻の記録» で参照する名前は必要。
+# 記録先をその場限りの dict にして、何も残らないようにする。
+_NO_GUARD = ("import time as _mfm_time\n"
+             "_mfm_dup = False\n"
+             "_mfm_seen = {}\n"
+             "_mfm_key = None\n")
+
+
+def _wrap(code: str, action: str, path: str, logger: str, ns_expr: str,
+          guard: bool = False) -> str:
     src = (logger
            + "_M = %r\n" % _messages(action, path)
            + "_CODE = %r\n" % code
+           + (_GUARD if guard else _NO_GUARD)
            + _BODY)
     return "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_r'))[1])(%s)" % (src, ns_expr)
 
 
-def wrap_maya(code: str, action: str, path: str) -> str:
-    """Maya の commandPort へ送る式を、スクリプトエディタへのログ付きに包む。"""
-    return _wrap(code, action, path, _MAYA_LOGGER, "{}")
+def wrap_maya(code: str, action: str, path: str, guard: bool = False) -> str:
+    """Maya の commandPort へ送る式を、スクリプトエディタへのログ付きに包む。
+
+    guard=True で «直前に同じ操作が走っていたら実行しない» 栓を付ける（r119e）。
+    **「開く」「スクリプト実行」だけに付けること。** インポートやリファレンスは
+    同じファイルを続けて 2 回入れるのが正当な操作なので、塞いではいけない。
+    """
+    return _wrap(code, action, path, _MAYA_LOGGER, "{}", guard=guard)
 
 
-def wrap_blender(code: str, action: str, path: str) -> str:
+def wrap_blender(code: str, action: str, path: str, guard: bool = False) -> str:
     """Blender ブリッジへ送る式を、Info エディタへのログ付きに包む。
     ブリッジの名前空間（bpy / mfm_* ヘルパ）を引き継ぐため dict(globals())。"""
-    return _wrap(code, action, path, _BLENDER_LOGGER, "dict(globals())")
+    return _wrap(code, action, path, _BLENDER_LOGGER, "dict(globals())",
+                 guard=guard)
 
 
 def maya_local(message: str, level: str = "info"):
