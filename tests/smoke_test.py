@@ -19,6 +19,13 @@ import tempfile
 # 画面が無い環境でもQtを動かす
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# 【重要】テストは本番設定（~/.maya_file_manager）に触らない（r63 / r119）。
+# tests/offscreen/_common.py には入れてあったが **このファイルには無く**、
+# 実行するたびにユーザーの設定へ書き込んでいた。実機で「smoke_test」
+# 「smoke_test_copy」というプリセットが残っていた（2026-10-01 報告）。
+# SettingsManager は MFM_SETTINGS_ROOT を最優先で参照する。
+os.environ["MFM_SETTINGS_ROOT"] = tempfile.mkdtemp(prefix="mfm_smoke_settings_")
+
 # リポジトリルートを import パスに追加（tests/ の親）
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:

@@ -1258,10 +1258,18 @@ class CappedColumnView(QColumnView):
         self._refresh_display_names(rebuild_footers=False)
 
     def _open_display_name_dialog(self, folder_path):
+        """表示名の編集（r119: 非モーダル）。
+
+        «カラムの見た目を確かめながら名前を決める» 窓なので、
+        開いている間マネージャーを触れないのは本末転倒。"""
         from ui.display_name_dialog import DisplayNameDialog
-        dlg = DisplayNameDialog(folder_path, parent=self.window())
-        dlg.changed.connect(lambda _d: self._refresh_display_names())
-        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+        from ui.dialog_util import show_tool_window
+
+        def _make(d=folder_path):
+            dlg = DisplayNameDialog(d, parent=self.window())
+            dlg.changed.connect(lambda _d: self._refresh_display_names())
+            return dlg
+        show_tool_window(self, "_mfm_dn_dialog", _make)
 
     def _refresh_display_names(self, rebuild_footers=True):
         """対応表を捨てて全カラムを描き直す。

@@ -291,10 +291,15 @@ class QuickNavBar(QWidget):
         # ダイアログへカスケードし、24px 固定の ▲▼ の内容領域が潰れて字が消える
         # （実機で「上下ボタンが出ない」原因。グローバル QSS の padding 修正
         #   だけでは直らなかった理由）。
-        dlg = QuickNavPresetEditor(self._sm, parent=self.window())
-        # 編集結果は «開いている全エリア» に反映する
-        dlg.presets_saved.connect(QuickNavBar.refresh_all)
-        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+        # r119: 非モーダル。返り値は使わず presets_saved で受けている。
+        from ui.dialog_util import show_tool_window
+
+        def _make():
+            d = QuickNavPresetEditor(self._sm, parent=self.window())
+            # 編集結果は «開いている全エリア» に反映する
+            d.presets_saved.connect(QuickNavBar.refresh_all)
+            return d
+        show_tool_window(self, "_mfm_qn_editor", _make)
 
 
 # ---------------------------------------------------------------------------

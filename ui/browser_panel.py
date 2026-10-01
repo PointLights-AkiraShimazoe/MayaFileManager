@@ -2880,6 +2880,8 @@ class BrowserPanel(QWidget):
                 continue
             dlg = ConflictDialog(p, os.path.join(dest_dir, os.path.basename(p)),
                                  remaining=len(pending) - i - 1, parent=self.window())
+            # モーダルのまま（r119 の «止めない» 原則の例外）:
+            # 1 件ずつの «上書きするか» を決めないとコピー処理が進まない。
             ok = dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
             if not ok or dlg.choice() is None:
                 self.status_message.emit(tr("移動を中止しました", "Move cancelled"))
@@ -2944,6 +2946,8 @@ class BrowserPanel(QWidget):
         from core.file_operations import duplicate_items
         from core.undo_stack import CopyOp
         dlg = DuplicateDialog(paths, parent=self.window())
+        # モーダルのまま（例外）: ここで決まる «複製の仕方» を使って
+        # 直後に実処理を行うため、返り値を待つ必要がある。
         if (dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()) != QDialog.Accepted:
             return
         specs = dlg.specs()

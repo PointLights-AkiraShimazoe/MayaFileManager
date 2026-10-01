@@ -305,14 +305,18 @@ class ReferencePresetEditor(QDialog):
     Full preset editor.  Pass settings_manager to persist presets.
     """
 
-    preset_applied = Signal(dict)   # emitted when Apply is clicked (inside Maya)
+    preset_applied = Signal(dict)   # 適用に成功した時（Maya 内 / 接続経由とも）
+    status_message = Signal(str)    # ステータスバーへ（r119）
 
-    def __init__(self, settings_manager, parent=None):
+    def __init__(self, settings_manager, parent=None, bridge_cb=None):
         super().__init__(parent)
         self._sm = settings_manager
         self._presets: Dict[str, Any] = self._sm.get_reference_presets()
         self._current_name: Optional[str] = None
         self._dirty: bool = False
+        # r119: スタンドアロンから適用する時の送信先（接続中の MayaBridge）を
+        # 返す callable。MainWindow が渡す。
+        self._bridge_cb = bridge_cb
 
         self.setWindowTitle(tr("リファレンスプリセットエディタ", "Reference Preset Editor"))
         self.setMinimumSize(800, 640)
@@ -477,7 +481,12 @@ class ReferencePresetEditor(QDialog):
         btn_row.addStretch()
 
         self._apply_btn = QPushButton(tr("▶  Maya に適用", "▶  Apply to Maya"))
-        self._apply_btn.setEnabled(is_running_inside_maya())
+        self._apply_btn.setEnabled(True)   # r119: 接続中の Maya へも送れる
+        self._apply_btn.setToolTip(tr(
+            "Maya の中で開いている時はその Maya に、スタンドアロンの時は\n"
+            "ヘッダーの「接続:」で選ばれている Maya に適用します。",
+            "Applies to the Maya this tool runs in, or to the Maya selected in "
+            "the header's Connect list when running standalone."))
         self._apply_btn.clicked.connect(self._apply_preset)
         btn_row.addWidget(self._apply_btn)
 
@@ -692,15 +701,42 @@ class ReferencePresetEditor(QDialog):
         self._dirty = False
 
     def _apply_preset(self):
-        if not is_running_inside_maya():
-            return
+        """プリセットを適用する。
+
+        r119: 従来は «Maya の中で動いている時» しか押せなかった。
+        スタンドアロンからでも「開く / インポート / リファレンス」は
+        commandPort で送れているのに、プリセットだけ経路が無く、
+        «どこから実行するのか分からない» 状態だった（ユーザー指摘）。
+        接続中の Maya があればそこへ送る。"""
         preset = self._collect_preset()
         preset["name"] = self._name_edit.text()
-        try:
-            _execute_preset_in_maya(preset)
-            self.preset_applied.emit(preset)
-        except Exception as e:
-            QMessageBox.critical(self, tr("適用エラー", "Apply Error"), str(e))
+        if is_running_inside_maya():
+            try:
+                _execute_preset_in_maya(preset)
+                self.preset_applied.emit(preset)
+            except Exception as e:
+                QMessageBox.critical(self, tr("適用エラー", "Apply Error"), str(e))
+            return
+        bridge = self._bridge_cb() if callable(self._bridge_cb) else None
+        if bridge is None:
+            QMessageBox.information(
+                self, tr("Maya に適用", "Apply to Maya"),
+                tr("接続中の Maya がありません。\n"
+                   "ヘッダーの「接続:」で Maya を選んでから実行してください。",
+                   "No Maya is connected.\nPick one in the Connect list in the "
+                   "header, then try again."))
+            return
+        ok, reply = bridge.send_python(preset_apply_code(preset), timeout=20.0)
+        text = str(reply or "")
+        if not ok or text.startswith("Error:"):
+            QMessageBox.critical(self, tr("適用エラー", "Apply Error"),
+                                 text or tr("Maya へ送れませんでした。",
+                                            "Could not send to Maya."))
+            return
+        self.preset_applied.emit(preset)
+        self.status_message.emit(
+            tr("「%s」を Maya に適用しました。", "Applied \u201c%s\u201d to Maya.")
+            % (preset.get("name") or ""))
 
     # ------------------------------------------------------------------
     # Preset list CRUD buttons
@@ -727,6 +763,56 @@ class ReferencePresetEditor(QDialog):
 # ---------------------------------------------------------------------------
 # Maya execution
 # ---------------------------------------------------------------------------
+
+def preset_apply_code(preset: Dict) -> str:
+    """接続中の Maya へ送る Python コード（r119）。
+
+    commandPort(python) は **単一の式** の値しか返さないので、
+    exec を lambda で包んで結果だけ返す（core/dcc_save.py と同じ作法）。
+    プリセットの中身は JSON で渡す（引用符やパス区切りの事故を避ける）。
+    実行本体は «Maya 内と同じ» 手順なので、ここで組み立てるのは
+    «_execute_preset_in_maya 相当の処理» だけにする。
+    """
+    import json
+    payload = json.dumps(preset, ensure_ascii=False)
+    inner = (
+        "import json, os\n"
+        "import maya.cmds as cmds\n"
+        "_p = json.loads(%r)\n"
+        "def _run(scr):\n"
+        "    c = scr.get('content', '')\n"
+        "    f = scr.get('file', '')\n"
+        "    if f and os.path.isfile(f):\n"
+        "        c = open(f, 'r', encoding='utf-8').read()\n"
+        "    if not c.strip():\n"
+        "        return\n"
+        "    if scr.get('lang', 'python') == 'mel':\n"
+        "        import maya.mel as mel; mel.eval(c)\n"
+        "    else:\n"
+        "        exec(c, {})\n"
+        "try:\n"
+        "    for s in _p.get('scripts', []):\n"
+        "        if s.get('phase') == 'pre' and s.get('enabled', True): _run(s)\n"
+        "    for r in _p.get('references', []):\n"
+        "        if not r.get('enabled', True): continue\n"
+        "        path = r.get('path', '')\n"
+        "        if not path or not os.path.isfile(path):\n"
+        "            raise ValueError('ファイルが存在しません: ' + str(path))\n"
+        "        cmds.file(path, reference=True, namespace=(r.get('namespace') or 'ref'),\n"
+        "                  ignoreVersion=True, mergeNamespacesOnClash=False)\n"
+        "    for c_ in _p.get('constraints', []):\n"
+        "        if not c_.get('enabled', True): continue\n"
+        "        fn = getattr(cmds, c_.get('type', 'parentConstraint'), None)\n"
+        "        src, tgt = c_.get('source_node', ''), c_.get('target_node', '')\n"
+        "        if fn and src and tgt:\n"
+        "            fn(src, tgt, maintainOffset=c_.get('maintain_offset', True))\n"
+        "    for s in _p.get('scripts', []):\n"
+        "        if s.get('phase') == 'post' and s.get('enabled', True): _run(s)\n"
+        "    _mfm_result = 'applied:' + str(_p.get('name', ''))\n"
+        "except Exception as _e:\n"
+        "    _mfm_result = 'Error: ' + str(_e)\n" % payload)
+    return "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_result', ''))[1])({})" % inner
+
 
 def _execute_preset_in_maya(preset: Dict):
     """Apply a reference preset inside a live Maya session."""

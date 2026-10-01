@@ -80,10 +80,16 @@ def s1():
             pass
 
     class _Fake:
+        # r119: バッチリネームは非モーダルになった（Manager を止めない）。
+        # ダイアログに求められる最低限だけ生やす。
         renamed = _Sig()
+        destroyed = _Sig()
 
         def __init__(self, paths, parent=None):
             seen["paths"] = list(paths)
+
+        def __getattr__(self, _name):      # setModal/show/raise_ などを素通し
+            return lambda *a, **k: None
 
         def exec_(self):
             return 0

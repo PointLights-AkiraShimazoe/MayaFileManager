@@ -540,14 +540,44 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
 
     # ---- DCC 切替（r65） ---------------------------------------------------
 
+    def _show_tool_window(self, attr: str, factory, reuse: bool = True):
+        """非モーダルの道具窓を開く（実体は ui/dialog_util）。"""
+        from ui.dialog_util import show_tool_window
+        return show_tool_window(self, attr, factory, reuse=reuse)
+
     def _open_preset_editor(self):
-        dlg = ReferencePresetEditor(self._sm, parent=self)
-        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+        """リファレンスプリセットエディタ（r119: 非モーダル）。"""
+        def _make():
+            d = ReferencePresetEditor(self._sm, parent=self,
+                                      bridge_cb=self._connected_maya_bridge)
+            d.status_message.connect(
+                lambda msg: self.statusBar().showMessage(msg, 8000))
+            return d
+        self._show_tool_window("_preset_editor_dlg", _make)
+
+    def _connected_maya_bridge(self):
+        """スタンドアロンから適用する時の送信先（接続中の Maya）。無ければ None。"""
+        try:
+            if self._inside_maya:
+                return None
+            combo = getattr(self, "_conn_combo", None)
+            if combo is None or not combo.isEnabled() or combo.currentData() is None:
+                return None
+            return self._bridge
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _connected_maya_bridge")
+            return None
 
     def _open_settings(self):
-        dlg = SettingsDialog(self._sm, parent=self)
-        dlg.settings_changed.connect(self._on_settings_changed)
-        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+        """設定（r119: 非モーダル）。
+
+        返り値を待たず settings_changed で受けているので止める理由が無い。
+        設定を変えながら結果をその場で見られるようにする。"""
+        def _make():
+            d = SettingsDialog(self._sm, parent=self)
+            d.settings_changed.connect(self._on_settings_changed)
+            return d
+        self._show_tool_window("_settings_dlg", _make)
 
     # ── Undo / Redo（r62）────────────────────────────────────────────────
     def _active_browser(self):
@@ -617,14 +647,23 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
                                     tr("リネーム対象のファイルが選択されていません。",
                                        "No files are selected for renaming."))
             return
-        dlg = BatchRenameDialog(paths, parent=self)
-        dlg.renamed.connect(lambda results: self.statusBar().showMessage(
-            f"{len(results)} 件リネーム完了"))
-        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+        # r119: 非モーダル。プレビューを見ながら元のカラムを確認できる。
+        # 対象は «開いた時点の選択» なので、後ろで選択が変わっても影響しない。
+        def _make(ps=list(paths)):
+            d = BatchRenameDialog(ps, parent=self)
+            d.renamed.connect(lambda results: self.statusBar().showMessage(
+                tr("%d 件リネーム完了", "Renamed %d item(s)") % len(results)))
+            return d
+        # reuse=False: 対象は «呼んだ時の選択» なので使い回してはいけない
+        self._show_tool_window("_batch_rename_dlg", _make, reuse=False)
 
     def _open_reference_editor(self):
-        dlg = ReferenceEditor(parent=self)
-        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+        """リファレンスエディタ（r119: 非モーダル）。
+
+        «今のシーンの中身を直しながらファイルを探す» 使い方なので、
+        これもマネージャーを塞いではいけない。"""
+        self._show_tool_window("_reference_editor_dlg",
+                               lambda: ReferenceEditor(parent=self))
 
     def _show_dock(self, dock):
         """閉じた/タブ化されたdockを確実に再表示して前面に出す。"""

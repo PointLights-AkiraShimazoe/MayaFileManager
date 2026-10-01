@@ -1217,6 +1217,20 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   トグルの slot で丸ごと再生成しており、保存が失敗すると «押しても戻る»
   だけの挙動になっていた。`_refresh_display_names(rebuild_footers=False)`。
   `toggled` ではなく `clicked` を使う（プログラムの setChecked で発火しない）。
+- **ダイアログは原則マネージャーを止めない**（ユーザー指示 2026-10-01）。
+  `ui/dialog_util.show_tool_window()` を使う。止めてよいのは
+  ①返り値を待って処理を続ける ②決めないと操作自体が進まない、の 2 つだけ。
+  例外には **直前に「モーダルのまま（例外）:」とコメントで理由を書く** —
+  test_tool_windows_nonmodal がそれを機械的に検査する。
+  * 対象が呼び出しごとに変わる窓（バッチリネーム）は `reuse=False`。
+    使い回すと «前回の選択» が出たままになる。
+- **テストは本番設定（~/.maya_file_manager）に触らない**。r63 で
+  tests/offscreen/_common.py には入れたが **tests/smoke_test.py には
+  入っていなかった**ため、run_smoke.bat のたびにユーザーの設定へ書き、
+  実機に `smoke_test` プリセットが残っていた（2026-10-01 発覚）。
+  新しいテスト起点を足す時は `MFM_SETTINGS_ROOT` を必ず設定する。
+  test_settings_isolation が «SettingsManager を作るのに _common も
+  MFM_SETTINGS_ROOT も使っていないテスト» を検出する。
 - **«次に起動する版を選ぶ» 操作で «保存先の箱» を切り替えない**。
   `_on_maya_version_changed` が `set_maya_version()` を呼んでいたため、
   バージョン別の履歴/ブックマークが ON のとき、ヘッダーのプルダウンを

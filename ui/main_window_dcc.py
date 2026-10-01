@@ -553,6 +553,8 @@ class MainWindowDccMixin:
         from ui.maya_bridge_dialog import MayaBridgeDialog
         from core.maya_bridge import install_usersetup
         dlg = MayaBridgeDialog(self)
+        # モーダルのまま（例外）: 選んだ «書き込み先» を受け取って
+        # その場で userSetup.py を書く。一度きりのセットアップ操作。
         ret = dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
         if not ret:
             return
@@ -679,7 +681,10 @@ class MainWindowDccMixin:
         rescan_btn.clicked.connect(self._refresh_maya_connections)
         close_btn.clicked.connect(dlg.accept)
         _copy()                      # 開いた時点でクリップボードへ入れておく
-        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+        # r119: 非モーダル。Maya へ貼りに行って戻ってくる窓なので、
+        # 開いている間マネージャーが固まるのは具合が悪い。
+        from ui.dialog_util import show_tool_window
+        show_tool_window(self, "_connect_running_dlg", lambda: dlg)
 
     def _focus_connected_maya(self):
         """接続中のMayaのウィンドウを最前面に出す（Windows専用）。
@@ -1262,6 +1267,8 @@ class MainWindowDccMixin:
         if not initial and mode == "save":
             initial = self._connected_scene_name(dcc)
         dlg = SaveDialog(dcc, mode, folder, initial, self._sm, parent=self.window())
+        # モーダルのまま（例外）: 決まった保存先を使って直後に DCC へ
+        # 保存/書き出しを送る。返り値を待たないと処理が組めない。
         try:
             ret = dlg.exec_()
         except AttributeError:
@@ -1409,13 +1416,16 @@ class MainWindowDccMixin:
 
     def _open_maya_launch_setup(self):
         """Maya の起動設定（バージョン・引数・表示名）。r119。"""
+        # r119: 非モーダル。返り値ではなく accepted で受ける。
         from ui.maya_launch_dialog import MayaLaunchDialog
+        from ui.dialog_util import show_tool_window
         versions = [str(i.version) for i in reversed(self._maya_installs)]
-        dlg = MayaLaunchDialog(self._sm, versions, self)
-        ret = dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
-        if not ret:
-            return
-        self._populate_version_combos()
+
+        def _make():
+            d = MayaLaunchDialog(self._sm, versions, self)
+            d.accepted.connect(self._populate_version_combos)
+            return d
+        show_tool_window(self, "_maya_launch_dlg", _make)
 
     def _launch_maya(self):
         inst = self._maya_inst
