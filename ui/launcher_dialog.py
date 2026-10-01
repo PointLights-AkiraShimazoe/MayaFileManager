@@ -14,10 +14,8 @@ from core.compat import (
     Qt, Signal,
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QLineEdit,
-    QCheckBox, QGroupBox, QSizePolicy,
-    QFileDialog, QMessageBox,
-    QPixmap, QIcon, QColor, QPainter, QFont, QSize,
-    exec_app
+    QCheckBox, QGroupBox, QFileDialog, QMessageBox,
+    QPixmap, QColor, QPainter, QFont
 )
 from core.maya_version import (
     MayaInstallation, find_installed_maya_versions,
@@ -28,6 +26,15 @@ from core.maya_version import (
 # ---------------------------------------------------------------------------
 # Launcher Dialog
 # ---------------------------------------------------------------------------
+
+def _tv():
+    """テーマトークン（色・形状・書体）。**遅延 import** すること。
+    トップレベルで core.theme_engine から名前を取り込むと、Maya 内の
+    ホットリロードや部分再読込で «partially initialized module» に当たり
+    ImportError（cannot import name 'qss_vars'）になる（r82 で実害）。"""
+    from core.theme_engine import qss_vars
+    return qss_vars()
+
 
 class LauncherDialog(QDialog):
     """
@@ -78,7 +85,7 @@ class LauncherDialog(QDialog):
         title_font.setBold(True)
         title.setFont(title_font)
         sub = QLabel("Maya バージョンを選択して起動")
-        sub.setStyleSheet("color: #888;")
+        sub.setStyleSheet("color:%(on_surface_dim)s;" % _tv())
         title_layout.addWidget(title)
         title_layout.addWidget(sub)
         header_layout.addLayout(title_layout)
@@ -105,7 +112,8 @@ class LauncherDialog(QDialog):
         ver_layout.addWidget(self._refresh_btn, 0, 2)
 
         self._path_label = QLabel("")
-        self._path_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._path_label.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
         self._path_label.setWordWrap(True)
         ver_layout.addWidget(self._path_label, 1, 0, 1, 3)
 
@@ -129,7 +137,8 @@ class LauncherDialog(QDialog):
         file_layout.addLayout(file_row)
 
         self._auto_detect_label = QLabel("")
-        self._auto_detect_label.setStyleSheet("color: #4A9; font-size: 11px;")
+        self._auto_detect_label.setStyleSheet(
+            "color:%(success)s;font-size:%(label_px)spx;" % _tv())
         file_layout.addWidget(self._auto_detect_label)
 
         root_layout.addWidget(file_group)
@@ -162,10 +171,13 @@ class LauncherDialog(QDialog):
         self._launch_btn.setDefault(True)
         self._launch_btn.setMinimumWidth(140)
         self._launch_btn.setStyleSheet(
-            "QPushButton { background: #4A90D9; color: white; font-weight: bold; "
-            "border-radius: 4px; padding: 6px 16px; }"
-            "QPushButton:hover { background: #5AA0E9; }"
-            "QPushButton:disabled { background: #444; color: #888; }"
+            "QPushButton { background:%(primary)s; color:%(on_primary)s;"
+            " font-weight:%(w_strong)s; border:1px solid %(primary)s;"
+            " border-radius:%(r_pill)spx; padding:6px 20px; }"
+            "QPushButton:hover { background:%(cta_tint_hover)s; }"
+            "QPushButton:disabled { background:%(fill_subtle)s;"
+            " color:%(on_surface_dim)s; border-color:%(hairline)s; }"
+            % _tv()
         )
         self._launch_btn.clicked.connect(self._on_launch)
         btn_layout.addWidget(self._launch_btn)
@@ -174,7 +186,8 @@ class LauncherDialog(QDialog):
 
         # ── Status bar area ───────────────────────────────────────────
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet("color: #E87; font-size: 11px;")
+        self._status_label.setStyleSheet(
+            "color:%(error)s;font-size:%(label_px)spx;" % _tv())
         root_layout.addWidget(self._status_label)
 
     # ------------------------------------------------------------------
@@ -229,7 +242,8 @@ class LauncherDialog(QDialog):
             return
         if not os.path.isfile(self._selected_file):
             self._auto_detect_label.setText("⚠ ファイルが見つかりません")
-            self._auto_detect_label.setStyleSheet("color: #E87; font-size: 11px;")
+            self._auto_detect_label.setStyleSheet(
+                "color:%(error)s;font-size:%(label_px)spx;" % _tv())
             return
 
         detected = detect_version_from_file(self._selected_file)
@@ -245,10 +259,12 @@ class LauncherDialog(QDialog):
                 self._auto_detect_label.setText(
                     f"✓ ファイルの保存バージョン: Maya {detected}  → Maya {best.version} を自動選択"
                 )
-                self._auto_detect_label.setStyleSheet("color: #4A9; font-size: 11px;")
+                self._auto_detect_label.setStyleSheet(
+                    "color:%(success)s;font-size:%(label_px)spx;" % _tv())
         else:
             self._auto_detect_label.setText("バージョン情報を取得できませんでした")
-            self._auto_detect_label.setStyleSheet("color: #888; font-size: 11px;")
+            self._auto_detect_label.setStyleSheet(
+                "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
 
     def _on_launch(self):
         inst = self._version_combo.currentData()
@@ -305,14 +321,15 @@ class LauncherDialog(QDialog):
         painter = QPainter(pm)
         painter.setRenderHint(QPainter.Antialiasing)
         # Gradient-like squares
+        _c = _tv()
         for i, (color, rect) in enumerate([
-            ("#4A90D9", (4, 4, size - 8, size - 8)),
-            ("#2A6090", (size // 4, size // 4, size // 2, size // 2)),
+            (_c["primary"], (4, 4, size - 8, size - 8)),
+            (_c["primary_container"], (size // 4, size // 4, size // 2, size // 2)),
         ]):
             painter.setBrush(QColor(color))
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(*rect, 6, 6)
-        painter.setPen(QColor("#FFFFFF"))
+        painter.setPen(QColor(_c["on_primary"]))
         f = QFont()
         f.setPointSize(max(8, size // 5))
         f.setBold(True)
@@ -325,7 +342,7 @@ class LauncherDialog(QDialog):
     def _make_divider() -> "QLabel":
         line = QLabel()
         line.setFixedHeight(1)
-        line.setStyleSheet("background: #444;")
+        line.setStyleSheet("background:%(hairline)s;" % _tv())
         return line
 
     # ------------------------------------------------------------------

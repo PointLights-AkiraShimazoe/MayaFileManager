@@ -16,17 +16,15 @@ Quick-Nav Preset Editor
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from core.compat import (
     Qt, Signal,
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QPushButton, QToolButton, QLineEdit, QComboBox,
-    QListWidget, QListWidgetItem, QAbstractItemView,
-    QGroupBox, QSplitter,
-    QMenu, QAction, QMessageBox, QFileDialog, QInputDialog,
-    QSize, QUrl
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QLineEdit, QListWidget, QAbstractItemView,
+
+    QMenu, QMessageBox, QFileDialog, QInputDialog
 )
+from core.compat import QtCore as _QtCore
 
 
 # ---------------------------------------------------------------------------
@@ -93,8 +91,11 @@ class NavItemRow(QWidget):
         layout.addWidget(del_btn)
 
     def _browse(self):
-        d = QFileDialog.getExistingDirectory(self, "ディレクトリを選択",
-                                             self._path_edit.text() or str(Path.home()))
+        # ネイティブダイアログはシェル拡張の読み込みで mayapy がクラッシュする
+        # （r64）。アプリ属性 AA_DontUseNativeDialogs に加え、呼び出し側でも明示。
+        d = QFileDialog.getExistingDirectory(
+            self, "ディレクトリを選択", self._path_edit.text() or str(Path.home()),
+            QFileDialog.ShowDirsOnly | QFileDialog.DontUseNativeDialog)
         if d:
             self._path_edit.setText(d)
 
@@ -141,6 +142,7 @@ class QuickNavPresetEditor(QDialog):
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         self._build_ui()
+        self._disable_auto_default()
         self._load_presets()
 
     # ------------------------------------------------------------------
@@ -190,7 +192,14 @@ class QuickNavPresetEditor(QDialog):
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("プリセット名:"))
         self._name_edit = QLineEdit()
-        self._name_edit.textChanged.connect(lambda _: None)  # name edited separately
+        # r63: 名前欄の Enter / フォーカス喪失で «その場で» 改名を反映する。
+        # 従来は Enter がダイアログの既定ボタン（保存して閉じる）に流れて閉じて
+        # しまい、改名が保存されない／空の新規プリセットだけ残る、が起きた。
+        self._name_edit.returnPressed.connect(self._apply_rename)
+        self._name_edit.editingFinished.connect(self._apply_rename)
+        # r106: 名前欄の Enter は «改名するだけ»。ダイアログの既定ボタンへ
+        # 流さない（新規プリセット作成や «保存して閉じる» を誘発しない）。
+        self._name_edit.installEventFilter(self)
         name_row.addWidget(self._name_edit)
         rl.addLayout(name_row)
 
@@ -212,7 +221,8 @@ class QuickNavPresetEditor(QDialog):
         rl.addWidget(scroll)
 
         add_item_btn = QPushButton("＋ ボタンを追加")
-        add_item_btn.clicked.connect(self._add_item)
+        # clicked(bool) の checked 引数が label に流れ込むのを防ぐ（lambdaで遮断）
+        add_item_btn.clicked.connect(lambda _c=False: self._add_item())
         rl.addWidget(add_item_btn)
 
         # Quick-add standard directories
@@ -238,12 +248,55 @@ class QuickNavPresetEditor(QDialog):
         btn_row2.addWidget(cancel_btn)
 
         save_btn = QPushButton("💾 保存して閉じる")
-        save_btn.setDefault(True)
+        # 既定ボタンにしない: 名前欄・ラベル欄・パス欄で Enter を押すたびに
+        # ダイアログが閉じてしまうため（r63）
+        save_btn.setDefault(False)
+        save_btn.setAutoDefault(False)
+        cancel_btn.setAutoDefault(False)
         save_btn.clicked.connect(self._save_and_close)
         btn_row2.addWidget(save_btn)
         rl.addLayout(btn_row2)
 
         root.addWidget(right)
+
+    def keyPressEvent(self, event):
+        """ダイアログ全体で Enter を握り潰す（r106）。
+
+        プリセット設定の **どこで Enter を押しても** «新しいプリセット» が
+        立ち上がっていた（autoDefault ボタンが拾っていた）。ここで止めて、
+        各入力欄の returnPressed だけで完結させる。Esc は従来どおり閉じる。"""
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def eventFilter(self, obj, event):
+        """名前欄の Enter をここで消費する（r106）。"""
+        try:
+            if obj is self._name_edit and \
+                    event.type() == _QtCore.QEvent.KeyPress:
+                if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                    self._apply_rename()
+                    return True
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def _disable_auto_default(self):
+        """ダイアログ内の全ボタンの autoDefault を切る（r106）。
+
+        QDialog 内の QPushButton は既定で autoDefault=True。Enter を押すと
+        «フォーカス連鎖で最初の autoDefault ボタン» が押されるため、
+        プリセット名を直して Enter → 「✚ 新規」が発火して
+        «新しいプリセット» ダイアログが開いていた（ユーザー報告 2026-10-01）。
+        r63 で保存／キャンセルだけ切っていたが、残りのボタンが拾っていた。
+        名前欄の Enter は returnPressed（改名）だけで完結させる。"""
+        for b in self.findChildren(QPushButton):
+            try:
+                b.setAutoDefault(False)
+                b.setDefault(False)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Preset management
@@ -278,6 +331,23 @@ class QuickNavPresetEditor(QDialog):
         self._name_edit.setText(name)
         self._name_edit.blockSignals(False)
         self._populate_items(self._presets.get(name, []))
+
+    def _apply_rename(self):
+        """名前欄の内容を現在のプリセット名に反映する（辞書とリスト項目の両方）。"""
+        new_name = self._name_edit.text().strip()
+        cur = self._current_preset
+        if not cur or not new_name or new_name == cur:
+            return
+        if new_name in self._presets:
+            QMessageBox.warning(self, "重複", "同名のプリセットが既に存在します。")
+            self._name_edit.blockSignals(True)
+            self._name_edit.setText(cur)
+            self._name_edit.blockSignals(False)
+            return
+        self._presets[new_name] = self._presets.pop(cur)
+        self._current_preset = new_name
+        for it in self._preset_list.findItems(cur, Qt.MatchExactly):
+            it.setText(new_name)
 
     def _new_preset(self):
         name, ok = QInputDialog.getText(self, "新しいプリセット", "プリセット名:")
@@ -384,14 +454,13 @@ class QuickNavPresetEditor(QDialog):
     # ------------------------------------------------------------------
 
     def _save_and_close(self):
-        # Handle rename
+        # 未反映の改名があれば反映（重複なら警告して中断）
         new_name = self._name_edit.text().strip()
         if self._current_preset and new_name and new_name != self._current_preset:
             if new_name in self._presets:
                 QMessageBox.warning(self, "重複", "同名のプリセットが既に存在します。")
                 return
-            self._presets[new_name] = self._presets.pop(self._current_preset)
-            self._current_preset = new_name
+            self._apply_rename()
 
         self._sync_current_preset()
         self._sm.save_quick_nav_presets(self._presets)

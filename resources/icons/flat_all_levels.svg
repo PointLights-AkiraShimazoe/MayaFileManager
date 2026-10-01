@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
+  <g fill="none" stroke="#d1e4fa" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 階層（段付き）: 親 → 子 → 孫 -->
+    <path d="M3 4.5h8"/>
+    <path d="M5 9.5h6"/>
+    <path d="M7 14.5h4"/>
+    <path d="M3 4.5v10.5"/>
+    <path d="M5 9.5v5"/>
+    <!-- 二重の下向き矢印（すべて降りる） -->
+    <path d="M15.5 3.5v13"/>
+    <path d="M12.8 10.5l2.7 2.7 2.7-2.7"/>
+    <path d="M12.8 13.8l2.7 2.7 2.7-2.7"/>
+  </g>
+</svg>

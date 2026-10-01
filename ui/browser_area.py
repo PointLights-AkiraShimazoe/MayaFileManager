@@ -8,14 +8,66 @@ MainWindow はこれを縦スプリッタに複数積み、追加・削除・並
 各エリアの操作（ナビ・ブックマーククリック・プリセット等）は自エリアの
 ブラウザにだけ作用する（別エリアに飛ばない）。状態（パス・分割幅）は
 get_state()/apply_state() で保存・復元する。
+
+レイアウト: エリア操作（番号＋追加/移動/削除）はUI最左の «縦ストリップ»。
+プリセット行・本体はその右。エリアごとのアクセントカラーはストリップと
+プリセットボタンの両方に適用される。
 """
 
 import os
 
 from core.compat import (
     Qt, Signal, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QToolButton, QSplitter, QFrame,
+    QToolButton, QSplitter, QFrame, QPainter, QColor, QRect, QSize,
 )
+from core.i18n import tr
+
+
+class _VerticalLabel(QLabel):
+    """縦書き（90度回転）ラベル。エリア番号表示用。"""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._pen_color = None
+
+    def set_pen_color(self, color: str):
+        self._pen_color = color
+        self.update()
+
+    def sizeHint(self):
+        s = super().sizeHint()
+        return QSize(s.height(), s.width())
+
+    def minimumSizeHint(self):
+        s = super().minimumSizeHint()
+        return QSize(s.height(), s.width())
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            if self._pen_color:
+                painter.setPen(QColor(self._pen_color))
+            f = self.font()
+            f.setBold(True)
+            painter.setFont(f)
+            painter.rotate(-90)
+            painter.drawText(
+                QRect(-self.height(), 0, self.height(), self.width()),
+                Qt.AlignCenter, self.text())
+        finally:
+            painter.end()
+
+
+def _with_alpha(rgba: str, factor: float) -> str:
+    """"rgba(r, g, b, a)" の a を factor 倍した色を返す（0..1 にクランプ）。
+    エリアのアクセント罫線から hover/pressed の面色を作るのに使う。"""
+    try:
+        body = rgba[rgba.index("(") + 1:rgba.rindex(")")]
+        r, g, b, a = [x.strip() for x in body.split(",")]
+        a = max(0.0, min(1.0, float(a) * factor))
+        return "rgba(%s, %s, %s, %.3f)" % (r, g, b, a)
+    except Exception:
+        return rgba
 
 
 class BrowserArea(QWidget):
@@ -25,6 +77,7 @@ class BrowserArea(QWidget):
     directory_changed = Signal(str)
     status_message = Signal(str)
     bookmark_requested = Signal(list)
+    batch_rename_requested = Signal(list)      # r101
     # エリア操作（引数=自分自身）
     add_below_requested = Signal(object)
     remove_requested = Signal(object)
@@ -41,46 +94,52 @@ class BrowserArea(QWidget):
         from ui.bookmark_panel import BookmarkPanel
         from ui.main_window import HistoryPanel, QuickNavBar
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # ── エリアヘッダ（番号ラベル＋操作ボタン） ──────────────────
-        hdr = QFrame(self)
-        hdr.setObjectName("mfmAreaHdr")
-        self._hdr = hdr
-        self._apply_accent(0)
-        hl = QHBoxLayout(hdr)
-        hl.setContentsMargins(4, 2, 4, 2)
-        hl.setSpacing(4)
-        self._title = QLabel("エリア 1", hdr)
-        hl.addWidget(self._title)
+        # ── 左端: エリア操作の縦ストリップ ──────────────────────────
+        strip = QFrame(self)
+        strip.setObjectName("mfmAreaStrip")
+        strip.setFixedWidth(30)
+        self._strip = strip
+        sl = QVBoxLayout(strip)
+        sl.setContentsMargins(2, 4, 2, 6)
+        sl.setSpacing(4)
 
         def _btn(text, tip, slot):
-            b = QToolButton(hdr)
+            b = QToolButton(strip)
             b.setText(text)
             b.setToolTip(tip)
+            b.setFixedSize(24, 22)
             b.clicked.connect(slot)
-            hl.addWidget(b)
+            sl.addWidget(b, 0, Qt.AlignHCenter)
             return b
 
-        # 操作ボタンは「エリアN」表示のすぐ右隣に置く（右端ではなく）
-        _btn("＋", "このエリアの下に新しいエリアを追加",
+        _btn("＋", tr("このエリアの下に新しいエリアを追加", "Add a new area below"),
              lambda _c=False: self.add_below_requested.emit(self))
-        self._up_btn = _btn("▲", "このエリアを上へ移動",
+        self._up_btn = _btn("▲", tr("このエリアを上へ移動", "Move area up"),
                             lambda _c=False: self.move_up_requested.emit(self))
-        self._down_btn = _btn("▼", "このエリアを下へ移動",
+        self._down_btn = _btn("▼", tr("このエリアを下へ移動", "Move area down"),
                               lambda _c=False: self.move_down_requested.emit(self))
-        self._close_btn = _btn("✕", "このエリアを閉じる",
+        self._close_btn = _btn("✕", tr("このエリアを閉じる", "Close this area"),
                                lambda _c=False: self.remove_requested.emit(self))
-        hl.addStretch(1)
-        root.addWidget(hdr, 0)
+        sl.addStretch(1)
+        self._title = _VerticalLabel(tr("エリア 1", "Area 1"), strip)
+        sl.addWidget(self._title, 0, Qt.AlignHCenter)
+        sl.addStretch(1)
+        outer.addWidget(strip, 0)
 
-        # ── プリセット（クイックナビ）行 ─────────────────────────────
+        # ── 右側: プリセット行＋本体 ─────────────────────────────────
+        body = QVBoxLayout()
+        # 縦ストリップ（Area表示）との間の余白は body 全体で確保する。
+        # プリセット行だけに付けると下のパネル群と左端が揃わず見辛い。
+        body.setContentsMargins(6, 0, 0, 0)
+        body.setSpacing(0)
+
         self.quick_nav = QuickNavBar(self._sm, parent=self)
-        root.addWidget(self.quick_nav, 0)
+        body.addWidget(self.quick_nav, 0)
 
-        # ── 本体: [ブックマーク/履歴] | ブラウザ ──────────────────────
         self._split = QSplitter(Qt.Horizontal, self)
         self._split.setChildrenCollapsible(False)
         self._split.setHandleWidth(3)
@@ -99,9 +158,15 @@ class BrowserArea(QWidget):
         self._split.setStretchFactor(0, 0)
         self._split.setStretchFactor(1, 1)
         self._split.setSizes([260, 1200])
-        root.addWidget(self._split, 1)
+        body.addWidget(self._split, 1)
+        outer.addLayout(body, 1)
 
         # ── エリア内配線（操作は自エリアに閉じる） ─────────────────────
+        # r95: プリセット毎に «最後に表示していたディレクトリ» を覚え、
+        # 切り替え時に復元する（エリア毎に独立。状態保存にも含める）
+        self._preset_paths = {}
+        self._restoring_state = False
+        self.quick_nav.preset_changed.connect(self._on_preset_switched)
         self.quick_nav.navigate_requested.connect(self.browser.navigate_to)
         self.bookmark_panel.navigate_requested.connect(self.browser.navigate_to)
         self.history_panel.navigate_requested.connect(self.browser.navigate_to)
@@ -109,37 +174,70 @@ class BrowserArea(QWidget):
         self.browser.directory_changed.connect(self.directory_changed.emit)
         self.browser.status_message.connect(self.status_message.emit)
         self.browser.bookmark_requested.connect(self.bookmark_requested.emit)
+        self.browser.batch_rename_requested.connect(self.batch_rename_requested.emit)
+
+        self._apply_accent(0)
 
     # ------------------------------------------------------------------
     # 表示・状態
     # ------------------------------------------------------------------
 
-    # エリアごとの色味（ダークテーマ内で判別できる控えめなアクセント）
-    # (ヘッダ背景, タイトル文字色, 下線色)
-    _ACCENTS = [
-        ("rgba(38, 48, 68, 235)", "#9db8e0", "rgba(90, 130, 200, 160)"),   # 青
-        ("rgba(36, 54, 42, 235)", "#a5d6b0", "rgba(90, 170, 110, 160)"),   # 緑
-        ("rgba(52, 42, 64, 235)", "#c5b3e6", "rgba(150, 110, 200, 160)"),  # 紫
-        ("rgba(62, 52, 34, 235)", "#e6cf9e", "rgba(200, 160, 80, 160)"),   # 琥珀
-        ("rgba(34, 56, 56, 235)", "#9fd8d4", "rgba(80, 170, 165, 160)"),   # 青緑
-        ("rgba(60, 40, 46, 235)", "#e0a9b6", "rgba(200, 110, 130, 160)"),  # 薔薇
-    ]
+    # エリアごとの色味は design_tokens.json の area_accents（Mercury: 低彩度で
+    # 同じトーンの色相違いに揃える）。(背景, 文字色, アクセント線)
 
     def _apply_accent(self, i: int):
-        bg, fg, line = self._ACCENTS[i % len(self._ACCENTS)]
-        self._hdr.setStyleSheet(
-            "#mfmAreaHdr{background:%s;border-bottom:2px solid %s;}"
-            "QLabel{color:%s;font-weight:bold;padding:0 6px;}"
-            "QToolButton{background:rgba(55,55,55,235);color:#ddd;"
-            "border:1px solid rgba(110,110,110,150);border-radius:3px;"
-            "min-width:24px;min-height:18px;}"
-            "QToolButton:hover{background:rgba(90,90,90,235);}"
-            % (bg, line, fg)
+        from core.theme_engine import area_accents, qss_vars
+        accents = area_accents()
+        bg, fg, line = accents[i % len(accents)]
+        hover = _with_alpha(line, 0.5)     # 罫線より薄い面
+        pressed = _with_alpha(line, 1.3)   # 罫線より濃い面
+        v = dict(qss_vars(), bg=bg, fg=fg, line=line, hover=hover, pressed=pressed)
+        # 縦ストリップ（エリア操作）
+        self._strip.setStyleSheet(
+            "#mfmAreaStrip{background:%(bg)s;border-right:1px solid %(line)s;}"
+            "QToolButton{background:%(fill_subtle)s;color:%(on_surface)s;"
+            "border:1px solid %(hairline)s;border-radius:%(r_s)spx;}"
+            "QToolButton:hover{background:%(hover)s;}"
+            % v
         )
+        self._title.set_pen_color(fg)
+        # プリセット行: 視認性の階層では «脇役»（r56）。太字・塗りを廃し、
+        # エリアのアクセントは文字色とヘアラインにだけ乗せる（Mercury のピル）。
+        # 🔗リンクボタンは状態表示のため自前スタイル（#mfmPresetLink）を優先。
+        self.quick_nav.setStyleSheet(
+            "QLabel{color:%(on_surface_dim)s;font-size:%(label_px)spx;}"
+            "QToolButton{background:%(fill_subtle)s;color:%(fg)s;"
+            "border:1px solid %(hairline)s;border-radius:%(r_pill)spx;"
+            "padding:1px 12px;min-height:18px;font-size:%(label_px)spx;}"
+            "QToolButton:hover{background:%(hover)s;border-color:%(line)s;}"
+            "QToolButton:pressed{background:%(pressed)s;}"
+            "QComboBox{background:transparent;color:%(fg)s;font-size:%(label_px)spx;"
+            "border:1px solid %(hairline)s;border-radius:%(r_pill)spx;"
+            "padding:1px 8px;min-height:22px;}"
+            % v
+        )
+        # 🔗 のスタイルは QuickNavBar 側で objectName 指定済み（親のQSSより優先）
+
+    def _on_preset_switched(self, prev: str, new: str):
+        """プリセット切替: 直前のプリセットに «今のディレクトリ» を記録し、
+        切替先に記録があればそこへ移動する（無ければ現在地のまま）。"""
+        if self._restoring_state:
+            return
+        try:
+            cur = self.browser.current_path()
+            if prev and cur and os.path.isdir(cur):
+                self._preset_paths[prev] = cur
+            nxt = self._preset_paths.get(new)
+            if nxt and os.path.isdir(nxt) and \
+                    os.path.normcase(os.path.abspath(nxt)) != \
+                    os.path.normcase(os.path.abspath(cur or "")):
+                self.browser.navigate_to(nxt)
+        except Exception:
+            pass
 
     def set_index(self, i: int, count: int):
-        """ヘッダの番号表示・色味と、移動/削除ボタンの有効状態を更新する。"""
-        self._title.setText("エリア %d" % (i + 1))
+        """番号表示・色味と、移動/削除ボタンの有効状態を更新する。"""
+        self._title.setText(tr("エリア %d", "Area %d") % (i + 1))
         self._apply_accent(i)
         self._up_btn.setEnabled(i > 0)
         self._down_btn.setEnabled(i < count - 1)
@@ -147,10 +245,17 @@ class BrowserArea(QWidget):
 
     def get_state(self) -> dict:
         try:
+            cur = self.browser.current_path()
+            active = self.quick_nav.active_preset()
+            paths = dict(self._preset_paths)
+            if active and cur and os.path.isdir(cur):
+                paths[active] = cur          # 現在のプリセットの分も確定させる
             return {
-                "path": self.browser.current_path(),
+                "path": cur,
                 "main_split": [int(v) for v in self._split.sizes()],
                 "side_split": [int(v) for v in self._side.sizes()],
+                "preset": active,
+                "preset_paths": paths,       # r95: プリセット毎の最後の表示先
             }
         except Exception:
             return {}
@@ -165,6 +270,18 @@ class BrowserArea(QWidget):
             ss = state.get("side_split")
             if ss and len(ss) == 2 and sum(ss) > 0:
                 self._side.setSizes([int(v) for v in ss])
+            pp = state.get("preset_paths")
+            if isinstance(pp, dict):
+                self._preset_paths = {str(k): str(v) for k, v in pp.items()
+                                      if isinstance(v, str) and v}
+            preset = state.get("preset")
+            self._restoring_state = True
+            try:
+                if preset:
+                    # 復元時は保存済みの path を優先する（切替復元で上書きしない）
+                    self.quick_nav.set_active_preset(preset, notify=False)
+            finally:
+                self._restoring_state = False
             path = state.get("path")
             if path and os.path.isdir(path):
                 self.browser.navigate_to(path)

@@ -13,22 +13,30 @@ Settings Dialog
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 
 from core.compat import (
     Qt, Signal,
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QLabel, QPushButton, QToolButton, QLineEdit, QTextEdit, QComboBox,
-    QCheckBox, QSpinBox, QGroupBox, QListWidget, QListWidgetItem,
-    QTabWidget, QFrame, QSizePolicy, QScrollArea,
-    QMenu, QAction, QMessageBox, QFileDialog, QInputDialog,
-    QAbstractItemView, QSize
+    QLabel, QPushButton, QToolButton, QLineEdit, QComboBox,
+    QCheckBox, QSpinBox, QListWidget, QListWidgetItem,
+    QTabWidget, QFrame, QScrollArea,
+    QMenu, QMessageBox, QInputDialog
 )
 
 
 # ---------------------------------------------------------------------------
 # Helper widgets
 # ---------------------------------------------------------------------------
+
+def _tv():
+    """テーマトークン（色・形状・書体）。**遅延 import** すること。
+    トップレベルで core.theme_engine から名前を取り込むと、Maya 内の
+    ホットリロードや部分再読込で «partially initialized module» に当たり
+    ImportError（cannot import name 'qss_vars'）になる（r82 で実害）。"""
+    from core.theme_engine import qss_vars
+    return qss_vars()
+
 
 class _HLine(QFrame):
     def __init__(self, parent=None):
@@ -43,7 +51,7 @@ class _SectionLabel(QLabel):
         f = self.font()
         f.setBold(True)
         self.setFont(f)
-        self.setStyleSheet("color: #8AB4D4; margin-top: 8px;")
+        self.setStyleSheet("color:%(primary)s;margin-top:8px;" % _tv())
 
 
 class ExtensionListWidget(QWidget):
@@ -167,7 +175,9 @@ class AutoNamingRuleRow(QFrame):
 
     def _browse_dir(self):
         from core.compat import QFileDialog
-        d = QFileDialog.getExistingDirectory(self, "ディレクトリを選択")
+        d = QFileDialog.getExistingDirectory(
+            self, "ディレクトリを選択", self._dir_edit.text() or "",
+            QFileDialog.ShowDirsOnly | QFileDialog.DontUseNativeDialog)   # ネイティブは mayapy でクラッシュ（r64）
         if d:
             self._dir_edit.setText(d)
 
@@ -245,21 +255,49 @@ class SettingsDialog(QDialog):
         layout = QFormLayout(w)
         layout.setSpacing(8)
 
-        layout.addRow(_SectionLabel("テーマ"))
-        self._theme_combo = QComboBox()
-        self._theme_combo.addItems(["ダーク", "ライト"])
-        layout.addRow("テーマ:", self._theme_combo)
+        from core.i18n import tr
+        layout.addRow(_SectionLabel(tr("言語 / Language", "Language")))
+        self._lang_combo = QComboBox()
+        self._lang_combo.addItems([
+            tr("システム（Mayaに合わせる）", "System (follow Maya)"),
+            "日本語",
+            "English",
+        ])
+        layout.addRow(tr("表示言語:", "UI Language:"), self._lang_combo)
+        _lang_note = QLabel(tr("※ 再起動後に反映されます",
+                               "* Takes effect after restart"))
+        _lang_note.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
+        layout.addRow("", _lang_note)
 
         layout.addRow(_HLine())
-        layout.addRow(_SectionLabel("クリック動作"))
+        layout.addRow(_SectionLabel(tr("テーマ", "Theme")))
+        self._theme_combo = QComboBox()
+        self._theme_combo.addItems([tr("ダーク", "Dark"), tr("ライト", "Light")])
+        layout.addRow(tr("テーマ:", "Theme:"), self._theme_combo)
+        _theme_note = QLabel(tr("※ 再起動後に反映されます",
+                                "* Takes effect after restart"))
+        _theme_note.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
+        layout.addRow("", _theme_note)
 
+        layout.addRow(_HLine())
+        layout.addRow(_SectionLabel(tr("クリック動作", "Click Actions")))
+
+        # 「プレビュー」は「開く」と同一動作のため統合済み
         self._single_click_combo = QComboBox()
-        self._single_click_combo.addItems(["プレビュー", "開く", "インポート", "リファレンス"])
-        layout.addRow("シングルクリック:", self._single_click_combo)
+        self._single_click_combo.addItems([
+            tr("開く", "Open"), tr("インポート", "Import"),
+            tr("リファレンス", "Reference"), tr("何もしない (None)", "None")])
+        layout.addRow(tr("シングルクリック:", "Single click:"),
+                      self._single_click_combo)
 
         self._double_click_combo = QComboBox()
-        self._double_click_combo.addItems(["開く", "インポート", "リファレンス", "プレビュー"])
-        layout.addRow("ダブルクリック:", self._double_click_combo)
+        self._double_click_combo.addItems([
+            tr("開く", "Open"), tr("インポート", "Import"),
+            tr("リファレンス", "Reference")])
+        layout.addRow(tr("ダブルクリック:", "Double click:"),
+                      self._double_click_combo)
 
         layout.addRow(_HLine())
         layout.addRow(_SectionLabel("表示"))
@@ -278,9 +316,12 @@ class SettingsDialog(QDialog):
 
         layout.addRow(_SectionLabel("カラムビュー"))
 
+        # 「最大カラム深度」は廃止（フルパス保持。ルート自動シフトは
+        # スクロール整合性を壊すため r54 で完全無効化）。ウィジェットは互換のため
+        # 残すが非表示。
         self._col_depth_spin = QSpinBox()
         self._col_depth_spin.setRange(1, 12)
-        layout.addRow("最大カラム深度:", self._col_depth_spin)
+        self._col_depth_spin.setVisible(False)
 
         self._col_auto_width_cb = QCheckBox("カラム幅を最大文字数に合わせる")
         layout.addRow("", self._col_auto_width_cb)
@@ -356,7 +397,7 @@ class SettingsDialog(QDialog):
 
         self._last_maya_ver_edit = QLineEdit()
         self._last_maya_ver_edit.setReadOnly(True)
-        self._last_maya_ver_edit.setStyleSheet("color: #888;")
+        self._last_maya_ver_edit.setStyleSheet("color:%(on_surface_dim)s;" % _tv())
         layout.addRow("最後に使用したバージョン:", self._last_maya_ver_edit)
 
         return w
@@ -375,7 +416,8 @@ class SettingsDialog(QDialog):
             "指定ディレクトリ以下で新規ファイルを保存する際、\n"
             "テンプレートに従って自動的にファイル名を提案します。"
         )
-        info.setStyleSheet("color: #888; font-size: 11px;")
+        info.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
         layout.addWidget(info)
 
         layout.addWidget(_HLine())
@@ -393,7 +435,8 @@ class SettingsDialog(QDialog):
         layout.addWidget(scroll)
 
         add_btn = QPushButton("＋ ルールを追加")
-        add_btn.clicked.connect(self._add_naming_rule)
+        # clicked(bool) の checked 引数が directory に流れ込むのを防ぐ
+        add_btn.clicked.connect(lambda _c=False: self._add_naming_rule())
         layout.addWidget(add_btn)
 
         return w
@@ -409,11 +452,19 @@ class SettingsDialog(QDialog):
         theme_map = {"dark": 0, "light": 1}
         self._theme_combo.setCurrentIndex(theme_map.get(sm.get("theme", "dark"), 0))
 
-        action_map = {"preview": 0, "open": 1, "import": 2, "reference": 3}
+        # 言語モード
+        lang_map = {"auto": 0, "ja": 1, "en": 2}
+        self._lang_combo.setCurrentIndex(
+            lang_map.get(sm.get("ui_language", "auto"), 0))
+
+        # 「プレビュー」は「開く」へ移行済み
+        single_map = {"open": 0, "preview": 0, "import": 1,
+                      "reference": 2, "none": 3}
         self._single_click_combo.setCurrentIndex(
-            action_map.get(sm.get("single_click_action", "preview"), 0))
+            single_map.get(sm.get("single_click_action", "open"), 0))
+        double_map = {"open": 0, "preview": 0, "import": 1, "reference": 2}
         self._double_click_combo.setCurrentIndex(
-            action_map.get(sm.get("double_click_action", "open"), 0))
+            double_map.get(sm.get("double_click_action", "open"), 0))
 
         self._show_hidden_cb.setChecked(sm.get("show_hidden_files", False))
 
@@ -450,11 +501,18 @@ class SettingsDialog(QDialog):
         theme_map = {0: "dark", 1: "light"}
         sm.set("theme", theme_map[self._theme_combo.currentIndex()], save=False)
 
-        action_map = {0: "preview", 1: "open", 2: "import", 3: "reference"}
+        sm.set("ui_language",
+               {0: "auto", 1: "ja", 2: "en"}.get(
+                   self._lang_combo.currentIndex(), "auto"), save=False)
+
+        single_map = {0: "open", 1: "import", 2: "reference", 3: "none"}
         sm.set("single_click_action",
-               action_map[self._single_click_combo.currentIndex()], save=False)
+               single_map.get(self._single_click_combo.currentIndex(), "open"),
+               save=False)
+        double_map = {0: "open", 1: "import", 2: "reference"}
         sm.set("double_click_action",
-               action_map.get(self._double_click_combo.currentIndex(), "open"), save=False)
+               double_map.get(self._double_click_combo.currentIndex(), "open"),
+               save=False)
         sm.set("show_hidden_files", self._show_hidden_cb.isChecked(), save=False)
 
         # ブラウザ

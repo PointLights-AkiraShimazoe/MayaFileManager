@@ -268,15 +268,17 @@ class MergePanel(QWidget):
         lay.setSpacing(0)
         bar = QWidget(self)
         bar.setObjectName("mfmMergeBar")
+        from core.theme_engine import qss_vars
         bar.setStyleSheet(
-            "#mfmMergeBar{background:rgba(40,46,60,235);"
-            "border-bottom:1px solid rgba(120,120,140,150);}"
-            "QLabel{color:#cdd6ff;}"
-            "QPushButton{background:rgba(70,76,92,235);color:#fff;"
-            "border:1px solid rgba(130,130,150,160);border-radius:4px;padding:2px 10px;}"
-            "QPushButton:hover{background:rgba(100,106,126,235);}"
-            "QPushButton:checked{background:rgba(60,120,200,245);"
-            "border-color:rgba(120,170,240,220);}"
+            "#mfmMergeBar{background:%(plane_merge_header)s;"
+            "border-bottom:1px solid %(hairline)s;}"
+            "QLabel{color:%(on_surface_variant)s;}"
+            "QPushButton{background:%(fill_subtle)s;color:%(on_surface)s;"
+            "border:1px solid %(hairline)s;border-radius:%(r_pill)spx;padding:2px 12px;}"
+            "QPushButton:hover{background:%(fill_subtle_hover)s;}"
+            "QPushButton:checked{background:%(cta_tint)s;"
+            "border-color:%(primary)s;color:%(on_primary_container)s;}"
+            % qss_vars()
         )
         blay = QHBoxLayout(bar)
         blay.setContentsMargins(4, 2, 4, 2)

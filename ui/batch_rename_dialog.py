@@ -17,11 +17,10 @@ from typing import List, Tuple, Optional
 
 from core.compat import (
     Qt, Signal,
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QLabel, QPushButton, QToolButton, QLineEdit, QComboBox,
-    QCheckBox, QSpinBox, QGroupBox,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QLineEdit, QComboBox,
+    QSpinBox, QGroupBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QMessageBox, QColor, QFont, QSize
+    QMessageBox, QColor
 )
 from core.file_operations import RenameRule, batch_rename
 
@@ -29,6 +28,15 @@ from core.file_operations import RenameRule, batch_rename
 # ---------------------------------------------------------------------------
 # Preview Table
 # ---------------------------------------------------------------------------
+
+def _tv():
+    """テーマトークン（色・形状・書体）。**遅延 import** すること。
+    トップレベルで core.theme_engine から名前を取り込むと、Maya 内の
+    ホットリロードや部分再読込で «partially initialized module» に当たり
+    ImportError（cannot import name 'qss_vars'）になる（r82 で実害）。"""
+    from core.theme_engine import qss_vars
+    return qss_vars()
+
 
 class PreviewTable(QTableWidget):
 
@@ -56,22 +64,22 @@ class PreviewTable(QTableWidget):
 
             if err:
                 status = QTableWidgetItem("⚠ エラー")
-                status.setForeground(QColor("#E87070"))
-                new_item.setForeground(QColor("#E87070"))
+                status.setForeground(QColor(_tv()["error"]))
+                new_item.setForeground(QColor(_tv()["error"]))
             elif old_name == new_name:
                 status = QTableWidgetItem("変化なし")
-                status.setForeground(QColor("#888888"))
+                status.setForeground(QColor(_tv()["on_surface_dim"]))
             else:
                 # Check if new file already exists
                 new_path = Path(new)
                 if new_path.exists() and new_path != Path(old):
                     status = QTableWidgetItem("⚠ 競合")
-                    status.setForeground(QColor("#E8A070"))
-                    new_item.setForeground(QColor("#E8A070"))
+                    status.setForeground(QColor(_tv()["warning"]))
+                    new_item.setForeground(QColor(_tv()["warning"]))
                 else:
                     status = QTableWidgetItem("✓ OK")
-                    status.setForeground(QColor("#70C870"))
-                    new_item.setForeground(QColor("#70C870"))
+                    status.setForeground(QColor(_tv()["success"]))
+                    new_item.setForeground(QColor(_tv()["success"]))
 
             self.setItem(row, 0, old_item)
             self.setItem(row, 1, new_item)
@@ -192,7 +200,8 @@ class BatchRenameDialog(QDialog):
         # ── Buttons ───────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet("color: #888; font-size: 11px;")
+        self._status_label.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
         btn_row.addWidget(self._status_label)
         btn_row.addStretch()
 
@@ -202,10 +211,13 @@ class BatchRenameDialog(QDialog):
 
         self._apply_btn = QPushButton("▶  実行")
         self._apply_btn.setStyleSheet(
-            "QPushButton { background: #4A90D9; color: white; font-weight: bold; "
-            "border-radius: 4px; padding: 4px 16px; }"
-            "QPushButton:hover { background: #5AA0E9; }"
-            "QPushButton:disabled { background: #444; color: #888; }"
+            "QPushButton { background:%(primary)s; color:%(on_primary)s;"
+            " font-weight:%(w_strong)s; border:1px solid %(primary)s;"
+            " border-radius:%(r_pill)spx; padding:4px 20px; }"
+            "QPushButton:hover { background:%(cta_tint_hover)s; }"
+            "QPushButton:disabled { background:%(fill_subtle)s;"
+            " color:%(on_surface_dim)s; border-color:%(hairline)s; }"
+            % _tv()
         )
         self._apply_btn.clicked.connect(self._apply_rename)
         btn_row.addWidget(self._apply_btn)

@@ -11,16 +11,14 @@ Maya セッション内で開いた場合のみ実際の操作が可能。
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from core.compat import (
-    Qt, Signal,
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QPushButton, QToolButton, QLineEdit, QComboBox,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QGroupBox, QFrame, QCheckBox,
-    QMenu, QAction, QMessageBox, QFileDialog, QInputDialog,
-    QColor, QSize, QSplitter, QTextEdit
+    Qt, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QPushButton, QToolButton, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QGroupBox, QCheckBox,
+    QMenu, QMessageBox, QFileDialog, QInputDialog,
+    QColor, QTextEdit
 )
 from core.maya_version import is_running_inside_maya
 
@@ -28,6 +26,15 @@ from core.maya_version import is_running_inside_maya
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
+
+def _tv():
+    """テーマトークン（色・形状・書体）。**遅延 import** すること。
+    トップレベルで core.theme_engine から名前を取り込むと、Maya 内の
+    ホットリロードや部分再読込で «partially initialized module» に当たり
+    ImportError（cannot import name 'qss_vars'）になる（r82 で実害）。"""
+    from core.theme_engine import qss_vars
+    return qss_vars()
+
 
 class ReferenceEntry:
     """Represents one reference node."""
@@ -80,12 +87,12 @@ class ReferenceTable(QTableWidget):
             for col, text in enumerate(entry.to_row()):
                 item = QTableWidgetItem(text)
                 if not entry.loaded:
-                    item.setForeground(QColor("#888888"))
+                    item.setForeground(QColor(_tv()["on_surface_dim"]))
                 if col == 3:  # Status column
                     if entry.loaded:
-                        item.setForeground(QColor("#70C870"))
+                        item.setForeground(QColor(_tv()["success"]))
                     else:
-                        item.setForeground(QColor("#E87070"))
+                        item.setForeground(QColor(_tv()["error"]))
                 self.setItem(row, col, item)
 
 
@@ -135,7 +142,8 @@ class ReferenceEditor(QDialog):
         toolbar.addStretch()
 
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet("color: #888; font-size: 11px;")
+        self._status_label.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
         toolbar.addWidget(self._status_label)
         root.addLayout(toolbar)
 
@@ -182,7 +190,7 @@ class ReferenceEditor(QDialog):
 
         self._remove_btn = QPushButton("🗑 削除")
         self._remove_btn.setEnabled(False)
-        self._remove_btn.setStyleSheet("color: #E87070;")
+        self._remove_btn.setStyleSheet("color:%(error)s;" % _tv())
         self._remove_btn.clicked.connect(self._remove_reference)
         action_row.addWidget(self._remove_btn)
 

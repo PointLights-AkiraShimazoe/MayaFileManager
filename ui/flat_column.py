@@ -16,7 +16,7 @@ import os
 from core.compat import (
     Qt, Signal, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QComboBox,
     QToolButton, QListView, QAbstractItemView, QSortFilterProxyModel,
-    QFileInfo,
+    QFileInfo, QApplication, QDrag, QMimeData, QUrl,
 )
 
 try:  # PySide6
@@ -31,11 +31,104 @@ except ImportError:  # PySide2
 
 from core.merge_browse import flatten_files
 from core.file_operations import open_with_default_app
+from core.i18n import tr
 
 _PATH_ROLE = Qt.UserRole + 1
 _SIZE_ROLE = Qt.UserRole + 2
 _MTIME_ROLE = Qt.UserRole + 3
-_SORT_KEYS = [("name", "名前"), ("type", "種類"), ("date", "日付"), ("size", "サイズ")]
+
+
+class _DragListView(QListView):
+    """平坦ビューの一覧（r74）: 複数選択したまま D&D できる QListView。
+
+    QStandardItemModel の既定 mimeData はファイル URL を持たないため、
+    自前で text/uri-list を作って QDrag する。Explorer 同様、«選択済み項目»
+    を修飾キーなしで押した時は選択を崩さず（プレスを保留）、
+    - Move 閾値を超えたら選択全体をドラッグ
+    - 動かさずに離したらその項目だけの単一選択に確定（clicked も発火）
+    未選択項目・修飾キー付きは QListView 標準の選択処理に任せる。
+    ドラッグ終了は drag_finished(paths) で通知（落下先が DCC なら親が処理）。"""
+
+    drag_finished = Signal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pending = None          # (pos, index)
+        self._path_role = _PATH_ROLE
+
+    def _selected_paths(self):
+        out = []
+        for idx in self.selectedIndexes():
+            p = self.model().data(idx, self._path_role)
+            if p:
+                out.append(p)
+        return out
+
+    def mousePressEvent(self, event):
+        try:
+            pos = event.position().toPoint()
+        except AttributeError:
+            pos = event.pos()
+        idx = self.indexAt(pos)
+        sm = self.selectionModel()
+        if (event.button() == Qt.LeftButton and idx.isValid() and sm is not None
+                and sm.isSelected(idx) and event.modifiers() == Qt.NoModifier):
+            self._pending = (pos, idx)
+            self.setFocus(Qt.MouseFocusReason)
+            return                      # 選択を崩さない（ドラッグ候補）
+        self._pending = None
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._pending is not None and (event.buttons() & Qt.LeftButton):
+            try:
+                pos = event.position().toPoint()
+            except AttributeError:
+                pos = event.pos()
+            if (pos - self._pending[0]).manhattanLength() >= QApplication.startDragDistance():
+                self._pending = None
+                self._start_drag()
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._pending is not None:
+            _pos, idx = self._pending
+            self._pending = None
+            sm = self.selectionModel()
+            if sm is not None and idx.isValid():
+                from core.compat import QtCore as _QC
+                QISM = _QC.QItemSelectionModel
+                sm.select(idx, QISM.ClearAndSelect | QISM.Rows)
+                sm.setCurrentIndex(idx, QISM.NoUpdate)
+                self.clicked.emit(idx)
+            return
+        super().mouseReleaseEvent(event)
+
+    def _start_drag(self):
+        paths = self._selected_paths()
+        if not paths:
+            return
+        # r90: 親（BrowserPanel）が DCC 対応の mime を用意していればそれを使う
+        factory = getattr(self, "_mime_factory", None)
+        if callable(factory):
+            mime = factory(paths)
+        else:
+            mime = QMimeData()
+            mime.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        self.last_mime = mime
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        try:
+            drag.exec(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+        except AttributeError:
+            drag.exec_(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+        self.drag_finished.emit(list(paths))
+
+
+def _sort_keys():
+    return [("name", tr("名前", "Name")), ("type", tr("種類", "Type")),
+            ("date", tr("日付", "Date")), ("size", tr("サイズ", "Size"))]
 
 
 class _FlatProxy(QSortFilterProxyModel):
@@ -107,6 +200,7 @@ class FlatColumn(QWidget):
     file_activated = Signal(str)
     file_selected = Signal(str)
     closed = Signal()
+    drag_finished = Signal(list)      # r74: D&D 終了（選択パス群）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -114,18 +208,23 @@ class FlatColumn(QWidget):
         self._sources = []
         self.setMinimumWidth(200)
         self.setObjectName("mfmFlatCol")
+        from core.theme_engine import qss_vars
         self.setStyleSheet(
-            "#mfmFlatCol{background:rgba(26,30,38,255);}"
-            "QWidget#flatHdr{background:rgba(40,46,60,238);"
-            "border-bottom:1px solid rgba(120,120,140,150);}"
-            "QLineEdit{background:rgba(20,20,20,235);color:#ddd;"
-            "border:1px solid rgba(110,110,110,150);border-radius:3px;padding:0 4px;}"
-            "QComboBox{background:rgba(45,45,45,235);color:#ddd;"
-            "border:1px solid rgba(110,110,110,150);border-radius:3px;padding:0 4px;}"
-            "QToolButton{background:rgba(55,55,55,235);color:#ddd;"
-            "border:1px solid rgba(110,110,110,150);border-radius:3px;}"
-            "QToolButton:hover{background:rgba(90,90,90,235);}"
-            "QListView{background:rgba(26,30,38,255);color:#ddd;border:none;}"
+            "#mfmFlatCol{background:%(plane_flat)s;}"
+            "QWidget#flatHdr{background:%(plane_flat_header)s;"
+            "border-bottom:1px solid %(hairline)s;}"
+            "QLineEdit{background:%(fill_subtle)s;color:%(on_surface)s;"
+            "border:1px solid %(hairline)s;border-radius:10px;"
+            "min-height:18px;max-height:20px;padding:0 8px;}"
+            "QComboBox{background:%(fill_subtle)s;color:%(on_surface)s;"
+            "border:1px solid %(hairline)s;border-radius:10px;"
+            "min-height:18px;max-height:20px;padding:0 8px;}"
+            "QToolButton{background:%(fill_subtle)s;color:%(on_surface)s;"
+            "border:1px solid %(hairline)s;border-radius:9px;"
+            "min-height:16px;max-height:18px;padding:0px 6px;}"
+            "QToolButton:hover{background:%(fill_subtle_hover)s;}"
+            "QListView{background:%(plane_flat)s;color:%(on_surface)s;border:none;}"
+            % qss_vars()
         )
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -139,15 +238,16 @@ class FlatColumn(QWidget):
         frow.setContentsMargins(0, 0, 0, 0)
         frow.setSpacing(3)
         self._title = QLineEdit(hdr)
-        self._title.setPlaceholderText("フィルタ（平坦）")
+        self._title.setPlaceholderText(tr("フィルタ（平坦）", "Filter (flat)"))
         self._title.setClearButtonEnabled(True)
         self._title.setFixedHeight(20)
         self._title.textChanged.connect(lambda t: self._proxy.set_filter(t))
         self._excl = QLineEdit(hdr)
-        self._excl.setPlaceholderText("排他")
+        self._excl.setPlaceholderText(tr("排他", "Exclude"))
         self._excl.setClearButtonEnabled(True)
         self._excl.setFixedHeight(20)
-        self._excl.setToolTip("入力に一致するファイルを除外")
+        self._excl.setToolTip(tr("入力に一致するファイルを除外",
+                                 "Hide files matching this text"))
         self._excl.textChanged.connect(lambda t: self._proxy.set_exclude(t))
         frow.addWidget(self._title, 1)
         frow.addWidget(self._excl, 1)
@@ -157,19 +257,19 @@ class FlatColumn(QWidget):
         row.setSpacing(3)
         self._sort_combo = QComboBox(hdr)
         self._sort_combo.setFixedHeight(20)
-        for key, label in _SORT_KEYS:
+        for key, label in _sort_keys():
             self._sort_combo.addItem(label, key)
         self._order_btn = QToolButton(hdr)
         self._order_btn.setCheckable(True)
         self._order_btn.setFixedSize(26, 20)
         self._order_btn.setText("▲")
-        self._order_btn.setToolTip("昇順／降順")
+        self._order_btn.setToolTip(tr("昇順／降順", "Ascending / Descending"))
         self._sort_combo.currentIndexChanged.connect(lambda _i: self._apply_sort())
         self._order_btn.clicked.connect(lambda _c=False: self._apply_sort())
         self._close_btn = QToolButton(hdr)
         self._close_btn.setText("✕")
         self._close_btn.setFixedSize(24, 20)
-        self._close_btn.setToolTip("平坦カラムを閉じる")
+        self._close_btn.setToolTip(tr("平坦カラムを閉じる", "Close flat column"))
         self._close_btn.clicked.connect(self.closed.emit)
         row.addWidget(self._sort_combo, 1)
         row.addWidget(self._order_btn, 0)
@@ -181,10 +281,12 @@ class FlatColumn(QWidget):
         self._proxy = _FlatProxy(self)
         self._proxy.setSourceModel(self._src)
         self._proxy.sort(0, Qt.AscendingOrder)
-        self._view = QListView(self)
+        self._view = _DragListView(self)
         self._view.setModel(self._proxy)
         self._view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._view.setUniformItemSizes(True)
+        self._view.setDragEnabled(False)     # ドラッグは _DragListView が自前で行う
+        self._view.drag_finished.connect(self.drag_finished)
         self._view.clicked.connect(self._on_clicked)
         self._view.activated.connect(self._on_activated)
         lay.addWidget(self._view, 1)
@@ -195,11 +297,24 @@ class FlatColumn(QWidget):
         self._order_btn.setText("▲" if asc else "▼")
         self._proxy.set_sort(key, asc)
 
+    def set_recursive(self, recursive: bool):
+        """平坦化の深さ: True=全階層（既定）/ False=各フォルダ直下のみ。
+        変更時は現在のソースで一覧を作り直す。"""
+        recursive = bool(recursive)
+        if getattr(self, "_recursive", True) == recursive:
+            return
+        self._recursive = recursive
+        self.set_sources(self._sources)
+
+    def is_recursive(self) -> bool:
+        return bool(getattr(self, "_recursive", True))
+
     def set_sources(self, dirs):
         """選択フォルダ群を設定して平坦一覧を再構築する。"""
         self._sources = list(dirs or [])
         self._src.clear()
-        for fp in flatten_files(self._sources):
+        for fp in flatten_files(self._sources,
+                                recursive=getattr(self, "_recursive", True)):
             it = QStandardItem(os.path.basename(fp))
             it.setEditable(False)
             try:
@@ -216,6 +331,15 @@ class FlatColumn(QWidget):
             self._src.appendRow(it)
         self._proxy.set_sort(self._sort_combo.currentData() or "name",
                              not self._order_btn.isChecked())
+
+    def all_paths(self):
+        """一覧にある全ファイルパス（連携状態の要求などに使う）。"""
+        out = []
+        for r in range(self._src.rowCount()):
+            p = self._src.item(r).data(_PATH_ROLE)
+            if p:
+                out.append(p)
+        return out
 
     def selected_paths(self):
         out = []

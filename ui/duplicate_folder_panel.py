@@ -17,27 +17,33 @@ QTreeWidget: 重複フォルダ名 → 各場所のパス → その中のファ
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from core.compat import (
     Qt, Signal,
     QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QToolButton, QLineEdit, QSpinBox, QCheckBox,
-    QTreeWidget, QTreeWidgetItem, QAbstractItemView,
-    QSplitter, QFrame, QMenu, QAction,
-    QMessageBox, QFileDialog, QInputDialog,
-    QSize, QColor, QFont, QProgressDialog, QApplication,
+    QLabel, QPushButton, QToolButton, QLineEdit, QSpinBox, QTreeWidget, QTreeWidgetItem, QAbstractItemView,
+    QMenu, QMessageBox, QFileDialog, QInputDialog,
+    QColor, QApplication,
     QThread, QObject
 )
 from core.file_operations import (
-    copy_items, move_items, open_with_default_app,
-    reveal_in_explorer, format_size, FileOperationError
+    copy_items, move_items, reveal_in_explorer, format_size, FileOperationError
 )
 
 
 # ---------------------------------------------------------------------------
 # Background scanner
 # ---------------------------------------------------------------------------
+
+def _tv():
+    """テーマトークン（色・形状・書体）。**遅延 import** すること。
+    トップレベルで core.theme_engine から名前を取り込むと、Maya 内の
+    ホットリロードや部分再読込で «partially initialized module» に当たり
+    ImportError（cannot import name 'qss_vars'）になる（r82 で実害）。"""
+    from core.theme_engine import qss_vars
+    return qss_vars()
+
 
 class _ScanSignals(QObject):
     finished = Signal(dict)   # {folder_name: [abs_path, ...]}
@@ -154,9 +160,13 @@ class DuplicateFolderPanel(QWidget):
 
         self._scan_btn = QPushButton("🔍 スキャン")
         self._scan_btn.setStyleSheet(
-            "QPushButton { background: #3A7040; color: white; font-weight: bold; "
-            "border-radius: 4px; padding: 4px 12px; }"
-            "QPushButton:hover { background: #4A8050; }"
+            "QPushButton { background:%(primary)s; color:%(on_primary)s;"
+            " font-weight:%(w_strong)s; border:1px solid %(primary)s;"
+            " border-radius:%(r_pill)spx; padding:4px 16px; }"
+            "QPushButton:hover { background:%(cta_tint_hover)s; }"
+            "QPushButton:disabled { background:%(fill_subtle)s;"
+            " color:%(on_surface_dim)s; border-color:%(hairline)s; }"
+            % _tv()
         )
         self._scan_btn.clicked.connect(self._start_scan)
         tb.addWidget(self._scan_btn)
@@ -172,7 +182,8 @@ class DuplicateFolderPanel(QWidget):
         filter_row.addWidget(self._filter_edit)
 
         self._count_label = QLabel("0 件")
-        self._count_label.setStyleSheet("color: #888; font-size: 11px;")
+        self._count_label.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
         filter_row.addWidget(self._count_label)
         layout.addLayout(filter_row)
 
@@ -195,7 +206,8 @@ class DuplicateFolderPanel(QWidget):
 
         # Status
         self._status_label = QLabel("スキャンするディレクトリを指定してください")
-        self._status_label.setStyleSheet("color: #888; font-size: 11px; padding: 2px;")
+        self._status_label.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;padding:2px;" % _tv())
         layout.addWidget(self._status_label)
 
     # ------------------------------------------------------------------
@@ -264,7 +276,7 @@ class DuplicateFolderPanel(QWidget):
             f = root_item.font(0)
             f.setBold(True)
             root_item.setFont(0, f)
-            root_item.setForeground(0, QColor("#8AB4D4"))
+            root_item.setForeground(0, QColor(_tv()["primary"]))
 
             for path in paths:
                 path_item = QTreeWidgetItem(root_item)
@@ -293,7 +305,7 @@ class DuplicateFolderPanel(QWidget):
                             f_item = QTreeWidgetItem(path_item)
                             f_item.setText(0, f"    📄 {fname}")
                             f_item.setData(0, Qt.UserRole, fpath)
-                            f_item.setForeground(0, QColor("#AAAAAA"))
+                            f_item.setForeground(0, QColor(_tv()["on_surface_dim"]))
                 except OSError:
                     pass
 

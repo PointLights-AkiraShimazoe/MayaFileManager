@@ -14,16 +14,16 @@ Features
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from core.compat import (
     Qt, Signal,
     QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QToolButton, QLineEdit,
+    QLabel, QToolButton, QLineEdit,
     QTreeWidget, QTreeWidgetItem, QAbstractItemView,
-    QMenu, QAction, QInputDialog, QMessageBox,
-    QColor, QFont, QSize, QIcon, QPixmap, QPainter,
-    QUrl, QMimeData, QPoint
+    QMenu, QInputDialog, QMessageBox,
+    QColor, QFont, QSize, QPixmap, QPainter,
+    QPoint
 )
 from core.bookmark_manager import BookmarkManager, BookmarkNode
 
@@ -55,7 +55,10 @@ def _icon_for(node: BookmarkNode) -> str:
     return ICON_FILE
 
 
-def _make_text_icon(text: str, color: str = "#888888") -> QPixmap:
+def _make_text_icon(text: str, color: str = None) -> QPixmap:
+    if color is None:
+        from core.theme_engine import qss_vars
+        color = qss_vars()["on_surface_dim"]
     pm = QPixmap(20, 20)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
@@ -183,6 +186,9 @@ class BookmarkPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self):
+        # 視認性の階層（r56）: サイドバーは «脇役» の面（theme_engine の #mfmSidePanel）
+        self.setObjectName("mfmSidePanel")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)

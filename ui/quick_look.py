@@ -21,7 +21,7 @@ from pathlib import Path
 
 from core.compat import (
     Qt, QSize,
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QStackedWidget,
+    QWidget, QVBoxLayout, QLabel, QTextEdit, QStackedWidget,
     QPixmap, QFont,
 )
 
@@ -99,12 +99,16 @@ class QuickLookWindow(QWidget):
     # Public API
     # ------------------------------------------------------------------
 
-    def show_for(self, path: str):
-        """指定パスのプレビューを表示（既に表示中なら内容を差し替え）。"""
+    def show_for(self, path: str, allow_download: bool = False):
+        """指定パスのプレビューを表示（既に表示中なら内容を差し替え）。
+
+        allow_download: クラウドの «オンラインのみ» ファイルの内容を読んで
+        よいか（r83）。**選択追従では False**（選択しただけでダウンロードが
+        走らないように）。Space を押した明示操作のときだけ True。"""
         if not path or not os.path.exists(path):
             return
         self._current_path = path
-        self._populate(path)
+        self._populate(path, allow_download=allow_download)
         if not self.isVisible():
             self.show()
         self.raise_()
@@ -113,13 +117,14 @@ class QuickLookWindow(QWidget):
         if self.isVisible() and path == self._current_path:
             self.close()
         else:
-            self.show_for(path)
+            # Space は明示操作なのでダウンロードを許可する
+            self.show_for(path, allow_download=True)
 
     # ------------------------------------------------------------------
     # Content dispatch
     # ------------------------------------------------------------------
 
-    def _populate(self, path: str):
+    def _populate(self, path: str, allow_download: bool = False):
         p = Path(path)
         ext = p.suffix.lower()
 
@@ -136,6 +141,15 @@ class QuickLookWindow(QWidget):
         if p.is_dir():
             self._show_info("📁", "フォルダ", meta)
             return
+
+        # クラウドの «オンラインのみ» は、選択追従では内容を読まない（r83）。
+        # 読んだ瞬間にダウンロードが始まるため、Space の明示操作のときだけ許可する。
+        if not allow_download:
+            from core.cloud_state import is_online_only
+            if is_online_only(path):
+                self._show_info("☁", "オンラインのみ（Space でダウンロードして表示）",
+                                meta)
+                return
 
         if ext in _IMAGE_EXTS:
             pix = QPixmap(path)

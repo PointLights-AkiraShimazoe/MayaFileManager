@@ -18,12 +18,10 @@ from typing import Any, Dict, List, Optional
 
 from core.compat import (
     Qt, Signal,
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QLabel, QPushButton, QToolButton, QLineEdit, QTextEdit, QComboBox,
-    QCheckBox, QGroupBox, QListWidget, QListWidgetItem, QAbstractItemView,
-    QTabWidget, QSplitter, QFrame, QSizePolicy,
-    QMenu, QAction, QMessageBox, QFileDialog, QInputDialog,
-    QSize, QPoint
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QLineEdit, QTextEdit, QComboBox,
+    QCheckBox, QListWidget, QAbstractItemView,
+    QTabWidget, QFrame, QMenu, QMessageBox, QFileDialog, QInputDialog,
+    QPoint
 )
 from core.maya_version import is_running_inside_maya
 
@@ -317,11 +315,31 @@ class ReferencePresetEditor(QDialog):
         self.setWindowTitle("リファレンスプリセットエディタ")
         self.setMinimumSize(800, 640)
         self._build_ui()
+        self._disable_auto_default()
         self._refresh_preset_list()
 
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
+
+    def keyPressEvent(self, event):
+        """Enter で «新規» 等の autoDefault ボタンが発火しないようにする（r106）。
+        各入力欄の returnPressed はそのまま効く。Esc は従来どおり。"""
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _disable_auto_default(self):
+        """ダイアログ内の全ボタンの autoDefault を切る（r106）。
+        QDialog 内の QPushButton は既定で autoDefault=True のため、
+        Enter が «フォーカス連鎖で最初のボタン»（= ✚ 新規）を押してしまう。"""
+        for b in self.findChildren(QPushButton):
+            try:
+                b.setAutoDefault(False)
+                b.setDefault(False)
+            except Exception:
+                pass
 
     def _build_ui(self):
         root = QHBoxLayout(self)
@@ -627,20 +645,6 @@ class ReferencePresetEditor(QDialog):
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
-
-    def _new_preset(self):
-        name, ok = QInputDialog.getText(self, "新しいプリセット", "プリセット名:")
-        if ok and name:
-            if name in self._presets:
-                QMessageBox.warning(self, "重複", "同名のプリセットが既に存在します。")
-                return
-            self._presets[name] = {"references": [], "constraints": [], "scripts": []}
-            self._sm.save_reference_presets(self._presets)
-            self._refresh_preset_list()
-            # Select new
-            items = self._preset_list.findItems(name, Qt.MatchExactly)
-            if items:
-                self._preset_list.setCurrentItem(items[0])
 
     def _duplicate_preset(self):
         if not self._current_name:
