@@ -352,8 +352,9 @@ class MainWindow(QMainWindow):
             parent=self,
         )
 
+        from core.version import version_string
         self.setWindowTitle(
-            f"Maya File Manager"
+            f"Maya File Manager {version_string()}"
             + (f"  —  Maya {self._maya_ver}" if self._maya_ver else "")
         )
         self.setMinimumSize(1024, 640)

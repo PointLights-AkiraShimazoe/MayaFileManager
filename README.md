@@ -1,7 +1,24 @@
 # Maya File Manager (MFM)
 
-Maya 2023〜2027 対応のスタンドアロン＆Maya内蔵ファイルマネージャー。  
+**v0.9.0（開発版）** — Maya 2023〜2027 対応のスタンドアロン＆Maya内蔵ファイルマネージャー。
 PySide2（Maya 2023/2024）/ PySide6（Maya 2025〜2027）両対応。
+
+> 1.0 未満のため、設定ファイルの形式や一部の挙動は予告なく変わることがあります。
+> 変更点は [CHANGELOG.md](CHANGELOG.md) を参照してください。
+
+## できること
+
+- **Miller カラム**でのブラウジング（深さ上限・カラム幅記憶・平坦表示）
+- **サムネイル表示**（画像／Maya のスウォッチ。表示サイズはモード毎に記憶）
+- **DCC 連携** — Maya / Blender へ Open・Import・Reference。対象形式のみ反応
+- **圧縮ファイルの閲覧** — zip / tar の中身をカラムでたどる（読み取り専用）
+- **外部連携バッジ** — Git / Subversion / Perforce / クラウドの状態表示
+- **ファイル操作** — コピー・移動・削除（Undo 可）・バッチリネーム
+
+## インストール
+
+[Releases](https://github.com/PointLights-AkiraShimazoe/MayaFileManager/releases)
+から Windows 用インストーラー（`MayaFileManager_Setup_*.exe`）を取得してください。
 
 | Mayaバージョン | Python | Qtバインディング | 対応状況 |
 |---|---|---|---|

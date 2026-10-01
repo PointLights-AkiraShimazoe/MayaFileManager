@@ -97,6 +97,11 @@ class BrowserPanel(QWidget):
         super().__init__(parent)
         _mfm_log("=== BrowserPanel init (build: r110 split 2026-10-01) ===")
         _mfm_timeline("BrowserPanel init (r110)")
+        try:
+            from core.version import version_string
+            _mfm_timeline("MayaFileManager %s" % version_string())
+        except Exception:
+            pass
         self._sm = settings_manager
         self._thumb_mgr = thumb_manager
         self._thumb_mgr.thumbnail_ready.connect(self._on_thumbnail_ready)
