@@ -1297,6 +1297,21 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   壊れても Manager 側は何のエラーも出さない（壊れるのは Maya の中）ので、
   実行先を模したテストが無いと誰も気付けない。
 
+## リリースの約束事（r119f）
+
+- **push 済みのタグは動かさない。** 直したら必ず **次の番号へ上げる**。
+  タグを付け直すと、公開済み Release の中身とタグがずれ、
+  «どの版に何が入っているか» が誰にも分からなくなる。
+  （2026-10-02: v0.9.3 / v0.9.4 で «rejected: already exists» を何度も
+   踏んだ。原因は «直したのに同じ番号のまま付け直そうとした» こと）
+- 手順は常にこの順:
+  1. `core/version.py` の `__version__` を上げる
+  2. CHANGELOG にその番号の節を書く（0.9.4b のような «枝番» を作らない）
+  3. コミット → `git tag -a vX.Y.Z`
+  4. `git push origin HEAD` → `git push origin vX.Y.Z`
+- 迷ったら `git ls-remote --tags origin` で **remote に何があるか** を見る。
+  ローカルのタグは当てにならない。
+
 ## 開発・デバッグの約束事
 
 - 起動: `run_dev.bat`（インストール済み最新Maya 2027→2023 の mayapy を自動選択。
