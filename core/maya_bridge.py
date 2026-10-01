@@ -16,6 +16,7 @@ Maya Bridge — スタンドアロン版マネージャーと起動済みMayaの
     cmds.commandPort(name=":20261", sourceType="python")
 を実行すれば同じポートに接続できる。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os as _os
 import re
@@ -113,13 +114,13 @@ def _mfm_open_bridge_port():
         try:
             _cmds.commandPort(name=":%d" % _p, sourceType="python")
             break
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/maya_bridge.py:116 _mfm_open_bridge_port")
 try:
     import maya.utils as _mu
     _mu.executeDeferred(_mfm_open_bridge_port)
-except Exception:
-    pass
+except Exception as _e:
+    _swallow(_e, "core/maya_bridge.py:121 _mfm_open_bridge_port")
 """ + _US_END + "\n"
 
 

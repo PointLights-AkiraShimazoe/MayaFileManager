@@ -13,6 +13,7 @@ Quick-Nav Preset Editor
 - ラベルとパスの編集
 - D&D でパスをドロップして追加可能
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 from pathlib import Path
@@ -278,8 +279,8 @@ class QuickNavPresetEditor(QDialog):
                 if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                     self._apply_rename()
                     return True
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/quick_nav_editor.py:281 eventFilter")
         return super().eventFilter(obj, event)
 
     def _disable_auto_default(self):
@@ -295,8 +296,8 @@ class QuickNavPresetEditor(QDialog):
             try:
                 b.setAutoDefault(False)
                 b.setDefault(False)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/quick_nav_editor.py:298 _disable_auto_default")
 
     # ------------------------------------------------------------------
     # Preset management

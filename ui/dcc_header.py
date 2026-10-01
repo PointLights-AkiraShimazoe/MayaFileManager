@@ -14,6 +14,7 @@
 M / b は «ブランドロゴではなく» 本ツール独自の文字バッジ（ロゴの再現はしない）。
 色は theme_engine のトークン（#mfmDccBlock 系）で付ける。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 
@@ -46,8 +47,8 @@ class _PopupCombo(QComboBox):
             rows = max(1, min(self.count(), self.maxVisibleItems()))
             rh = max(view.sizeHintForRow(0), 22)
             view.setMinimumHeight(rows * rh + 6)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/dcc_header.py:49 showPopup")
         super().showPopup()
 
 

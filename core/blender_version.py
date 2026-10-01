@@ -8,6 +8,7 @@ Maya の core/maya_version.py に対応する Blender 版。
 - 起動時は resources/blender_bridge.py を --python で読み込み、連携用 TCP
   サーバ（Maya の commandPort 相当）を開く。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 import re
@@ -199,8 +200,8 @@ def _windows_store_candidates(use_powershell: bool = False) -> List[Path]:
             if line:
                 out.append(Path(line) / "Blender" / "blender.exe")
                 out.append(Path(line) / "blender.exe")
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "core/blender_version.py:202 _windows_store_candidates")
     return out
 
 
@@ -267,8 +268,8 @@ def find_installed_blender_versions(extra_paths=None) -> List[BlenderInstallatio
             w = shutil.which("blender")
             if w:
                 cands.append(Path(w))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/blender_version.py:270 find_installed_blender_versions")
     elif system == "Darwin":
         cands.append(Path("/Applications/Blender.app/Contents/MacOS/Blender"))
     else:
@@ -380,8 +381,8 @@ def _launchable_exe(exe: Path) -> Path:
             c = base / n
             if _exe_present(c):
                 return c
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "core/blender_version.py:383 _launchable_exe")
     return exe
 
 

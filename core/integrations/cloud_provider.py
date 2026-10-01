@@ -14,6 +14,7 @@
   ※「同期中」は属性から判定できないため表示しない（正直に非対応）。
 - 操作: 常に保持（attrib +P -U）/ オンラインのみ（attrib -P +U）/ Webで表示
 """
+from core.diag import swallow as _swallow  # r112
 
 import json
 import os
@@ -41,14 +42,14 @@ def _gdrive_roots():
                                            None, 0)
             if ok and buf.value.lower().startswith("google drive"):
                 roots.append(root.rstrip("\\"))
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "core/integrations/cloud_provider.py:44 _gdrive_roots")
     p = os.path.join(os.path.expanduser("~"), "Google Drive")
     try:
         if os.path.isdir(p):
             roots.append(p)
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "core/integrations/cloud_provider.py:50 _gdrive_roots")
     return roots
 
 
@@ -87,8 +88,8 @@ class CloudProvider(Provider):
                                         roots.append(("OneDrive", os.path.normpath(uf)))
                             except OSError:
                                 pass
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "core/integrations/cloud_provider.py:90 detect")
             for base in (os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")):
                 if not base:
                     continue
@@ -100,8 +101,8 @@ class CloudProvider(Provider):
                         p = acc.get("path") if isinstance(acc, dict) else None
                         if p and os.path.isdir(p):
                             roots.append(("Dropbox", os.path.normpath(p)))
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "core/integrations/cloud_provider.py:103 detect")
             for r in _gdrive_roots():
                 roots.append(("Google Drive", os.path.normpath(r)))
             # 重複除去
@@ -164,8 +165,8 @@ class CloudProvider(Provider):
                     try:
                         if os.path.isdir(p):
                             args += ["/S", "/D"]
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        _swallow(_e, "core/integrations/cloud_provider.py:167 _run")
                     run(args, timeout=60.0)
             threading.Thread(target=_run, daemon=True).start()
         return _go
@@ -200,7 +201,7 @@ class CloudProvider(Provider):
                 import webbrowser
                 try:
                     webbrowser.open(u)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "core/integrations/cloud_provider.py:203 _open")
             acts.append((tr("%s の Web で表示", "View on %s web") % name, _open))
         return acts

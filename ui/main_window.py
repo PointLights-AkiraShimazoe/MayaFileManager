@@ -18,6 +18,7 @@ Layout (default)
   │  StatusBar (path | Maya version | message)          │
   └─────────────────────────────────────────────────────┘
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 from pathlib import Path
@@ -488,15 +489,15 @@ class MainWindow(QMainWindow):
         for i, a in enumerate(self._areas):
             try:
                 a.set_index(i, n)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py:491 _refresh_area_headers")
 
     def _save_areas_state(self):
         try:
             self._sm.set("browser_areas_state",
                          [a.get_state() for a in self._areas], save=False)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:498 _save_areas_state")
 
     def _install_header(self):
         """メニューバーを含む «ヘッダ行» を組み立てて setMenuWidget で置き換える。
@@ -521,8 +522,8 @@ class MainWindow(QMainWindow):
             m_exe = self._maya_inst.executable if self._maya_inst else None
             b_exe = self._blender_inst.executable if self._blender_inst else None
             self._dcc_hdr.set_app_icons(m_exe, b_exe)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:524 _install_header")
 
     def _build_toolbar(self):
         """ヘッダ（r67、ユーザーのスケッチ準拠）:
@@ -552,8 +553,8 @@ class MainWindow(QMainWindow):
         # （ログ表示などの新機能を届けるため。未インストールには触れない）
         try:
             _bl.refresh_installed_startup()
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:555 _build_toolbar")
         self._populate_version_combos()
         self._maya_combo.currentIndexChanged.connect(self._on_maya_version_changed)
         self._blender_combo.currentIndexChanged.connect(self._on_blender_version_changed)
@@ -624,8 +625,8 @@ class MainWindow(QMainWindow):
             from core.undo_stack import get_undo_stack
             get_undo_stack().add_listener(self._refresh_undo_menu)
             edit_menu.aboutToShow.connect(self._refresh_undo_menu)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:627 _build_menu")
         self._restore_act = edit_menu.addAction(
             tr("前回のパスを復元", "Restore last path"))
         self._restore_act.setCheckable(True)
@@ -708,14 +709,14 @@ class MainWindow(QMainWindow):
     def _on_directory_changed(self, path: str):
         try:
             self._status_path_label.setText(path)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:711 _on_directory_changed")
         # 全エリアの履歴パネルを更新（履歴データは共有のため）
         for a in getattr(self, "_areas", []):
             try:
                 a.history_panel.refresh()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py:717 _on_directory_changed")
         self._save_areas_state()
 
     def _on_bookmark_requested(self, paths):
@@ -876,8 +877,8 @@ class MainWindow(QMainWindow):
                 try:
                     bridge_log("scan: open ports=%r / userSetup=%r installed=%s"
                                % (ports, usersetup_path(), is_usersetup_installed()))
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/main_window.py:879 _run")
                 for port in ports:
                     label = None
                     try:
@@ -889,8 +890,8 @@ class MainWindow(QMainWindow):
                         try:
                             bridge_log("port %d: ok=%s reply=%r parsed=%r"
                                        % (port, ok, (reply or "")[:120], parsed))
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            _swallow(_e, "ui/main_window.py:892 _run")
                         pid = None
                         if parsed:
                             ver, scene, pid = parsed
@@ -910,8 +911,8 @@ class MainWindow(QMainWindow):
                 for port in list(self._known_conns["maya"]):
                     if port not in ports:
                         self._known_conns["maya"].pop(port, None)   # ポートが閉じた
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py:913 _run")
             finally:
                 self._scan_running["maya"] = False
             self._bridge_notify.conn_list.emit(items, "maya")
@@ -945,8 +946,8 @@ class MainWindow(QMainWindow):
                             scene = os.path.basename(scene)[:40] or tr("無題", "untitled")
                             label = f"Blender {ver[:20]} — {scene} (:{port})"
                             self._known_conns["blender"][port] = (label, pid)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        _swallow(_e, "ui/main_window.py:948 _run")
                     if label is None and port in self._known_conns["blender"]:
                         klabel, kpid = self._known_conns["blender"][port]
                         label, pid = klabel + " …", kpid
@@ -955,8 +956,8 @@ class MainWindow(QMainWindow):
                 for port in list(self._known_conns["blender"]):
                     if port not in ports:
                         self._known_conns["blender"].pop(port, None)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py:958 _run")
             finally:
                 self._scan_running["blender"] = False
             self._bridge_notify.conn_list.emit(items, "blender")
@@ -1074,15 +1075,15 @@ class MainWindow(QMainWindow):
             # 書く（r64。ネイティブダイアログでのプロセス消滅の切り分け用）
             try:
                 faulthandler.enable(file=self._fh_file, all_threads=True)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py:1077 _dump")
 
             def _rearm():
                 try:
                     faulthandler.dump_traceback_later(
                         1.5, repeat=False, file=self._fh_file, exit=False)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/main_window.py:1084 _rearm")
             _rearm()
         except Exception:
             _rearm = None
@@ -1112,8 +1113,8 @@ class MainWindow(QMainWindow):
                         from ui.browser_panel import mfm_blocking_reason
                         if mfm_blocking_reason():
                             continue
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        _swallow(_e, "ui/main_window.py:1115 _watch")
                     last_dump = now
                     try:
                         frm = _sys._current_frames().get(main_id)
@@ -1121,8 +1122,8 @@ class MainWindow(QMainWindow):
                             _dump(
                                 "=== UIフリーズ検出 (%.1f秒停止) メインスレッド ===\n%s"
                                 % (stalled, "".join(_tb.format_stack(frm))))
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        _swallow(_e, "ui/main_window.py:1124 _watch")
 
         threading.Thread(target=_watch, daemon=True,
                          name="mfm-freeze-watchdog").start()
@@ -1299,8 +1300,8 @@ class MainWindow(QMainWindow):
         try:
             from core.blender_version import detection_report
             _mfm_timeline("blender detect: " + detection_report(extra, installs).replace("\n", " | "))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:1302 _detect_blender")
         return installs
 
     def _locate_blender(self):
@@ -1330,8 +1331,8 @@ class MainWindow(QMainWindow):
             m_exe = self._maya_inst.executable if self._maya_inst else None
             b_exe = self._blender_inst.executable if self._blender_inst else None
             self._dcc_hdr.set_app_icons(m_exe, b_exe)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:1333 _locate_blender")
         self.statusBar().showMessage(tr("Blender: %s", "Blender: %s") % path)
 
     def _install_blender_bridge(self):
@@ -1475,8 +1476,8 @@ class MainWindow(QMainWindow):
         _mfm_log("dcc-gate: " + msg)
         try:
             self.statusBar().showMessage(msg, 6000)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:1478 _dcc_accepts")
         return False
 
     def _dcc_open(self, path: str, app: str = None):
@@ -1555,8 +1556,8 @@ class MainWindow(QMainWindow):
         if code:
             try:
                 exec(code, {})
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py:1558 _maya_local_setproject")
 
     def _maya_local_log(self, action: str, path: str, what: str, err: str = ""):
         """Maya 内起動時のログ（スクリプトエディタ）。what: start/done/fail/cancel。"""
@@ -1662,8 +1663,8 @@ class MainWindow(QMainWindow):
             if MAYA_PLUGIN_FOR_EXT.get(ext):
                 try:
                     cmds.loadPlugin(MAYA_PLUGIN_FOR_EXT[ext], quiet=True)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/main_window.py:1665 _maya_import")
             if ext == ".fbx":
                 from core.file_operations import fbx_import_maya
                 fbx_import_maya(path)
@@ -1832,8 +1833,8 @@ class MainWindow(QMainWindow):
             if _plug:
                 try:
                     cmds.loadPlugin(_plug, quiet=True)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/main_window.py:1835 _maya_reference")
             try:
                 cmds.file(path, reference=True, namespace=ns or default_ns,
                           ignoreVersion=True, mergeNamespacesOnClash=False)
@@ -1902,8 +1903,8 @@ class MainWindow(QMainWindow):
             for a in getattr(self, "_areas", []):
                 if w is not None and a.browser.isAncestorOf(w):
                     return a.browser
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:1905 _active_browser")
         return self._areas[0].browser if getattr(self, "_areas", None) else None
 
     def _browser_undo(self):
@@ -1925,8 +1926,8 @@ class MainWindow(QMainWindow):
             self._undo_act.setEnabled(st.can_undo())
             self._redo_act.setText((tr("やり直す", "Redo") + (("  " + r) if r else "")) + "\tCtrl+Y")
             self._redo_act.setEnabled(st.can_redo())
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:1928 _refresh_undo_menu")
 
     def _on_settings_changed(self):
         """Re-apply live settings to browsers and thumbnail manager."""
@@ -1934,8 +1935,8 @@ class MainWindow(QMainWindow):
             try:
                 a.browser.set_max_depth(self._sm.get("column_max_depth", 4))
                 a.browser.set_thumb_size(self._sm.get("thumbnail_size", 128))
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py:1937 _on_settings_changed")
         self._thumb_mgr.set_cache_size(self._sm.get("thumbnail_cache_size", 256))
         self.statusBar().showMessage("設定を適用しました")
 
@@ -1997,15 +1998,15 @@ class MainWindow(QMainWindow):
                 from core.compat import Qt
                 import base64
                 self.restoreGeometry(bytes.fromhex(geom))
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py:2000 _restore_geometry")
         if state:
             try:
                 # version=3: プリセット行のエリア内移動に伴い旧状態を無効化
                 # version=4: ツールバー廃止（メニューバー右肩へ統合）で旧状態を無効化
                 self.restoreState(bytes.fromhex(state), 4)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py:2007 _restore_geometry")
 
     def closeEvent(self, event):
         # version=3: ナビツールバー廃止（プリセット行はエリア内へ移動）に伴い
@@ -2014,14 +2015,14 @@ class MainWindow(QMainWindow):
         self._sm.set("window_state",    self.saveState(4).toHex().data().decode(), save=False)
         try:
             self._sm.set("last_path", self._browser.current_path(), save=False)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:2017 closeEvent")
         self._save_areas_state()
         self._sm.save()
         # Undo 用の作業ごみ箱（削除の取り消し先）を OS のごみ箱へ送る（r62）
         try:
             from core.undo_stack import get_undo_stack
             get_undo_stack().dispose_all()
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py:2025 closeEvent")
         super().closeEvent(event)

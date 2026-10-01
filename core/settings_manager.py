@@ -13,6 +13,7 @@ Design goals
 * Global state is the source of truth unless a Maya-version override exists.
 * Observers (callbacks) can be registered to react to specific key changes.
 """
+from core.diag import swallow as _swallow  # r112
 
 import json
 import os
@@ -151,8 +152,8 @@ class SettingsManager:
                     p.unlink()
                 except OSError:
                     pass
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/settings_manager.py:154 _backup_daily")
 
     def _settings_path(self) -> Path:
         return self._root / "settings.json"

@@ -3,6 +3,7 @@
 
 ここは «他のどのブラウザ系モジュールからも import される» 最下層。
 逆向きの import（browser_panel 等を読む）は循環するので禁止。"""
+from core.diag import swallow as _swallow  # r112
 
 import os
 import struct
@@ -177,8 +178,8 @@ class _SafeIconProvider(QFileIconProvider):
         super().__init__()
         try:
             self.setOptions(QFileIconProvider.DontUseCustomDirectoryIcons)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_util.py:180 __init__")
         self._cache = {}
         self._lock = threading.Lock()
         self._folder = None
@@ -255,8 +256,8 @@ def _mfm_warn(msg: str):
         with open(_MFM_LOG_PATH, "a", encoding="utf-8") as f:
             f.write("[%s] WARN: %s\n"
                     % (datetime.datetime.now().strftime("%H:%M:%S"), msg))
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "ui/browser_util.py:258 _mfm_warn")
 
 
 def _mfm_uilog(msg: str, with_stack: bool = False):
@@ -272,8 +273,8 @@ def _mfm_uilog(msg: str, with_stack: bool = False):
             line += "\n" + "".join("    " + l for l in frames)
         with open(_MFM_UI_LOG, "a", encoding="utf-8") as f:
             f.write(line.rstrip("\n") + "\n")
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "ui/browser_util.py:275 _mfm_uilog")
 
 
 # r108: «意図的に UI スレッドを占有している区間» の宣言。
@@ -328,8 +329,8 @@ def _mfm_log(msg: str):
         import datetime
         with open(_MFM_LOG_PATH, "a", encoding="utf-8") as f:
             f.write("[%s] %s\n" % (datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3], msg))
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "ui/browser_util.py:331 _mfm_log")
 
 
 # ---------------------------------------------------------------------------

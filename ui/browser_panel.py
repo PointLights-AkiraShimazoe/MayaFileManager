@@ -5,6 +5,7 @@
 
 r110 でモジュールを分割した。旧 browser_panel.* の名前は互換のため
 ここで再エクスポートしているので、既存の import は変更不要。"""
+from core.diag import swallow as _swallow  # r112
 
 import os
 import struct
@@ -100,8 +101,8 @@ class BrowserPanel(QWidget):
         try:
             from core.version import version_string
             _mfm_timeline("MayaFileManager %s" % version_string())
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:103 __init__")
         self._sm = settings_manager
         self._thumb_mgr = thumb_manager
         self._thumb_mgr.thumbnail_ready.connect(self._on_thumbnail_ready)
@@ -249,16 +250,16 @@ class BrowserPanel(QWidget):
         # F2 のインライン名前変更（EditRole → QFileSystemModel::setData）の反映
         try:
             self._fs_model.fileRenamed.connect(self._on_fs_file_renamed)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:252 _build_ui")
         # フォルダ列挙の高速化: desktop.ini によるカスタムフォルダアイコンの
         # シェル照会を無効化（フォルダ毎のシェルI/Oが減り、大きなツリーや
         # ネットワーク先で初回列挙が大幅に速くなる。表示は標準アイコンになる）
         try:
             self._fs_model.setOption(
                 QFileSystemModel.DontUseCustomDirectoryIcons, True)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:260 _build_ui")
         # 【最重要】リンク解決の無効化。Qt の filePath()/列挙は、行が
         # symlink/ジャンクションだと canonicalFilePath でリンク先を «実際に»
         # 解決する。リンク先が到達不能なネットワークだと SMBタイムアウト
@@ -268,8 +269,8 @@ class BrowserPanel(QWidget):
         # ため、この解決処理自体が不要。
         try:
             self._fs_model.setResolveSymlinks(False)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:271 _build_ui")
         # 深いパス(遅延ロード)のカラム構築を確実にするためのリトライ
         self._fs_model.directoryLoaded.connect(self._on_fs_dir_loaded)
 
@@ -291,8 +292,8 @@ class BrowserPanel(QWidget):
         # 実用不可のため無効化し、自前のハンドル（_ColumnResizeHandle）を使う。
         try:
             self._column_view.setResizeGripsVisible(False)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:294 _build_ui")
         # 保存済みのカラム幅を適用（未保存なら既定幅300）
         self._column_view.set_settings(self._sm)
         self._column_view.setModel(self._proxy)
@@ -318,8 +319,8 @@ class BrowserPanel(QWidget):
             if _home_idx.isValid():
                 self._column_view.setRootIndex(_home_idx)
                 self._thumb_view.setRootIndex(_home_idx)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:321 _build_ui")
         # （Quick Look 用イベントフィルタは _build_ui 末尾で両ビューに設置）
         self._thumb_view.setViewMode(QListView.IconMode)
         self._thumb_view.setResizeMode(QListView.Adjust)
@@ -508,8 +509,8 @@ class BrowserPanel(QWidget):
                 self._on_flat_request([])
             if self._archive_col.isVisible():
                 self._on_archive_request("")        # r97
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:511 _navigate")
         self._pending_nav = (path, add_to_history)
         self.status_message.emit(f"確認中: {path}")
         self._prober.probe(path)
@@ -544,8 +545,8 @@ class BrowserPanel(QWidget):
         # r83: 新しい移動なので «選択維持ガード» を解除し、自己修復を許可する
         try:
             self._column_view._mfm_user_selected = False
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:547 _navigate_now")
         # 各段階の所要時間を計測（0.5秒超は mfm_freeze.log に SLOW 記録）。
         # PySideのC++呼び出しはGILを離さないためサンプラでは特定できない。
         _pc = _time_mod.perf_counter
@@ -575,8 +576,8 @@ class BrowserPanel(QWidget):
         # カラムが構築されない（クリックしてもカラムが伸びない原因）。
         try:
             _timed("setRootPath", lambda: self._fs_model.setRootPath(target_dir))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:578 _timed")
 
         # カラムのルート: パス途中(または自身)にリンクがあれば最上位リンク、無ければドライブ最上位
         col_root = _timed("column_root_for", lambda: self._column_root_for(path))
@@ -623,8 +624,8 @@ class BrowserPanel(QWidget):
             for v in self._column_view.findChildren(QListView):
                 if getattr(v, "_mfm_view_mode", "list") == "thumb":
                     return True
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:626 _any_thumb_column")
         return False
 
     def _prefetch_thumbs_async(self, path: str, force: bool = False):
@@ -737,8 +738,8 @@ class BrowserPanel(QWidget):
         """ナビ対象の経路上にある隠しフォルダ(AppData等)だけを強制表示にする。"""
         try:
             self._proxy.set_force_visible(self._ancestors_of(path))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:740 _apply_force_visible")
 
     def _prime_path_loading(self, target: str):
         """深い/別ドライブ/隠しフォルダ経由のパスでも確実にカラムを構築するため、
@@ -764,8 +765,8 @@ class BrowserPanel(QWidget):
                 if idx.isValid() and self._fs_model.canFetchMore(idx):
                     self._fs_model.fetchMore(idx)
                     queued += 1
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:767 _prime_path_loading")
         _mfm_timeline("prime: %d/%d 階層を一括投入 target=%r"
                       % (queued, len(ancestors), target))
         # 既にロード済みの階層がある場合に備え、最初の再適用も試す
@@ -850,8 +851,8 @@ class BrowserPanel(QWidget):
                     hid = False
                     try:
                         hid = self._fs_model.fileInfo(si).isHidden()
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        _swallow(_e, "ui/browser_panel.py:853 _advance_pending_load")
                     fv = os.path.normcase(os.path.normpath(anc)) in self._proxy._force_visible
                     _mfm_log("  chain anc=%r fs=%s proxy=%s hidden=%s force_visible=%s"
                              % (anc, si.isValid(), pi.isValid(), hid, fv))
@@ -899,8 +900,8 @@ class BrowserPanel(QWidget):
                 _mfm_log("force_rebuild skip: ユーザー選択操作後のため中止 target=%r"
                          % target)
                 return
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:902 _force_column_rebuild")
         # 既に別パスへ移動済みなら、古い再構築でカラムを壊さないようスキップ（高速クリック対策）。
         try:
             if os.path.normcase(os.path.normpath(target)) != \
@@ -936,8 +937,8 @@ class BrowserPanel(QWidget):
                         _mfm_log("force_rebuild skip: already correct target=%r"
                                  % target)
                         return
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:939 _force_column_rebuild")
         try:
             col_root = self._column_root_for(target)
             ridx = self._proxy.mapFromSource(self._fs_model.index(col_root))
@@ -950,8 +951,8 @@ class BrowserPanel(QWidget):
                 self._column_view.setCurrentIndex(cidx)
             try:
                 self._column_view.updateGeometries()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:953 _force_column_rebuild")
             # ── 診断＋自己修復 ─────────────────────────────────────
             # Windows実機のpip版Qtで «リンクをルートにすると直下がproxy越しに
             # 見えない／カラムが構築されない» 事象への対策。
@@ -960,8 +961,8 @@ class BrowserPanel(QWidget):
             try:
                 n_cols = sum(1 for v in self._column_view.findChildren(QListView)
                              if not v.isHidden() and v.model() is not None)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:963 _force_column_rebuild")
             _mfm_log("force_rebuild: target=%r root_valid=%s cur_valid=%s "
                      "hbar_max=%d proxy_root_rows=%s visible_cols=%d"
                      % (target, ridx.isValid(), cidx.isValid(),
@@ -971,8 +972,8 @@ class BrowserPanel(QWidget):
                 # 1) プロキシのフィルタ再評価で子のマッピングを作り直す
                 try:
                     self._proxy.invalidateFilter()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_panel.py:974 _force_column_rebuild")
                 rrows2 = self._proxy.rowCount(ridx)
                 _mfm_log("force_rebuild retry(invalidateFilter): rows=%s" % rrows2)
                 if rrows2 == 0:
@@ -1178,8 +1179,8 @@ class BrowserPanel(QWidget):
         # 単一ファイル選択: パス欄にファイル名まで表示する
         try:
             self._addr_bar.setText(path)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:1181 _on_item_clicked")
         # r97: 圧縮ファイルは «フォルダのように» 中身カラムを開く
         # （中身の操作範囲はエクスプローラーと同じ＝読み取り専用）
         from core.archive_browse import is_archive as _is_archive
@@ -1215,8 +1216,8 @@ class BrowserPanel(QWidget):
                 try:
                     if self._column_view.currentIndex() != proxy_index:
                         self._column_view.setCurrentIndex(proxy_index)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_panel.py:1218 _on_item_activated")
             else:
                 self._navigate(path)  # 別ブランチへのジャンプはトップから全カラム再構築
             return
@@ -1239,8 +1240,8 @@ class BrowserPanel(QWidget):
                 if parent_path:
                     return (os.path.normcase(os.path.normpath(parent_path))
                             == os.path.normcase(os.path.normpath(os.path.dirname(path))))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:1242 _is_native_expandable")
         # 親インデックスが取れない（ルート直下等）→ 通常クリック扱いでネイティブ
         return True
 
@@ -1345,8 +1346,8 @@ class BrowserPanel(QWidget):
                     if ci >= 0 and c.isVisible():
                         sizes[ci] = 190
                         used += 190
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_panel.py:1348 _set_inline_panel_sizes")
             sizes[inline_index] = inline_w
             used += inline_w
             try:
@@ -1355,14 +1356,14 @@ class BrowserPanel(QWidget):
                 if sp >= 0:
                     self._flat_spacer.setVisible(rest > 0)
                     sizes[sp] = rest
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:1358 _set_inline_panel_sizes")
             self._view_stack.setSizes(sizes)
             # 注意: ここで hbar を右端へ送る処理は行わない。視点が飛んで
             # 「元々のターゲットを見失う」ため、スクロール位置の調整は
             # _anchor_column_x / _restore_anchor_column_x（操作カラム固定）に任せる
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:1364 _set_inline_panel_sizes")
 
     def _align_columns_right_edge(self):
         """最後の«実幅»カラムの右端をビューポート右端へ合わせる。
@@ -1392,8 +1393,8 @@ class BrowserPanel(QWidget):
                 hb = self._column_view.horizontalScrollBar()
                 if hb is not None:
                     hb.setValue(hb.maximum())
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:1395 _align_columns_right_edge")
 
     def _request_flat_integration_status(self, cap: int = 300):
         """平坦ビューに並ぶファイルのフォルダの連携状態をワーカーへ要求（r72）。
@@ -1428,8 +1429,8 @@ class BrowserPanel(QWidget):
             try:
                 self._flat_col._view.setIconSize(QSize(px, px))
                 self._flat_col._view.viewport().update()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:1431 _apply_item_size_to_views")
         if mode not in (None, "thumb"):
             return
         try:
@@ -1476,8 +1477,8 @@ class BrowserPanel(QWidget):
             _mfm_log("archive request error: %r" % (e,))
             try:
                 self._archive_col.hide()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:1479 _on_archive_request")
 
     def _on_flat_request(self, dirs):
         """平坦カラムの表示要求。dirs があれば選択カラムの直後へ詰めて表示する。"""
@@ -1494,8 +1495,8 @@ class BrowserPanel(QWidget):
                 for v in self._column_view.findChildren(QListView):
                     if v.isVisible() and v.model() is not None and v.width() > 1:
                         col_w = max(260, v.width() + 20)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:1497 _on_flat_request")
             # リサイズは1回だけ行う（多段リサイズは視点が飛ぶ＝揺れの原因）。
             # 間もなく畳まれる冗長子カラム（選択フォルダ自身のカラム）は
             # 幅計算から除外して、後からの再詰めを不要にする
@@ -1515,25 +1516,25 @@ class BrowserPanel(QWidget):
             if len(dirs) >= 2:
                 try:
                     self._addr_bar.setText(os.path.dirname(dirs[0]))
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_panel.py:1518 _on_flat_request")
         else:
             self._flat_col.hide()
             self._rebuild_common_columns(0, [])
             try:
                 self._flat_spacer.hide()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:1525 _on_flat_request")
             # 平坦トグルの状態を表示と同期（ONのまま非表示を防ぐ）
             try:
                 self._column_view._reset_flatten_toggle()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:1530 _on_flat_request")
             # 選択が無くなった時: パス欄を現在のディレクトリへ戻す
             try:
                 self._addr_bar.setText(self._current_path or "")
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:1535 _on_flat_request")
 
     # ------------------------------------------------------------------
     # 共通フォルダのドリルダウン（複数選択のフィルタリング）
@@ -1547,8 +1548,8 @@ class BrowserPanel(QWidget):
                 w.hide()
                 w.setParent(None)
                 w.deleteLater()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:1550 _rebuild_common_columns")
         del self._common_cols[level:]
         del self._common_srcs[level:]
         sources = [s for s in (sources or []) if os.path.isdir(s)]
@@ -1587,8 +1588,8 @@ class BrowserPanel(QWidget):
         for c in self._common_cols:
             try:
                 c.set_recursive(recursive)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:1590 _on_flat_depth_changed")
         try:
             self._flat_col.set_recursive(recursive)
         except Exception as e:
@@ -1605,8 +1606,8 @@ class BrowserPanel(QWidget):
         try:
             self._flat_col.set_sources(eff)
             self._request_flat_integration_status()
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:1608 _on_common_selection")
         # 選択がある時のみ、さらに深い共通階層を掘る
         self._rebuild_common_columns(level + 1, sel if sel else [])
         col_w = 320
@@ -1787,8 +1788,8 @@ class BrowserPanel(QWidget):
             # r72: 対象ファイルのフォルダ全部（平坦ビューは複数階層）を再取得
             targets = list(paths or []) + [self._current_path]
             QTimer.singleShot(3000, lambda: self._refresh_integration_status(targets))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:1790 _run_integration_action")
 
 
     def _refresh_integration_status(self, paths):
@@ -2035,8 +2036,8 @@ class BrowserPanel(QWidget):
                     p = self._resolve_path(lv.rootIndex())
                     if p and os.path.isdir(p):
                         return p
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:2038 _active_column_folder")
         return self._paste_target_dir()
 
     @staticmethod
@@ -2090,8 +2091,8 @@ class BrowserPanel(QWidget):
                         try:
                             self._column_view._prune_selection_to_single(idx)
                             views[0].scrollTo(idx)
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            _swallow(_e, "ui/browser_panel.py:2093 attempt")
                         self._rename_inline(path)
                         return
             except Exception as e:
@@ -2120,8 +2121,8 @@ class BrowserPanel(QWidget):
                     if callable(fn):
                         try:
                             fn()
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            _swallow(_e, "ui/browser_panel.py:2123 _release_fs_handles")
                         break
             if level <= 1:
                 if parent and os.path.isdir(parent):
@@ -2142,24 +2143,24 @@ class BrowserPanel(QWidget):
         new = QFileSystemModel()
         try:
             new.setIconProvider(_SafeIconProvider())
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:2145 _recreate_fs_model")
         new.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files | QDir.Hidden)
         new.setReadOnly(False)
         for setter, arg in ((new.setResolveSymlinks, False),):
             try:
                 setter(arg)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:2152 _recreate_fs_model")
         try:
             new.setOption(QFileSystemModel.DontUseCustomDirectoryIcons, True)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:2156 _recreate_fs_model")
         try:
             new.fileRenamed.connect(self._on_fs_file_renamed)
             new.directoryLoaded.connect(self._on_fs_dir_loaded)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:2161 _recreate_fs_model")
         self._fs_model = new
         try:
             self._proxy.setSourceModel(new)
@@ -2167,17 +2168,17 @@ class BrowserPanel(QWidget):
             _mfm_log("recreate model: setSourceModel failed %r" % (e,))
         try:
             old.directoryLoaded.disconnect()
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:2170 _recreate_fs_model")
         try:
             old.fileRenamed.disconnect()
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:2174 _recreate_fs_model")
         try:
             old.setParent(None)
             old.deleteLater()
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:2179 _recreate_fs_model")
         QApplication.processEvents()
         _mfm_log("fs model recreated (root_hint=%s)" % (root_hint,))
 
@@ -2222,8 +2223,8 @@ class BrowserPanel(QWidget):
                 dest = ""
             try:
                 self._gone_result.emit(cur, dest)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:2225 _work")
 
         threading.Thread(target=_work, daemon=True,
                          name="mfm-gone-probe").start()
@@ -2377,8 +2378,8 @@ class BrowserPanel(QWidget):
         if old_editor is not None:
             try:
                 old_editor.close()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:2380 _open_inline_editor")
         rect = view.visualRect(idx)
         if not rect.isValid():
             self._rename_dialog([path])
@@ -2414,8 +2415,8 @@ class BrowserPanel(QWidget):
             try:
                 ed.hide()
                 ed.deleteLater()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:2417 finish")
             self._inline_editor = None
             if not commit or not new_name or new_name == name:
                 return
@@ -2506,8 +2507,8 @@ class BrowserPanel(QWidget):
                 return
             # r98: リネーム後は «新しい名前の項目» を選択状態にする
             self._select_when_visible(os.path.join(folder, new_name))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:2509 _on_fs_file_renamed")
 
     def _rename_dialog(self, paths: List[str]):
         if len(paths) != 1:
@@ -2703,8 +2704,8 @@ class BrowserPanel(QWidget):
                 dlg.close()
                 dlg.deleteLater()
                 notifier.deleteLater()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:2706 done")
             cancelled = (err == "__cancel__")
             if on_done:
                 try:
@@ -2926,8 +2927,8 @@ class BrowserPanel(QWidget):
             for col in getattr(self, "_common_cols", []) or []:
                 if col.isVisible() and (col is fw or col.isAncestorOf(fw)):
                     return [p for p in col.selected_sources() if p]
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:2929 _deep_view_targets")
         return None
 
     def _clipboard_copy(self):
@@ -2993,8 +2994,8 @@ class BrowserPanel(QWidget):
                     if os.path.isdir(pth):
                         self._release_fs_handles(pth, level=1)
                         break
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py:2996 _transfer_with_progress")
 
         def work(cb):
             fn(paths, target, progress_cb=cb, results=results)
@@ -3032,8 +3033,8 @@ class BrowserPanel(QWidget):
             for v in self._column_view.findChildren(QListView):
                 if getattr(v, "_mfm_view_mode", "list") == "thumb":
                     v.viewport().update()
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:3035 _on_thumbnail_ready")
 
     # ------------------------------------------------------------------
     # Helpers

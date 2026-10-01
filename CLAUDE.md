@@ -1038,6 +1038,26 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   `ui.browser_column_view.QDrag` を差し替える（テスト 2 本を修正済み）。
   再エクスポートは «読む» 側の互換は保つが «書き換える» 側は保たない。
 
+## 握り潰しを «安全なまま» 可視化する（r112、2026-10-01）
+
+- 本ツールには `except Exception: pass` が 249 箇所ある。UI 描画や破棄済み
+  ウィジェットへの操作など、**落とす方が有害**な箇所が多く、設計自体は妥当。
+  問題は **実装ミスまで隠す**こと。2026-09〜10 だけで «D&D が動かない»
+  «連携バッジが更新されない» «ツールチップが出ない» の 3 件がここに隠れていた
+  （いずれも NameError / AttributeError）。
+- 対策: `core/diag.py` の `swallow(exc, where)` を通す。
+  * 想定内（OSError・RuntimeError 等）→ 従来どおり黙殺
+  * **実装ミスを示す型**（NameError / AttributeError / TypeError /
+    ImportError / IndexError / KeyError / UnboundLocalError）→
+    `~/mfm_debug.log` へ `BUG?:` 行を 1 回だけ記録
+  * `swallow()` は **絶対に例外を投げない**（握り潰しの代わりだから）
+  * 同じ場所は 1 回きり。ログが溢れない
+- 適用: `except Exception:` ＋ `pass` だけの **204 箇所**を機械的に置換した。
+  型を絞った except（`except OSError:` 等）は意図が明確なので触っていない。
+- **新しく握り潰しを書く時も `_swallow(_e, "場所")` を使う**。素の `pass` は、
+  そこで起きた実装ミスを永久に見えなくする。
+- 回帰テスト: tests/offscreen/test_swallow_diag.py
+
 ## 開発・デバッグの約束事
 
 - 起動: `run_dev.bat`（インストール済み最新Maya 2027→2023 の mayapy を自動選択。

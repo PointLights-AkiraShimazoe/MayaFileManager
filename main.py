@@ -13,6 +13,7 @@ Inside Maya (shelf button or userSetup.py)
     import main
     main.show_in_maya()
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 import sys
@@ -45,8 +46,8 @@ def _bootstrap_pyside():
         try:
             from core.compat import Qt as _Qt
             app.setAttribute(_Qt.AA_DontUseNativeDialogs, True)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "main.py:48 _bootstrap_pyside")
         _apply_theme_from_settings(app)
         return app, True
     return app, False
@@ -75,8 +76,8 @@ def _setup_error_logging():
         _crash_log_handle.write(f"\n===== session start {_dt.now():%Y-%m-%d %H:%M:%S} =====\n")
         _crash_log_handle.flush()
         faulthandler.enable(_crash_log_handle)
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "main.py:78 _setup_error_logging")
 
     def _hook(exc_type, exc_value, exc_tb):
         text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
@@ -94,8 +95,8 @@ def _setup_error_logging():
                     None, "Maya File Manager — エラー",
                     f"予期しないエラーが発生しました。\n\n{exc_value}\n\n"
                     f"詳細ログ: {log_file}")
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "main.py:97 _hook")
 
     sys.excepthook = _hook
     return log_file
@@ -134,8 +135,8 @@ def _apply_theme_from_settings(app):
         mode = SettingsManager().get("theme", "dark")
         if mode not in ("dark", "light"):
             mode = "dark"
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "main.py:137 _apply_theme_from_settings")
     try:
         from core.theme_engine import apply_theme
         apply_theme(app, mode=mode)
@@ -185,19 +186,19 @@ def _log_env(tag: str):
             try:
                 import PySide2
                 pyside = "PySide2 " + PySide2.__version__
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "main.py:188 _log_env")
         maya = ""
         try:
             import maya.cmds as cmds
             maya = " / Maya " + str(cmds.about(version=True))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "main.py:194 _log_env")
         _mfm_timeline("env[%s]: python %s / qt %s / %s%s / %s / exe=%s"
                       % (tag, sys.version.split()[0], QtCore.qVersion(),
                          pyside, maya, platform.platform(), sys.executable))
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "main.py:199 _log_env")
 
 
 def run_standalone(skip_launcher: bool = True):
@@ -272,8 +273,8 @@ def show_in_maya():
     try:
         from core.theme_engine import set_mode
         set_mode(sm.get("theme", "dark"))
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "main.py:275 show_in_maya")
 
     if _maya_window_instance is not None:
         try:
@@ -301,8 +302,8 @@ def show_in_maya():
         if maya_main_ptr:
             maya_main = wrapInstance(int(maya_main_ptr), QWidget)
             win.setParent(maya_main, win.windowFlags())
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "main.py:304 show_in_maya")
 
     win.show()
     win.raise_()
@@ -327,10 +328,10 @@ def initializePlugin(plugin):  # noqa: N802
             cmds.setParent("MFMMenu", menu=True)
             cmds.menuItem(label="Open File Manager",
                           command="import main; main.show_in_maya()")
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as _e:
+            _swallow(_e, "main.py:330 initializePlugin")
+    except Exception as _e:
+        _swallow(_e, "main.py:332 initializePlugin")
 
 
 def uninitializePlugin(plugin):  # noqa: N802
@@ -338,8 +339,8 @@ def uninitializePlugin(plugin):  # noqa: N802
         import maya.cmds as cmds
         if cmds.menu("MFMMenu", exists=True):
             cmds.deleteUI("MFMMenu")
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "main.py:341 uninitializePlugin")
 
 
 # ---------------------------------------------------------------------------

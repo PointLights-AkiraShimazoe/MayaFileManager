@@ -12,6 +12,7 @@ Features
 * Accepts drops from the browser panel (file paths → add bookmark)
 * Emits navigate_requested(path) for the browser to pick up
 """
+from core.diag import swallow as _swallow  # r112
 
 from pathlib import Path
 from typing import List, Optional
@@ -377,8 +378,8 @@ class BookmarkPanel(QWidget):
             try:
                 sig.emit(msg)
                 return
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/bookmark_panel.py:380 status_message_safe")
         print(f"[BookmarkPanel] {msg}")
 
     def _build_item(self, node: BookmarkNode) -> QTreeWidgetItem:

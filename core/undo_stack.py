@@ -17,6 +17,7 @@ OS のごみ箱へ送る（recycle()）。作業ごみ箱へ移せない場合�
 
 スレッド: 全て UI スレッドから同期呼び出し（既存の file_operations と同じ方針）。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 import shutil
@@ -68,8 +69,8 @@ def recycle(paths: List[str]) -> List[str]:
             if rc == 0 and not op.fAnyOperationsAborted:
                 return []
             return [p for p in paths if os.path.lexists(p)]
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/undo_stack.py:71 recycle")
     try:
         import send2trash
         failed = []
@@ -291,8 +292,8 @@ def trash_root_for(path: str) -> Optional[str]:
                 import ctypes
                 FILE_ATTRIBUTE_HIDDEN = 0x02
                 ctypes.windll.kernel32.SetFileAttributesW(root, FILE_ATTRIBUTE_HIDDEN)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "core/undo_stack.py:294 trash_root_for")
         return root
     return None
 
@@ -372,8 +373,8 @@ class UndoStack:
         for fn in list(self._listeners):
             try:
                 fn()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "core/undo_stack.py:375 _notify")
 
     def push(self, op: _Op):
         if op is None:

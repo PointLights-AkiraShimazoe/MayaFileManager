@@ -3,6 +3,7 @@
 
 ThumbnailDelegate: サムネイルと代替アイコンの描画
 StatusBadgeDelegate: Git/SVN/Perforce/クラウドの状態バッジ"""
+from core.diag import swallow as _swallow  # r112
 
 import os
 import struct
@@ -105,8 +106,8 @@ class ThumbnailDelegate(QStyledItemDelegate):
         try:
             if w is not None and hasattr(w, "viewMode"):
                 return w.viewMode() == QListView.IconMode
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_delegates.py:108 _icon_mode")
         try:
             # QStyleOptionViewItem.Top（enum は option のクラス側から引く。
             # PySide2/6 で import 位置が違うため直接 import しない）
@@ -144,16 +145,16 @@ class ThumbnailDelegate(QStyledItemDelegate):
                     sizes = deco.availableSizes() or []
                     if sizes:
                         want = max(want, max(sz.width() for sz in sizes))
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_delegates.py:147 _fallback_pixmap")
                 pm = deco.pixmap(QSize(want, want))
                 if pm is None or pm.isNull():
                     pm = deco.pixmap(side, side)
                 if pm is None or pm.isNull():
                     return None
                 return self._fit(pm, side)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_delegates.py:155 _fallback_pixmap")
         return None
 
     @staticmethod
@@ -375,8 +376,8 @@ def _on_integration_action_finished(ok: bool, label: str, msg: str):
             if isinstance(w, BrowserPanel):
                 try:
                     mgr.refresh(w._current_path)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_delegates.py:378 _on_integration_action_finished")
     except Exception as e:
         _mfm_log("integration result error: %r" % (e,))
 
@@ -469,8 +470,8 @@ class StatusBadgeDelegate(QStyledItemDelegate):
             painter.setPen(QColor(tv["on_primary"]))
             painter.drawText(x, y, size, size, Qt.AlignCenter, glyph)
             painter.restore()
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_delegates.py:472 paint")
 
 
 # ---------------------------------------------------------------------------

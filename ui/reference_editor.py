@@ -7,6 +7,7 @@ Mayaシーン内の既存リファレンスを一覧表示し、
 Maya セッション内で開いた場合のみ実際の操作が可能。
 スタンドアロンでは .ma ファイルを直接パース（テキスト）して一覧を表示する。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 import re
@@ -253,8 +254,8 @@ class ReferenceEditor(QDialog):
                     ns = cmds.referenceQuery(ref_path, namespace=True) or ""
                     loaded = cmds.referenceQuery(ref_path, isLoaded=True)
                     entries.append(ReferenceEntry(ref_node, ref_path, ns.lstrip(":"), loaded))
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/reference_editor.py:256 _load_from_maya")
             return entries
         except Exception as e:
             QMessageBox.warning(self, "エラー", f"Maya からの読み込みに失敗: {e}")

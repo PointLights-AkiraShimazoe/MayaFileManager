@@ -11,6 +11,7 @@ Presets are persisted via SettingsManager.
 When run inside Maya the "Apply" button executes the preset immediately.
 Outside Maya only editing is available.
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 from pathlib import Path
@@ -338,8 +339,8 @@ class ReferencePresetEditor(QDialog):
             try:
                 b.setAutoDefault(False)
                 b.setDefault(False)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/preset_editor.py:341 _disable_auto_default")
 
     def _build_ui(self):
         root = QHBoxLayout(self)

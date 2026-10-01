@@ -4,6 +4,7 @@
 UIスレッドから呼んでよいのは status_for() / providers_for() / actions_for() /
 request_status() / refresh() / summary() のみ（全て辞書参照 or キュー投入）。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 import queue
@@ -69,8 +70,8 @@ class IntegrationManager(QObject):
         _ilog("action %s ok=%s: %s" % (label, ok, (msg or "").replace("\n", " | ")[:300]))
         try:
             self.action_finished.emit(bool(ok), str(label), str(msg or ""))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/integrations/manager.py:72 _on_action_report")
 
     # ── 起動 ─────────────────────────────────────────────────────────────
     def start(self, enabled: bool = True):
@@ -91,8 +92,8 @@ class IntegrationManager(QObject):
                     self._do_detect()
                 elif kind == "status":
                     self._do_status(arg)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "core/integrations/manager.py:94 _loop")
 
     def _do_detect(self):
         for p in self.providers:
@@ -105,8 +106,8 @@ class IntegrationManager(QObject):
         self._detected = True
         try:
             self.detected.emit()
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/integrations/manager.py:108 _do_detect")
 
     # ── 状態取得（ワーカー） ───────────────────────────────────────────────
     def _do_status(self, directory: str):
@@ -165,8 +166,8 @@ class IntegrationManager(QObject):
                 self._pending.discard(key)
         try:
             self.status_updated.emit(directory)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/integrations/manager.py:168 _do_status")
 
     # ── UIスレッド API ─────────────────────────────────────────────────────
     def request_status(self, directory: str, force: bool = False):
@@ -193,8 +194,8 @@ class IntegrationManager(QObject):
             if callable(inv):
                 try:
                     inv(root)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "core/integrations/manager.py:196 refresh")
         self.request_status(directory, force=True)
 
     def status_for(self, path: str):

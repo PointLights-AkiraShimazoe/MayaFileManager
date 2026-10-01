@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """ファイル一覧のフィルタ／ソート用プロキシモデル（r110 で分離）。"""
+from core.diag import swallow as _swallow  # r112
 
 import os
 import struct
@@ -310,8 +311,8 @@ class FileFilterProxyModel(QSortFilterProxyModel):
                     sm = self.sourceModel()
                     if sm is not None and sm.isDir(sp):
                         return True
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_models.py:313 hasChildren")
         return super().hasChildren(parent)
 
     def data(self, index, role=Qt.DisplayRole):
@@ -332,8 +333,8 @@ class FileFilterProxyModel(QSortFilterProxyModel):
                         if tip:
                             base = super().data(index, role)
                             return ((str(base) + "\n") if base else "") + tip
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_models.py:335 data")
         return super().data(index, role)
 
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:

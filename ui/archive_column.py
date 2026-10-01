@@ -10,6 +10,7 @@ zip / tar 系の中身を «そのまま» たどるためのインラインカ�
 見た目: «通常のフォルダではない» ことが一目で分かるよう、面と文字色を
 plane_archive / on_plane_archive（琥珀寄り）に振っている。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 
@@ -66,8 +67,8 @@ class _ArchiveModel(QStandardItemModel):
         try:
             paths = ab.extract_to_temp(self._archive, names)
             mime.setUrls([QUrl.fromLocalFile(p) for p in paths])
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/archive_column.py:69 mimeData")
         return mime
 
 
@@ -299,6 +300,6 @@ class _ArchiveColumnView(QColumnView):
             view.setDragDropMode(QAbstractItemView.DragOnly)
             view.setEditTriggers(QAbstractItemView.NoEditTriggers)
             view.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/archive_column.py:302 createColumn")
         return view

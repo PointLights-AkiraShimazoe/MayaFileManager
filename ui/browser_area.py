@@ -13,6 +13,7 @@ get_state()/apply_state() で保存・復元する。
 プリセット行・本体はその右。エリアごとのアクセントカラーはストリップと
 プリセットボタンの両方に適用される。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 
@@ -232,8 +233,8 @@ class BrowserArea(QWidget):
                     os.path.normcase(os.path.abspath(nxt)) != \
                     os.path.normcase(os.path.abspath(cur or "")):
                 self.browser.navigate_to(nxt)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_area.py:235 _on_preset_switched")
 
     def set_index(self, i: int, count: int):
         """番号表示・色味と、移動/削除ボタンの有効状態を更新する。"""
@@ -285,5 +286,5 @@ class BrowserArea(QWidget):
             path = state.get("path")
             if path and os.path.isdir(path):
                 self.browser.navigate_to(path)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_area.py:288 apply_state")

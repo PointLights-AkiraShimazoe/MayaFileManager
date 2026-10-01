@@ -19,6 +19,7 @@
 commandPort（Maya）も Blender ブリッジも «式» の値を返すので、exec を式に包み
 名前空間から結果を取り出す（core/dcc_save.py と同じ形）。
 """
+from core.diag import swallow as _swallow  # r112
 
 PREFIX = "[MayaFileManager]"
 
@@ -85,8 +86,8 @@ def _l(m, lv):
         try:
             _mfm_logf(m, lv)
             return
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/dcc_log.py:88 _l")
     print(m)
 '''
 

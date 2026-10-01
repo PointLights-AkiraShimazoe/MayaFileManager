@@ -3,6 +3,7 @@
 
 CappedColumnView: 深さ上限つき QColumnView。選択・D&D・カラム幅・
 表示モード切替など、カラム上の操作はすべてここに集約する。"""
+from core.diag import swallow as _swallow  # r112
 
 import os
 import struct
@@ -271,8 +272,8 @@ class _SizeButtonHover(QObject):
         elif et == _QtCore.QEvent.Leave:
             try:
                 self._owner.size_popup().request_hide()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:274 eventFilter")
         return False
 
 
@@ -423,8 +424,8 @@ class CappedColumnView(QColumnView):
             hbar = self.horizontalScrollBar()
             if hbar is not None and hbar.value() != 0:
                 hbar.setValue(0)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:426 _reset_hscroll_for_rebuild")
 
     def setRootIndex(self, index):
         self._reset_hscroll_for_rebuild()
@@ -470,12 +471,12 @@ class CappedColumnView(QColumnView):
                             and v.isVisible() and v.rootIndex() == parent:
                         try:
                             v.scrollTo(index)      # 縦方向のみ（列内）
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            _swallow(_e, "ui/browser_column_view.py:473 scrollTo")
                         break
                 return
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:477 scrollTo")
         super().scrollTo(index, hint)
 
     # ── ゆっくり2回クリックで名前変更（r67、Explorer 準拠） ──────────────
@@ -500,8 +501,8 @@ class CappedColumnView(QColumnView):
             try:
                 t.stop()
                 t.deleteLater()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:503 _cancel_reclick_rename")
             self._reclick_timer = None
 
     def _fire_reclick_rename(self, path: str):
@@ -523,16 +524,16 @@ class CappedColumnView(QColumnView):
             if not getattr(self, "_hwatch_connected", False):
                 hbar.valueChanged.connect(self._on_hbar_changed_watch)
                 self._hwatch_connected = True
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:526 note_file_click")
 
     def _on_hbar_changed_watch(self, v):
         try:
             t0 = getattr(self, "_file_click_t", 0.0)
             if t0 and _time_mod.monotonic() - t0 < 1.2:
                 _mfm_uilog("hscroll moved after file-click: value=%d" % v, with_stack=True)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:534 _on_hbar_changed_watch")
 
     def setModel(self, model):
         self._reset_hscroll_for_rebuild()
@@ -571,8 +572,8 @@ class CappedColumnView(QColumnView):
                 _mfm_log("ensure_visible: hval %d -> %d (left=%d right=%d vw=%d)"
                          % (hbar.value(), new_val, left, right, vw))
                 hbar.setValue(new_val)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:574 _ensure_current_column_visible")
 
     def set_go_up_callback(self, cb):
         """◀ボタン押下時に呼ぶコールバック（1階層上げる）を登録。"""
@@ -585,8 +586,8 @@ class CappedColumnView(QColumnView):
             self._loaded_dirs.add(key)
             self._loading_first_seen.pop(key, None)
             self._spin_reported.pop(key, None)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:588 note_dir_loaded")
 
     # ── r81: 展開中フォルダの目印 ─────────────────────────────────────
     def _track_column(self, view):
@@ -595,8 +596,8 @@ class CappedColumnView(QColumnView):
         self._mfm_columns.append(view)
         try:
             view.destroyed.connect(lambda *_: self._on_column_destroyed())
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:598 _track_column")
         QTimer.singleShot(0, self._repaint_columns)
 
     def _on_column_destroyed(self):
@@ -618,8 +619,8 @@ class CappedColumnView(QColumnView):
         for c in self._live_columns():
             try:
                 c.viewport().update()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:621 _repaint_columns")
 
     def _is_expanded_index(self, index) -> bool:
         """index のフォルダの中身を表示しているカラムが存在するか
@@ -653,28 +654,28 @@ class CappedColumnView(QColumnView):
             # 各カラムで Shift/Ctrl の複数選択を効かせる（QColumnView単体だと
             # 列ビューに伝播せず効かないため明示設定）
             view.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:656 createColumn")
         folder_path = self._path_for_index(index)
         # r85: 保存済みの «リスト表示のアイコンサイズ» を適用（既定 16px）
         try:
             view.setIconSize(QSize(self.column_item_size(view),
                                    self.column_item_size(view)))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:663 createColumn")
         # 連携状態バッジ付きデリゲート（通常描画＋右下に小さな丸）
         try:
             view.setItemDelegate(StatusBadgeDelegate(self._path_of_index, view,
                                                 is_dir_of_index=self._is_dir_index,
                                                 is_expanded_index=self._is_expanded_index))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:670 createColumn")
         # このカラムのフォルダの連携状態をワーカーへ要求（表示時に1回）
         try:
             if folder_path:
                 self._integrations().request_status(folder_path)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:676 createColumn")
         # カラム上部に「このカラムだけに効く」フィルタ／ソートのヘッダを設置
         self._build_column_header(view, folder_path)
         # 右端のリサイズハンドル（幅変更・ダブルクリックで自動調整）
@@ -743,8 +744,8 @@ class CappedColumnView(QColumnView):
                 p = ""
                 try:
                     p = os.path.normcase(os.path.normpath(_safe_file_path(m, idx)))
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_column_view.py:746 _update_loading_overlays")
                 if not p:
                     spin.hide()
                     continue
@@ -759,8 +760,8 @@ class CappedColumnView(QColumnView):
                     reason = "canFetchMore"
                     try:
                         m.fetchMore(idx)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        _swallow(_e, "ui/browser_column_view.py:762 _update_loading_overlays")
                     first = self._loading_first_seen.setdefault(p, now)
                     loading = (now - first) < 60.0   # 安全弁
                 else:
@@ -845,8 +846,8 @@ class CappedColumnView(QColumnView):
         if sm is not None:
             try:
                 return int(sm.get(self._size_key(mode), self.DEFAULT_SIZE[mode]))
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:848 column_item_size")
         return self.DEFAULT_SIZE[mode]
 
     def set_column_item_size(self, view, px: int, save: bool = True):
@@ -879,8 +880,8 @@ class CappedColumnView(QColumnView):
             if sm is not None:
                 try:
                     sm.set(self._size_key(mode), px)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_column_view.py:882 set_column_item_size")
 
     def set_item_size_all(self, px: int, mode: str = None, save: bool = True):
         """表示サイズを **同じモードの全カラムへ一括適用** する（r102）。
@@ -898,15 +899,15 @@ class CappedColumnView(QColumnView):
         if callable(getattr(self, "_item_size_cb", None)):
             try:
                 self._item_size_cb(px, mode)      # 平坦／サムネビュー側へ
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:901 set_item_size_all")
         if save:
             sm = getattr(self, "_sm_widths", None)
             if sm is not None:
                 try:
                     sm.set(self._size_key(mode or "list"), px)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_column_view.py:908 set_item_size_all")
         return applied
 
     def set_item_size_callback(self, cb):
@@ -975,8 +976,8 @@ class CappedColumnView(QColumnView):
                 b = getattr(v, "_mfm_flat_btn", None)
                 if b is not None:
                     b.setChecked(False)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:978 _reset_flatten_toggle")
 
     def _proxy_model(self):
         m = self.model()
@@ -990,8 +991,8 @@ class CappedColumnView(QColumnView):
             return
         try:
             view.setViewportMargins(0, self._COL_HEADER_H, 0, 0)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:993 _build_column_header")
         hdr = QWidget(view)
         hdr.setObjectName("mfmColHeader")
         # 注意: グローバルQSSの min-height(26px) がヘッダ内の固定20px指定を
@@ -1141,8 +1142,8 @@ class CappedColumnView(QColumnView):
                         pb.setChecked(False)
                     else:
                         prev._mfm_flatten = False
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_column_view.py:1144 _toggle_flatten")
             self._flatten_view = view
             view._mfm_flatten = True
             dirs = self._column_selected_dirs(view)
@@ -1225,8 +1226,8 @@ class CappedColumnView(QColumnView):
                 fp = _safe_file_path(sm, src) if hasattr(sm, "filePath") else ""
                 if fp and os.path.isdir(fp) and fp not in out:
                     out.append(fp)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:1228 _column_selected_dirs")
         return out
 
     def _deepest_selected_dirs(self):
@@ -1266,8 +1267,8 @@ class CappedColumnView(QColumnView):
                                 continue
                         if fp not in out:
                             out.append(fp)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:1269 _deepest_selected_dirs")
         return self._drop_ancestor_dirs(out)
 
     @staticmethod
@@ -1318,8 +1319,8 @@ class CappedColumnView(QColumnView):
                             if anc_nc == nf or anc_nc.startswith(nf + os.sep):
                                 continue   # 操作カラムへのパンくず → 除外
                         snap.add(fp)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:1321 _selection_snapshot")
         return snap
 
     def _restore_selection_snapshot(self, snap):
@@ -1360,8 +1361,8 @@ class CappedColumnView(QColumnView):
             while i.isValid() and i != root:
                 indexes.append(i)
                 i = i.parent()
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:1363 _restore_tracked_selection")
         if not indexes:
             return
         targets = [v.selectionModel() for v in self.findChildren(QListView)]
@@ -1375,13 +1376,13 @@ class CappedColumnView(QColumnView):
                     sel.select(idx, idx)
                 if not sel.isEmpty():
                     sm.select(sel, QISM.Select | QISM.Rows)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:1378 _restore_tracked_selection")
         for view in self.findChildren(QListView):
             try:
                 view.viewport().update()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:1383 _restore_tracked_selection")
 
     def _restore_selection_snapshot_later(self, snap):
         if not snap:
@@ -1520,8 +1521,8 @@ class CappedColumnView(QColumnView):
             self._integ_mgr = mgr
             try:
                 mgr.status_updated.connect(self._on_integration_status)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:1523 _integrations")
         return mgr
 
     def _on_integration_status(self, _directory: str):
@@ -1543,8 +1544,8 @@ class CappedColumnView(QColumnView):
             else:
                 widths = [self.DEFAULT_COLUMN_W] * 12
             self.setColumnWidths(widths)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:1546 set_settings")
 
     DEFAULT_COLUMN_W = 300   # 既定幅（従来256。名前の見切れが多いため拡大）
 
@@ -1649,8 +1650,8 @@ class CappedColumnView(QColumnView):
                     self._reposition_column_header(v)
         except RuntimeError:
             pass
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:1652 _check_column_layout_health")
 
     def persist_column_widths(self):
         sm = getattr(self, "_sm_widths", None)
@@ -1658,8 +1659,8 @@ class CappedColumnView(QColumnView):
             return
         try:
             sm.set("column_widths", [int(w) for w in self.columnWidths()])
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:1661 persist_column_widths")
 
     def fit_width_for_view(self, view) -> int:
         """カラム内の項目名が収まる幅を計算する（最大400件をサンプル）。"""
@@ -1760,8 +1761,8 @@ class CappedColumnView(QColumnView):
                 try:
                     if not view.hasFocus():
                         view.setFocus(Qt.MouseFocusReason)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_column_view.py:1763 eventFilter")
                 if _MFM_DEBUG:
                     # r109: 文字列組み立て自体がプレスごとのコストなので、
                     # デバッグ時以外は «式の評価ごと» 行わない
@@ -2016,8 +2017,8 @@ class CappedColumnView(QColumnView):
                 p = u.toLocalFile()
                 if p:
                     out.append(os.path.normpath(p))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:2019 _urls_to_paths")
         return out
 
     def _handle_view_drag(self, view, event, et):
@@ -2134,8 +2135,8 @@ class CappedColumnView(QColumnView):
                 if pm is not None and not pm.isNull():
                     drag.setPixmap(pm)
                     drag.setHotSpot(QPoint(12, pm.height() // 2))
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:2137 _start_multi_drag")
             # r96: PySide2 の QDrag は exec_() しか持たない版がある。
             # exec を直接呼ぶと AttributeError でドラッグが «無かったこと» になる。
             _exec = getattr(drag, "exec", None) or getattr(drag, "exec_", None)
@@ -2363,8 +2364,8 @@ class CappedColumnView(QColumnView):
             dx = target.x() - desired
             if dx:
                 hb.setValue(max(0, min(hb.value() + dx, hb.maximum())))
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:2366 _restore_anchor_column_x")
 
     def _all_selection_models(self):
         """全カラムの選択モデル＋本体の選択モデル（重複除去済み）。
@@ -2383,8 +2384,8 @@ class CappedColumnView(QColumnView):
             top = self.selectionModel()
             if top is not None and id(top) not in seen:
                 models.append(top)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:2386 _all_selection_models")
         return models
 
     def _broadcast_select(self, idx, state, exclude=None):
@@ -2395,8 +2396,8 @@ class CappedColumnView(QColumnView):
                 continue
             try:
                 m.select(idx, state | QISM.Rows)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:2398 _broadcast_select")
 
     def _select_exclusively(self, sm, top_idx, bot_idx, clicked_idx):
         """全モデルで «範囲のみ選択» にする（パンくず＝クリック階層の
@@ -2420,8 +2421,8 @@ class CappedColumnView(QColumnView):
                         continue      # パンくず（祖先）→ 温存
                     m.select(i, QISM.Deselect | QISM.Rows)
                 m.select(rng, QISM.Select | QISM.Rows)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:2423 _select_exclusively")
 
     def _park_current_at_parent(self, sm, idx):
         """複数選択中は current を «クリック項目の親» に退避する。
@@ -2438,8 +2439,8 @@ class CappedColumnView(QColumnView):
             # （scrollTo）して操作対象を見失うのを防ぐため、一時的に自動
             # スクロールを止める（常時OFFは新規カラムの表示を壊すため不可）
             self.setAutoScroll(False)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:2441 _park_current_at_parent")
         try:
             parent = idx.parent()
             target = parent if parent.isValid() else idx
@@ -2448,8 +2449,8 @@ class CappedColumnView(QColumnView):
             top = self.selectionModel()
             if top is not None and top is not sm:
                 top.setCurrentIndex(target, QISM.NoUpdate)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:2451 _park_current_at_parent")
         QTimer.singleShot(250, lambda: self.setAutoScroll(True))
         # QColumnViewの非同期なカラム再構築の後に、選択ハイライトを描き直す
         QTimer.singleShot(0, self._restore_tracked_selection)
@@ -2479,8 +2480,8 @@ class CappedColumnView(QColumnView):
             idx = self.model().index(p_idx.row(), 0, p_idx.parent())
             if idx.isValid():
                 self._prune_selection_to_single(idx)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:2482 _prune_after_native_click")
 
     def _prune_selection_to_single(self, idx):
         """クリック項目とその祖先(パンくず)以外の選択を全モデルから外し、
@@ -2503,13 +2504,13 @@ class CappedColumnView(QColumnView):
                     if not keep:
                         m.select(i, QISM.Deselect | QISM.Rows)
                 m.select(idx, QISM.Select | QISM.Rows)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:2506 _prune_selection_to_single")
         for v in self.findChildren(QListView):
             try:
                 v.viewport().update()
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:2511 _prune_selection_to_single")
 
     def _clear_column_selection(self, view):
         """カラムの空白クリック: そのカラム内の選択をすべて解除する。"""
@@ -2521,15 +2522,15 @@ class CappedColumnView(QColumnView):
         if getattr(self, "_selected_dir_paths", None):
             try:
                 col_path = self._path_for_index(root) or ""
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:2524 _clear_column_selection")
         for m in self._all_selection_models():
             try:
                 for i in list(m.selectedIndexes()):
                     if i.column() == 0 and i.parent() == root:
                         m.select(i, QISM.Deselect | QISM.Rows)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:2531 _clear_column_selection")
         # 追跡からこのカラム直下のフォルダを外す
         try:
             if col_path:
@@ -2538,8 +2539,8 @@ class CappedColumnView(QColumnView):
                     p for p in self._selected_dir_paths
                     if self._norm_parent(p) != nc
                 }
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:2541 _clear_column_selection")
         view._mfm_sel_anchor = None
         # 選択を解除したカラムより下（右）の階層カラムは削除する。
         # current をこのカラムのルート（＝このカラムのフォルダ）へ退避すると
@@ -2549,8 +2550,8 @@ class CappedColumnView(QColumnView):
             if root.isValid():
                 try:
                     self.setAutoScroll(False)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_column_view.py:2552 _clear_column_selection")
                 smv = view.selectionModel()
                 if smv is not None:
                     smv.setCurrentIndex(root, QISM.NoUpdate)
@@ -2561,8 +2562,8 @@ class CappedColumnView(QColumnView):
                 # 再構築後にパンくずを再適用
                 QTimer.singleShot(0, self._restore_tracked_selection)
                 QTimer.singleShot(80, self._restore_tracked_selection)
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py:2564 _clear_column_selection")
         dirs = self._deepest_selected_dirs()
         _mfm_log("clear_column_selection: col=%r remain_dirs=%d"
                  % (os.path.basename(col_path), len(dirs)))
@@ -2588,8 +2589,8 @@ class CappedColumnView(QColumnView):
                 for sm in sms:
                     if sm is not None and sm.isSelected(idx):
                         sm.select(idx, QISM.Deselect | QISM.Rows)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/browser_column_view.py:2591 _deselect_paths")
 
     def currentChanged(self, current: QModelIndex, previous: QModelIndex):
         super().currentChanged(current, previous)

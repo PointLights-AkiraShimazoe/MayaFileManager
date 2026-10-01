@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """プロバイダ共通基盤（検出・コマンド実行・パス正規化・リンク解決）。"""
+from core.diag import swallow as _swallow  # r112
 
 import os
 import shutil
@@ -41,8 +42,8 @@ def which(*names):
             p = shutil.which(n)
             if p:
                 return p
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/integrations/base.py:44 which")
     return None
 
 
@@ -51,8 +52,8 @@ def first_existing(*paths):
         try:
             if p and os.path.isfile(p):
                 return p
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/integrations/base.py:54 first_existing")
     return None
 
 

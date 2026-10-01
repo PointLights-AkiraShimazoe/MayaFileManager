@@ -12,6 +12,7 @@ i18n — UI表示言語（日本語 / English）
     "en"   … 常に English
 - 反映タイミングは起動時（init）。切替は再起動後に反映される。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 
@@ -30,8 +31,8 @@ def _detect_auto() -> str:
                 return "ja"
             if ui:
                 return "en"
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "core/i18n.py:33 _detect_auto")
     # 2) スタンドアロン: Mayaの言語設定を引き継ぐ環境変数
     env = os.environ.get("MAYA_UI_LANGUAGE", "")
     if env.lower().startswith("ja"):
@@ -44,14 +45,14 @@ def _detect_auto() -> str:
         loc = locale.getdefaultlocale()[0] or ""
         if loc.lower().startswith("ja"):
             return "ja"
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "core/i18n.py:47 _detect_auto")
     try:
         from core.compat import QLocale
         if QLocale.system().name().lower().startswith("ja"):
             return "ja"
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "core/i18n.py:53 _detect_auto")
     return "en"
 
 

@@ -10,6 +10,7 @@
 - 操作: p4vc（submit/diff/history/timelapse/revert）＋ p4 CLI
   （edit=チェックアウト / add / revert / sync）
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 
@@ -115,8 +116,8 @@ class P4Provider(Provider):
         if callable(fn):
             try:
                 fn("p4: " + msg)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "core/integrations/p4_provider.py:118 _log")
 
     def _in_client_view(self, directory: str) -> bool:
         """`p4 where <dir>/...` でクライアントビュー内かをサーバーに直接照会する。

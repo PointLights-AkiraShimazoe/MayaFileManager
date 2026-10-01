@@ -7,6 +7,7 @@ Operations run synchronously here; callers should use QThread for UI.
 FBX import/export wrappers exist for both standalone (FBX SDK via fbx module)
 and inside-Maya (maya.cmds.file) contexts.
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 import re
@@ -396,8 +397,8 @@ def _expand_auto_name_template(directory: str, rule: dict) -> str:
         try:
             with open(counter_file) as f:
                 seq = int(f.read().strip())
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "core/file_operations.py:399 _expand_auto_name_template")
 
     return template.replace("{seq}", str(seq)).replace(f"{{seq:{rule.get('pad','04d')}}}", str(seq).zfill(int(rule.get('pad', '04d').replace('0', '').replace('d', ''))))
 
@@ -463,8 +464,8 @@ def resolve_windows_shortcut(path: str) -> Optional[str]:
         tgt = sc.Targetpath
         if tgt:
             return os.path.normpath(tgt)
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "core/file_operations.py:466 resolve_windows_shortcut")
 
     # --- 2) 依存なしのバイナリ解析 (MS-SHLLINK LinkInfo.LocalBasePath) ---
     try:
@@ -758,10 +759,10 @@ def rename_path(src: str, dst: str, release_cb=None, attempts: int = 4,
                 except TypeError:
                     try:
                         release_cb()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+                    except Exception as _e:
+                        _swallow(_e, "core/file_operations.py:761 rename_path")
+                except Exception as _e:
+                    _swallow(_e, "core/file_operations.py:763 rename_path")
             _t.sleep(delay * (i + 1))
     if _shell_rename(src, dst):
         return True, None

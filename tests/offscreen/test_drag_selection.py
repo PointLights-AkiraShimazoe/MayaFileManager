@@ -36,6 +36,9 @@ class _FakeDrag:
     def setPixmap(self, *a, **k):
         pass
 
+    def setHotSpot(self, *a, **k):
+        pass
+
     def exec(self, *a, **k):
         return 0
     exec_ = exec

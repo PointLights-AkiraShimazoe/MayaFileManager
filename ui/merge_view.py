@@ -11,6 +11,7 @@ Merge View
 
 既存のブラウズ（QFileSystemModel + proxy）には一切手を入れず、独立して動作する。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 
@@ -331,8 +332,8 @@ class MergePanel(QWidget):
         self._view.setModel(self._model)
         try:
             self._view.setRootIndex(self._model.anchor_index())
-        except Exception:
-            pass
+        except Exception as _e:
+            _swallow(_e, "ui/merge_view.py:334 _rebuild")
         self._update_mode_buttons()
 
     def _update_mode_buttons(self):
@@ -353,5 +354,5 @@ class MergePanel(QWidget):
             if p and os.path.isfile(p):
                 try:
                     open_with_default_app(p)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _swallow(_e, "ui/merge_view.py:356 _on_activated")

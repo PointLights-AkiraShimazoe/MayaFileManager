@@ -15,6 +15,7 @@ Supported sources
 - .ma / .mb       → look for workspace .mayaSwatches sidecar first
 - Generic files   → category icon from resources
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 from pathlib import Path
@@ -39,8 +40,8 @@ def _thumb_log(msg: str):
         with open(_THUMB_LOG, "a", encoding="utf-8") as f:
             f.write("[%s] thumb: %s\n"
                     % (datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3], msg))
-    except Exception:
-        pass
+    except Exception as _e:
+        _swallow(_e, "core/thumbnail_generator.py:42 _thumb_log")
 
 # ---------------------------------------------------------------------------
 # LRU Cache

@@ -10,6 +10,7 @@ Flat Column
 
 QFileSystemModel ベースの通常カラムとは独立に、QStandardItemModel + 軽量プロキシで動く。
 """
+from core.diag import swallow as _swallow  # r112
 
 import os
 
@@ -319,8 +320,8 @@ class FlatColumn(QWidget):
             it.setEditable(False)
             try:
                 it.setIcon(self._icons.icon(QFileInfo(fp)))
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/flat_column.py:322 set_sources")
             it.setData(fp, _PATH_ROLE)
             try:
                 st = os.stat(fp)
@@ -362,5 +363,5 @@ class FlatColumn(QWidget):
         if p and os.path.isfile(p):
             try:
                 open_with_default_app(p)
-            except Exception:
-                pass
+            except Exception as _e:
+                _swallow(_e, "ui/flat_column.py:365 _on_activated")
