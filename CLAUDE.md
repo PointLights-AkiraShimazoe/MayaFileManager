@@ -1058,6 +1058,21 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   そこで起きた実装ミスを永久に見えなくする。
 - 回帰テスト: tests/offscreen/test_swallow_diag.py
 
+## main_window.py の分割（r114、2026-10-01）
+
+2025 行の `ui/main_window.py` を 3 つに分けた。**コードは移動のみ**。
+
+    ui/nav_panels.py       313行  HistoryPanel / QuickNavBar / _BridgeNotifier
+    ui/main_window_dcc.py 1194行  MainWindowDccMixin（DCC連携・ブリッジ・監視）
+    ui/main_window.py      663行  MainWindow 本体＋旧名の再エクスポート
+
+- `MainWindow` は単一の巨大クラスなので、**Mixin** で分けた。
+  `class MainWindow(MainWindowDccMixin, QMainWindow)`。
+  Mixin 側のメソッドは `self._xxx`（MainWindow.__init__ が用意）に依存する。
+  **MainWindow 以外から継承しないこと。**
+- `HistoryPanel` / `QuickNavBar` は `ui/browser_area.py` も import するため、
+  `ui/main_window.py` から再エクスポートして既存の import を維持している。
+
 ## 開発・デバッグの約束事
 
 - 起動: `run_dev.bat`（インストール済み最新Maya 2027→2023 の mayapy を自動選択。
