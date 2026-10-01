@@ -26,8 +26,9 @@ from typing import Optional, List
 
 from core.compat import (
     Qt, Signal, QObject,
-    QMainWindow, QWidget, QHBoxLayout,
+    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QComboBox, QToolButton, QMenu, QMenuBar, QSplitter, QMessageBox, QFileDialog, QInputDialog, QDialog,
+    QApplication, QPushButton, QTextEdit,
     QTimer
 )
 from core.settings_manager import SettingsManager
@@ -287,6 +288,20 @@ class MainWindowDccMixin:
         if not items:
             combo.addItem(tr("（%s なし）", "(no %s)") % self._dcc_label(dcc), None)
             combo.setEnabled(False)
+            # r119: «起動しているのに出ない» が一番多い詰まり方なので、
+            # 原因と次の一手をここで示す（メニューまで辿り着けない人が多い）
+            if dcc != "blender":
+                combo.setToolTip(tr(
+                    "起動中の Maya が見つかりません。\n"
+                    "連携ポートは Maya の起動時に開きます。Manager より先に\n"
+                    "起動した Maya は、ツール →「起動中の Maya を今すぐ接続...」\n"
+                    "で、再起動せずに接続できます。",
+                    "No running Maya found.\n"
+                    "The bridge port opens when Maya starts. For a Maya that\n"
+                    "was already running, use Tools > \u201cConnect a running\n"
+                    "Maya now...\u201d to connect without restarting it."))
+        elif dcc != "blender":
+            combo.setToolTip("")
         else:
             combo.setEnabled(True)
             pids = {it[0]: it[3] for it in items if it[3]}
@@ -474,6 +489,61 @@ class MainWindowDccMixin:
         except Exception as e:
             QMessageBox.critical(
                 self, tr("インストール失敗", "Install Failed"), str(e))
+
+    def _connect_running_maya(self):
+        """«既に起動している» Maya を、再起動せずに接続リストへ出す（r119）。
+
+        userSetup.py のスニペットは «次回の Maya 起動から» しか効かない。
+        作業中の Maya に後からポートを開かせる手段は commandPort だけで、
+        その commandPort がまだ無いので外からは一切触れない。
+        → スクリプトエディタに貼る 1 本を渡すのが唯一の道。"""
+        from core.maya_bridge import open_port_snippet
+        code = open_port_snippet()
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("起動中の Maya を今すぐ接続",
+                              "Connect a running Maya now"))
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(tr(
+            "作業中の Maya は、再起動しないと連携ポートが開きません。\n"
+            "下のコードを Maya のスクリプトエディタ（Python タブ）へ貼って\n"
+            "実行すると、その場で接続できるようになります。\n"
+            "（シーンには一切影響しません）",
+            "A Maya that is already running has no bridge port until it is\n"
+            "restarted. Paste the code below into Maya's Script Editor\n"
+            "(Python tab) and run it to connect right away.\n"
+            "(It does not touch your scene.)")))
+        box = QTextEdit(dlg)
+        box.setPlainText(code)
+        box.setReadOnly(True)
+        box.setLineWrapMode(QTextEdit.NoWrap)
+        box.setMinimumSize(560, 220)
+        lay.addWidget(box)
+        row = QHBoxLayout()
+        row.addStretch()
+        copy_btn = QPushButton(tr("📋 コピー", "📋 Copy"), dlg)
+        copy_btn.setAutoDefault(False)
+        rescan_btn = QPushButton(tr("🔄 貼り付けた — 再スキャン",
+                                    "🔄 Pasted — rescan"), dlg)
+        rescan_btn.setAutoDefault(False)
+        close_btn = QPushButton(tr("閉じる", "Close"), dlg)
+        close_btn.setAutoDefault(False)
+        row.addWidget(copy_btn)
+        row.addWidget(rescan_btn)
+        row.addWidget(close_btn)
+        lay.addLayout(row)
+
+        def _copy():
+            cb = QApplication.clipboard()
+            if cb is not None:
+                cb.setText(code)
+            self.statusBar().showMessage(
+                tr("コードをコピーしました。Maya のスクリプトエディタで実行してください。",
+                   "Copied. Run it in Maya's Script Editor."), 8000)
+        copy_btn.clicked.connect(_copy)
+        rescan_btn.clicked.connect(self._refresh_maya_connections)
+        close_btn.clicked.connect(dlg.accept)
+        _copy()                      # 開いた時点でクリップボードへ入れておく
+        dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
 
     def _focus_connected_maya(self):
         """接続中のMayaのウィンドウを最前面に出す（Windows専用）。

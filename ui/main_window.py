@@ -417,6 +417,12 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
                 tr("Maya連携を全Mayaにインストール...",
                    "Install Maya bridge for all Mayas...")
             ).triggered.connect(self._install_maya_bridge)
+            # r119: userSetup は «次回起動から» しか効かない。作業中の Maya の
+            # 救済手段をメニューの «すぐ隣» に置く（ここに無いと辿り着けない）
+            tools_menu.addAction(
+                tr("起動中の Maya を今すぐ接続...",
+                   "Connect a running Maya now...")
+            ).triggered.connect(self._connect_running_maya)
             tools_menu.addAction(
                 tr("Blender連携を全Blenderにインストール...",
                    "Install Blender bridge for all Blenders...")

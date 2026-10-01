@@ -106,22 +106,48 @@ def parse_identify(reply):
 
 _US_BEGIN = "# >>> MayaFileManager bridge >>>"
 _US_END = "# <<< MayaFileManager bridge <<<"
-_US_SNIPPET = _US_BEGIN + """
-# MayaFileManager: 起動時に連携用commandPortを自動で開く（レンジ内の空きを使用）
+
+# 【重要・自動変換禁止】以下の文字列は **Maya の userSetup.py にそのまま貼られる**。
+# Manager のモジュールではないので、`_swallow()` など当パッケージの関数を
+# 書いてはいけない（Maya 側で NameError になり、ポートが一切開かなくなる）。
+# r112 の一括変換がここへ `_swallow` を入れてしまい、ポートが埋まっている
+# 2 台目以降の Maya が «接続リストに出ない» 原因になっていた（r119 で修復）。
+# except は素の `pass` のままにすること。noqa: PLS-NO-SWALLOW
+PORT_SNIPPET_BODY = """
 def _mfm_open_bridge_port():
     import maya.cmds as _cmds
-    for _p in range(20261, 20270):
+    for _p in range(%d, %d):
         try:
-            _cmds.commandPort(name=":%d" % _p, sourceType="python")
-            break
-        except Exception as _e:
-            _swallow(_e, "core/maya_bridge.py:116 _mfm_open_bridge_port")
+            if _cmds.commandPort(":%%d" %% _p, q=True):
+                continue          # 既に誰かが使用中のポートは飛ばす
+        except Exception:
+            pass
+        try:
+            _cmds.commandPort(name=":%%d" %% _p, sourceType="python")
+            return _p
+        except Exception:
+            pass
+    return None
+""" % (PORT_RANGE[0], PORT_RANGE[-1] + 1)
+
+_US_SNIPPET = _US_BEGIN + """
+# MayaFileManager: 起動時に連携用commandPortを自動で開く（レンジ内の空きを使用）
+""" + PORT_SNIPPET_BODY + """
 try:
     import maya.utils as _mu
     _mu.executeDeferred(_mfm_open_bridge_port)
-except Exception as _e:
-    _swallow(_e, "core/maya_bridge.py:121 _mfm_open_bridge_port")
+except Exception:
+    pass
 """ + _US_END + "\n"
+
+
+def open_port_snippet() -> str:
+    """«既に起動している» Maya のスクリプトエディタ（Python）に貼って、
+    その場で連携ポートを開くためのコード（r119）。
+    userSetup.py は «次回起動から» しか効かないので、作業中の Maya を
+    Manager から見えるようにする唯一の手段がこれになる。"""
+    return (PORT_SNIPPET_BODY.strip() + "\n\n"
+            "print('MayaFileManager bridge port: %s' % _mfm_open_bridge_port())\n")
 
 
 def maya_app_dir():
