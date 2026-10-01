@@ -1018,6 +1018,26 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   集計が意味を失い、次の調査で «最多の行» を追いかけて空振りする
   （実際、最多だった eventFilter 704 件は旧パス時代の記録だった）。
 
+## モジュール分割（r110、2026-10-01）
+
+6746 行あった `ui/browser_panel.py` を役割ごとに分けた。**コードは 1 行も
+書き換えず、ブロック単位で移動**しただけ（挙動を変えないため）。
+
+    ui/browser_util.py        338行  ログ・パス解決・アイコン提供・占有区間
+    ui/browser_models.py      389行  FileFilterProxyModel
+    ui/browser_delegates.py   478行  ThumbnailDelegate / StatusBadgeDelegate
+    ui/browser_column_view.py 2623行 CappedColumnView と周辺ウィジェット
+    ui/browser_panel.py       3127行 BrowserPanel 本体＋**全名前の再エクスポート**
+
+- 依存は一方向（util → models/delegates → column_view → panel）。
+  **逆向きの import は循環するので禁止**。
+- `ui/browser_panel.py` は旧名を全て再エクスポートするので、
+  **既存の `from ui.browser_panel import X` は変更不要**。
+- ただし **差し替え（monkeypatch）は «コードが居るモジュール» に対して
+  行う必要がある**。`bp.QDrag = Fake` は効かなくなり、
+  `ui.browser_column_view.QDrag` を差し替える（テスト 2 本を修正済み）。
+  再エクスポートは «読む» 側の互換は保つが «書き換える» 側は保たない。
+
 ## 開発・デバッグの約束事
 
 - 起動: `run_dev.bat`（インストール済み最新Maya 2027→2023 の mayapy を自動選択。

@@ -10,6 +10,9 @@ from _common import *  # noqa: F401,F403
 from _common import (app, make_panel, find_item_wait as find_item,
                      tmpdir, finish, run, Qt, QTest)
 import ui.browser_panel as bp
+# r110: _start_multi_drag は browser_column_view に移動したので、
+# QDrag の差し替えは «そのモジュール» に対して行う
+import ui.browser_column_view as bcv
 
 b = make_panel(1000, 600)
 d = tmpdir()
@@ -42,7 +45,7 @@ def s1():
 
     # 実際のドラッグ中に «占有中» になっている
     seen = {}
-    orig = bp.QDrag
+    orig = bcv.QDrag
 
     class _Drag:
         def __init__(self, *a, **k):
@@ -62,14 +65,14 @@ def s1():
             return 0
         exec_ = exec
 
-    bp.QDrag = _Drag
+    bcv.QDrag = _Drag
     try:
         cvw, rect, idx = find_item(b, "a.ma")
         assert cvw, "項目が見つからない"
         b._column_view._start_multi_drag(cvw, [idx])
         _settle(200)
     finally:
-        bp.QDrag = orig
+        bcv.QDrag = orig
     assert seen.get("reason"), ("ドラッグ中に占有宣言が立っていない", seen)
     assert bp.mfm_blocking_reason() == "", "ドラッグ後に解除されていない"
     print("drag declares a blocking section: OK (%s)" % seen["reason"])

@@ -7,6 +7,9 @@ from _common import *  # noqa: F401,F403
 from _common import app, make_panel, find_item_wait as find_item, tmpdir, finish, run, QTimer, Qt
 from _common import QTest
 import ui.browser_panel as bp
+# r110: _start_multi_drag は browser_column_view に移動したので、
+# QDrag の差し替えは «そのモジュール» に対して行う
+import ui.browser_column_view as bcv
 
 b = make_panel(1100, 600)
 cv = b._column_view
@@ -61,8 +64,8 @@ def s1():
     sel_all = [os.path.basename(p.rstrip("/\\")) for p in b._get_selected_paths()]
     assert any(x in sel_all for x in ("proj", "scenes")), ("前提が崩れた", sel_all)
 
-    orig = bp.QDrag
-    bp.QDrag = _FakeDrag
+    orig = bcv.QDrag
+    bcv.QDrag = _FakeDrag
     try:
         # 1) ファイルを1つクリック → そのままドラッグ
         cvw, rect, _ = find_item(b, "chr_A.ma")
@@ -90,7 +93,7 @@ def s1():
         assert DRAGGED and DRAGGED[-1] == ["sub"], ("フォルダのドラッグ対象が違う", DRAGGED)
         print("unselected folder drag carries only that folder: OK")
     finally:
-        bp.QDrag = orig
+        bcv.QDrag = orig
     finish(True)
 
 
