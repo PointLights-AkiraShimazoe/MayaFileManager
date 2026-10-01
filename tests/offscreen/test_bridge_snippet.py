@@ -123,4 +123,56 @@ with open(p, encoding="utf-8") as f:
 assert again.count(_US_BEGIN) == 1, "再インストールでブロックが増えた"
 print("install_usersetup writes a clean, idempotent block: OK")
 
+
+# ---------------------------------------------------------------------------
+# r119: userSetup.py の «置き場» を推測で決めない
+#   実機: «ドキュメント» 既知フォルダは OneDrive 配下なのに、Maya の
+#   internalVar(userAppDir=True) は %USERPROFILE%/Documents/maya だった。
+#   推測で書くと Maya が読まない場所に置くことになる（= 入れたのに効かない）。
+# ---------------------------------------------------------------------------
+from core import maya_bridge as _mb
+
+os.environ.pop("MAYA_APP_DIR", None)
+_mb._app_dir_confirmed = None
+_mb._app_dir_override = None
+
+# 1) Maya 本人の答え（APP_DIR_CODE の応答）を取り出せる
+reply = "MFMDIR<C:/Users/owner/Documents/maya/>MFMDIR"
+got = _mb.parse_app_dir(reply)
+assert got and got.replace("\\", "/").rstrip("/") == "C:/Users/owner/Documents/maya", got
+assert _mb.parse_app_dir("") is None and _mb.parse_app_dir("ごみ") is None
+print("parse_app_dir extracts Maya's own answer: OK")
+
+# 2) 確定値は他の全てに優先する
+_mb.set_maya_app_dir("C:/real/maya", confirmed=True)
+assert _mb.app_dir_confirmed()
+assert _mb.maya_app_dir().replace("\\", "/") == "C:/real/maya"
+assert _mb.usersetup_path().replace("\\", "/") == "C:/real/maya/scripts/userSetup.py"
+print("confirmed app dir wins and drives usersetup_path: OK")
+
+# 3) 聞けない時は «実在するそれらしい方» を選ぶ（空の既知フォルダに負けない）
+_mb._app_dir_confirmed = None
+_mb._app_dir_override = None
+base = tempfile.mkdtemp(prefix="mfm_appdir_")
+real = os.path.join(base, "home_docs", "maya")       # 本物: 2026/ と scripts/ がある
+fake = os.path.join(base, "onedrive_docs", "maya")   # 既知フォルダ側: 空
+os.makedirs(os.path.join(real, "2026"))
+os.makedirs(os.path.join(real, "scripts"))
+os.makedirs(fake)
+_orig_cands = _mb.maya_app_dir_candidates
+_mb.maya_app_dir_candidates = lambda: [real, fake]
+try:
+    assert _mb._looks_like_maya_app_dir(real) > _mb._looks_like_maya_app_dir(fake)
+    assert _mb.maya_app_dir() == real, _mb.maya_app_dir()
+    # どちらも空なら «最後の候補»（既知フォルダ）へ落ちる
+    _mb.maya_app_dir_candidates = lambda: [os.path.join(base, "nope1"),
+                                           os.path.join(base, "nope2")]
+    assert _mb.maya_app_dir() == os.path.join(base, "nope2")
+finally:
+    _mb.maya_app_dir_candidates = _orig_cands
+    _mb._app_dir_confirmed = None
+    _mb._app_dir_override = None
+print("falls back to the candidate that actually looks like Maya's dir: OK")
+
+
 finish()

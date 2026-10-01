@@ -18,16 +18,25 @@ Maya Bridge — スタンドアロン版マネージャーと起動済みMayaの
 """
 from core.diag import swallow as _swallow  # r112
 
-import os as _os
+import os
+import os as _os          # 旧コード互換（関数内で import os しているものがある）
 import re
 import socket
 
-_BRIDGE_LOG = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-                            "mfm_maya.log")
+# r119: ログは «監視対象と別の故障単位» へ。従来はツールフォルダ直下
+# （= ツールを置いたドライブ）で、そのドライブが落ちると連携の記録まで
+# 失われた（r117 と同じ轍）。出せなければツールフォルダへ退避する。
+try:
+    _BRIDGE_LOG_DIR = _os.path.join(_os.path.expanduser("~"),
+                                    ".maya_file_manager", "logs")
+    _os.makedirs(_BRIDGE_LOG_DIR, exist_ok=True)
+except OSError:
+    _BRIDGE_LOG_DIR = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+_BRIDGE_LOG = _os.path.join(_BRIDGE_LOG_DIR, "mfm_maya.log")
 
 
 def bridge_log(msg: str):
-    """Maya連携（ポートスキャン/識別/userSetup）の経緯をツールフォルダ直下へ記録。"""
+    """Maya連携（ポートスキャン/識別/userSetup）の経緯を記録する。"""
     try:
         import datetime
         with open(_BRIDGE_LOG, "a", encoding="utf-8") as f:
@@ -150,29 +159,127 @@ def open_port_snippet() -> str:
             "print('MayaFileManager bridge port: %s' % _mfm_open_bridge_port())\n")
 
 
+# Maya のユーザー設定ディレクトリを «Maya に聞く» ためのコード。
+# commandPort は単一の式しか返さないので式のまま保つこと。
+APP_DIR_CODE = ("'MFMDIR<' + __import__('maya.cmds', fromlist=['internalVar'])"
+                ".internalVar(userAppDir=True) + '>MFMDIR'")
+
+
+def parse_app_dir(reply):
+    """APP_DIR_CODE の応答から Maya の userAppDir を取り出す。失敗で None。"""
+    import re as _re
+    m = _re.search(r"MFMDIR<(.*?)>MFMDIR", reply or "", _re.S)
+    if not m:
+        return None
+    d = (m.group(1) or "").strip().replace("/", os.sep).rstrip(os.sep)
+    return d or None
+
+
+# 実行中に確定した値（Maya に聞けた場合）と、ユーザー指定の上書き。
+_app_dir_confirmed = None
+_app_dir_override = None
+
+
+def set_maya_app_dir(path, confirmed=False):
+    """Maya の userAppDir を外から確定させる。
+    confirmed=True は «Maya 本人に聞いた» 値（最優先で信頼する）。"""
+    global _app_dir_confirmed, _app_dir_override
+    if not path:
+        return
+    path = str(path).replace("/", os.sep).rstrip(os.sep)
+    if confirmed:
+        _app_dir_confirmed = path
+    else:
+        _app_dir_override = path
+    bridge_log("maya_app_dir set: %r (confirmed=%s)" % (path, confirmed))
+
+
+def app_dir_confirmed() -> bool:
+    """Maya 本人に聞いた値を持っているか（重ねて聞かないための判定）。"""
+    return bool(_app_dir_confirmed or os.environ.get("MAYA_APP_DIR"))
+
+
+def _looks_like_maya_app_dir(d):
+    """«Maya の設定フォルダらしさ» を数える。0 なら候補として弱い。
+    2023〜2029 のバージョンフォルダと scripts/ の有無で判定する。"""
+    score = 0
+    try:
+        if not os.path.isdir(d):
+            return 0
+        for name in os.listdir(d):
+            if len(name) == 4 and name.isdigit() and 2015 <= int(name) <= 2039:
+                if os.path.isdir(os.path.join(d, name)):
+                    score += 2
+            elif name == "scripts" and os.path.isdir(os.path.join(d, name)):
+                score += 1
+    except OSError:
+        return 0
+    return score
+
+
+def _known_documents():
+    """Windows の «ドキュメント» 既知フォルダ（OneDrive 等へのリダイレクト反映）。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        # CSIDL_PERSONAL (=5)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0:
+            return buf.value
+    except Exception:
+        pass
+    return None
+
+
+def maya_app_dir_candidates():
+    """ありうる場所を «優先度順ではなく列挙順» で返す（重複なし）。"""
+    out = []
+    home = os.path.expanduser("~")
+    for base in (os.path.join(home, "Documents"), _known_documents()):
+        if not base:
+            continue
+        d = os.path.join(base, "maya")
+        if d not in out:
+            out.append(d)
+    return out
+
+
 def maya_app_dir():
     """Maya のユーザー設定ディレクトリ（MAYA_APP_DIR 相当）を返す。
-    優先順: 環境変数 MAYA_APP_DIR → Windows の «ドキュメント» 既知フォルダ
-    （OneDrive等へのリダイレクトを正しく反映）/maya → ~/Documents/maya。
-    注意: ~/Documents 固定だと、ドキュメントが OneDrive にリダイレクトされた
-    環境では Maya が読まない場所へ書いてしまう（2026-09 実機で発生）。"""
-    import os
+
+    優先順:
+      1. Maya 本人に聞いた値（set_maya_app_dir(confirmed=True)）
+      2. 環境変数 MAYA_APP_DIR
+      3. ユーザーが指定した値（set_maya_app_dir()）
+      4. 候補の «実物らしさ» で選ぶ（バージョンフォルダ / scripts の有無）
+      5. 既知フォルダ → ~/Documents
+
+    注意: «ドキュメント» 既知フォルダが OneDrive へリダイレクトされていても、
+    Maya がそこを使うとは限らない（2026-10 実機: 既知フォルダは
+    OneDrive 配下の「ドキュメント」なのに、Maya の
+    internalVar(userAppDir=True) は %USERPROFILE%/Documents/maya）。
+    «推測» で書くと Maya が読まない場所に userSetup.py を置くことになり、
+    連携が «入れたのに効かない» 状態になる。だから実在性で選び、
+    可能なら Maya 本人に聞いた値で上書きする。"""
+    if _app_dir_confirmed:
+        return _app_dir_confirmed
     env = os.environ.get("MAYA_APP_DIR")
     if env:
         return env
-    docs = None
-    if os.name == "nt":
-        try:
-            import ctypes
-            buf = ctypes.create_unicode_buffer(1024)
-            # CSIDL_PERSONAL (=5): 「ドキュメント」。既知フォルダの移動を反映
-            if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0:
-                docs = buf.value
-        except Exception:
-            docs = None
-    if not docs:
-        docs = os.path.join(os.path.expanduser("~"), "Documents")
-    return os.path.join(docs, "maya")
+    if _app_dir_override:
+        return _app_dir_override
+    cands = maya_app_dir_candidates()
+    best, best_score = None, 0
+    for d in cands:
+        sc = _looks_like_maya_app_dir(d)
+        if sc > best_score:
+            best, best_score = d, sc
+    if best:
+        return best
+    if cands:
+        return cands[-1]
+    return os.path.join(os.path.expanduser("~"), "Documents", "maya")
 
 
 def usersetup_path():

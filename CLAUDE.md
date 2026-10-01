@@ -1174,6 +1174,19 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   （Manager 側の名前が混ざらない／単体で構文が通る／except が素の pass／
    Maya 相当のスタブで 1 台目・2 台目・全埋まりが正しく動く／
    install_usersetup が冪等）
+- **userSetup.py の «置き場» も推測してはいけない**。Windows の «ドキュメント»
+  既知フォルダ（SHGetFolderPathW/CSIDL_PERSONAL）は OneDrive へ
+  リダイレクトされ得るが、**Maya がそこを使うとは限らない**。
+  2026-10 実機: 既知フォルダ = OneDrive 配下の「ドキュメント」、
+  Maya の `internalVar(userAppDir=True)` = `%USERPROFILE%/Documents/maya`。
+  推測で書くと «インストール成功と出るのに Maya が読まない» になる。
+  → `maya_app_dir()` の優先順は
+  ①Maya 本人に聞いた値（`APP_DIR_CODE` / `set_maya_app_dir(confirmed=True)`）
+  ②`MAYA_APP_DIR` ③ユーザー指定 ④候補の «実在性»（20xx のバージョン
+  フォルダ・scripts の有無でスコア）⑤既知フォルダ。
+  接続スキャンで Maya を識別できた時に一度だけ聞いて確定させる。
+  インストール時は **書き込み先を必ず見せて、変更手段を添える**。
+- 連携ログ `mfm_maya.log` も `~/.maya_file_manager/logs/` へ（r117 と同じ理由）。
 - 教訓: **他プロセスで実行される文字列は「コード」として扱う。**
   リポジトリ全体に掛ける一括変換は、こういう «外に出る文字列» を壊す。
   壊れても Manager 側は何のエラーも出さない（壊れるのは Maya の中）ので、
