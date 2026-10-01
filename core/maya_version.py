@@ -8,7 +8,6 @@ Maya version detection.
 
 import os
 import re
-import sys
 import struct
 import subprocess
 import platform

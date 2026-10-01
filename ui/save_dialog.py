@@ -14,7 +14,6 @@ DCC からの保存／書き出しダイアログ（r70）
 """
 
 import os
-from typing import Optional
 
 from core.compat import (
     Qt, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,

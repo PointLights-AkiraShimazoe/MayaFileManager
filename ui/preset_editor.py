@@ -14,7 +14,6 @@ Outside Maya only editing is available.
 from core.diag import swallow as _swallow  # r112
 
 import os
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.compat import (

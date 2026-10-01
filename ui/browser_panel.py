@@ -16,14 +16,11 @@ from typing import List, Optional, Callable
 from core.compat import (
     Qt, Signal, QObject,
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QComboBox, QLineEdit, QToolButton,
-    QSplitter, QColumnView, QListView,
-    QSizePolicy, QFrame, QAbstractItemView, QSlider,
-    QFileSystemModel, QSortFilterProxyModel,
-    QMenu, QAction, QMessageBox, QFileDialog, QInputDialog, QDialog,
-    QStyledItemDelegate, QStyle, QModelIndex, QSize, QRect, QPixmap, QPainter, QColor, QDir, QFileInfo, QUrl, QMimeData, QPoint,
-    QFontMetrics, QTimer, QKeySequence, QDrag, QCursor,
-)
+    QComboBox, QLineEdit, QToolButton,
+    QSplitter, QListView,
+    QSizePolicy, QFrame, QAbstractItemView, QFileSystemModel, QMenu, QAction, QMessageBox, QFileDialog, QInputDialog, QDialog,
+    QModelIndex, QSize, QRect, QPixmap, QDir, QFileInfo, QUrl, QMimeData, QPoint,
+    QTimer, QKeySequence, QDrag, )
 from core.compat import QtCore as _QtCore
 try:  # PySide6: QtGui / PySide2: QtWidgets
     from core.compat import QIcon

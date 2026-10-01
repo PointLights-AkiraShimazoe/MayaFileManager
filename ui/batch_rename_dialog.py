@@ -11,7 +11,6 @@ Batch Rename Dialog
 - Dry-run 確認 → 実行
 """
 
-import os
 from pathlib import Path
 from typing import List, Tuple, Optional
 

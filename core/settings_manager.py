@@ -16,7 +16,6 @@ Design goals
 from core.diag import swallow as _swallow  # r112
 
 import json
-import os
 import copy
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional

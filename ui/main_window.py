@@ -52,12 +52,9 @@ def _tv():
     ImportError（cannot import name 'qss_vars'）になる（r82 で実害）。"""
     from core.theme_engine import qss_vars
     return qss_vars()
-from ui.browser_panel import BrowserPanel
-from ui.bookmark_panel import BookmarkPanel
 from ui.preset_editor import ReferencePresetEditor
 from ui.settings_dialog import SettingsDialog
 from ui.batch_rename_dialog import BatchRenameDialog
-from ui.quick_nav_editor import QuickNavPresetEditor
 from ui.reference_editor import ReferenceEditor
 
 

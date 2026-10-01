@@ -8,7 +8,6 @@
 - 操作: TortoiseProc /command:commit|update|log|diff|revert|add
 """
 
-import os
 import xml.etree.ElementTree as ET
 
 from .base import (Provider, ST_CLEAN, ST_MODIFIED, ST_ADDED, ST_DELETED,

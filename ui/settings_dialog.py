@@ -12,7 +12,6 @@ Settings Dialog
 5. 自動命名       – ディレクトリ別ルール一覧と編集
 """
 
-from pathlib import Path
 from typing import Dict, List
 
 from core.compat import (

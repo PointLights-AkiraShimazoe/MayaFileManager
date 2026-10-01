@@ -6,23 +6,12 @@ StatusBadgeDelegate: Git/SVN/Perforce/クラウドの状態バッジ"""
 from core.diag import swallow as _swallow  # r112
 
 import os
-import struct
-import threading
-from pathlib import Path
-from typing import List, Optional, Callable
 
 from core.compat import (
     Qt, Signal, QObject,
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QComboBox, QLineEdit, QToolButton,
-    QSplitter, QColumnView, QListView,
-    QSizePolicy, QFrame, QAbstractItemView, QSlider,
-    QFileSystemModel, QSortFilterProxyModel,
-    QMenu, QAction, QMessageBox, QFileDialog, QInputDialog, QDialog,
-    QStyledItemDelegate, QStyle, QModelIndex, QSize, QRect, QPixmap, QPainter, QColor, QDir, QFileInfo, QUrl, QMimeData, QPoint,
-    QFontMetrics, QTimer, QKeySequence, QDrag, QCursor,
-)
-from core.compat import QtCore as _QtCore
+    QApplication, QListView,
+    QMenu, QMessageBox, QInputDialog, QStyledItemDelegate, QStyle, QModelIndex, QSize, QRect, QPixmap, QPainter, QColor, QFileInfo, QPoint,
+    QFontMetrics, QDrag, )
 try:  # PySide6: QtGui / PySide2: QtWidgets
     from core.compat import QIcon
 except ImportError:  # pragma: no cover
@@ -34,12 +23,8 @@ except ImportError:
         from PySide6.QtWidgets import QFileIconProvider
     except ImportError:
         from PySide2.QtWidgets import QFileIconProvider
-from core.path_guard import PathProber, DriveScanner, invalidate_cache
 from core.file_operations import (
-    open_with_default_app, reveal_in_explorer,
-    copy_items, move_items, get_file_type_category, format_size,
-    resolve_windows_shortcut,
-    MAYA_EXTENSIONS
+    open_with_default_app
 )
 from core.thumbnail_generator import ThumbnailManager
 
