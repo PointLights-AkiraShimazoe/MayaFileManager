@@ -1182,8 +1182,18 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   推測で書くと «インストール成功と出るのに Maya が読まない» になる。
   → `maya_app_dir()` の優先順は
   ①Maya 本人に聞いた値（`APP_DIR_CODE` / `set_maya_app_dir(confirmed=True)`）
-  ②`MAYA_APP_DIR` ③ユーザー指定 ④候補の «実在性»（20xx のバージョン
-  フォルダ・scripts の有無でスコア）⑤既知フォルダ。
+  ②ユーザーがダイアログで指定した値 ③`MAYA_APP_DIR` ④候補の «実在性»
+  （20xx のバージョンフォルダ・scripts の有無でスコア）
+  ⑤`%USERPROFILE%/Documents/maya`。
+  * **`MAYA_APP_DIR` を ① より上に置かない**。これは Maya.env・起動バッチ・
+    ランチャーで «Maya のプロセスにだけ» 設定されていることがあり、
+    Manager から見える値が Maya の実際の値とは限らない（逆もある）。
+    `app_dir_confirmed()` は «聞けた» 時だけ True にし、env では True に
+    しない（しないと «聞けば分かる» 場面で聞かなくなる）。
+  * **どちらの候補も実在しない時は `%USERPROFILE%` 側**を採る。既知フォルダ
+    （OneDrive 側）へ作ると «Maya が読まないファイル» ができるだけ。
+  * `app_dir_source()` が confirmed/manual/env/found/guess を返し、UI は
+    「この場所は〜」としてそのまま見せる。**どう決めた場所かを隠さない。**
   接続スキャンで Maya を識別できた時に一度だけ聞いて確定させる。
   インストール時は **書き込み先を必ず見せて、変更手段を添える**。
 - 連携ログ `mfm_maya.log` も `~/.maya_file_manager/logs/` へ（r117 と同じ理由）。

@@ -195,8 +195,29 @@ def set_maya_app_dir(path, confirmed=False):
 
 
 def app_dir_confirmed() -> bool:
-    """Maya 本人に聞いた値を持っているか（重ねて聞かないための判定）。"""
-    return bool(_app_dir_confirmed or os.environ.get("MAYA_APP_DIR"))
+    """«Maya 本人に聞いた値» を持っているか。
+
+    注意: Manager の環境変数 MAYA_APP_DIR が設定されていても True にしない。
+    MAYA_APP_DIR は Maya.env や起動用バッチで «Maya のプロセスにだけ»
+    設定されていることがあり（その場合 Manager からは見えない）、逆に
+    Manager 側にだけ設定されていて Maya は別の場所を使うこともある。
+    聞けるなら必ず聞く。"""
+    return bool(_app_dir_confirmed)
+
+
+def app_dir_source() -> str:
+    """現在の maya_app_dir() が «どう決まった値か» を表すキー。
+    UI がそのまま文言に使う: confirmed / env / manual / found / guess。"""
+    if _app_dir_confirmed:
+        return "confirmed"
+    if _app_dir_override:
+        return "manual"
+    if _os.environ.get("MAYA_APP_DIR"):
+        return "env"
+    for d in maya_app_dir_candidates():
+        if _looks_like_maya_app_dir(d):
+            return "found"
+    return "guess"
 
 
 def _looks_like_maya_app_dir(d):
@@ -233,7 +254,11 @@ def _known_documents():
 
 
 def maya_app_dir_candidates():
-    """ありうる場所を «優先度順ではなく列挙順» で返す（重複なし）。"""
+    """ありうる場所を返す（重複なし）。
+
+    先頭が %USERPROFILE%\Documents\maya であることに意味がある:
+    実在性で決着が付かない時はこれを採るため（Maya は OneDrive の
+    フォルダ移動を無視して実体の Documents を使う）。"""
     out = []
     home = os.path.expanduser("~")
     for base in (os.path.join(home, "Documents"), _known_documents()):
@@ -250,10 +275,15 @@ def maya_app_dir():
 
     優先順:
       1. Maya 本人に聞いた値（set_maya_app_dir(confirmed=True)）
-      2. 環境変数 MAYA_APP_DIR
-      3. ユーザーが指定した値（set_maya_app_dir()）
-      4. 候補の «実物らしさ» で選ぶ（バージョンフォルダ / scripts の有無）
-      5. 既知フォルダ → ~/Documents
+      2. ユーザーがダイアログで指定した値
+      3. 環境変数 MAYA_APP_DIR（Manager から見えている場合のみ）
+      4. 候補の «実物らしさ»（20xx のバージョンフォルダ / scripts の有無）
+      5. %USERPROFILE%/Documents/maya
+
+    MAYA_APP_DIR を 1 より上に置かないのは、これが «Maya のプロセスにだけ»
+    設定されていることがあるため（Maya.env・起動バッチ・ランチャー）。
+    Manager 側に見えている値が Maya の実際の値とは限らず、逆もある。
+    聞けるなら必ず Maya 本人に聞く。
 
     注意: «ドキュメント» 既知フォルダが OneDrive へリダイレクトされていても、
     Maya がそこを使うとは限らない（2026-10 実機: 既知フォルダは
@@ -264,11 +294,11 @@ def maya_app_dir():
     可能なら Maya 本人に聞いた値で上書きする。"""
     if _app_dir_confirmed:
         return _app_dir_confirmed
+    if _app_dir_override:
+        return _app_dir_override
     env = os.environ.get("MAYA_APP_DIR")
     if env:
         return env
-    if _app_dir_override:
-        return _app_dir_override
     cands = maya_app_dir_candidates()
     best, best_score = None, 0
     for d in cands:
@@ -277,9 +307,12 @@ def maya_app_dir():
             best, best_score = d, sc
     if best:
         return best
-    if cands:
-        return cands[-1]
-    return os.path.join(os.path.expanduser("~"), "Documents", "maya")
+    # どちらも実在しない（＝まだ一度も Maya を起動していない）場合は
+    # %USERPROFILE%\Documents\maya を採る。Maya は OneDrive の
+    # フォルダ移動を無視して実体の Documents を使うため（2026-10 実機で確認）、
+    # 既知フォルダ側へ作ると «Maya が読まないファイル» ができてしまう。
+    return (cands[0] if cands
+            else os.path.join(os.path.expanduser("~"), "Documents", "maya"))
 
 
 def usersetup_path():

@@ -479,6 +479,7 @@ class MainWindowDccMixin:
         from core.maya_bridge import (install_usersetup, usersetup_path,
                                       is_usersetup_installed, maya_app_dir,
                                       set_maya_app_dir, app_dir_confirmed,
+                                      app_dir_source,
                                       APP_DIR_CODE, parse_app_dir, MayaBridge)
         # 接続中の Maya があれば «本人に» 聞く（最も確実）
         if not app_dir_confirmed() and getattr(self._bridge, "port", None):
@@ -492,9 +493,25 @@ class MainWindowDccMixin:
 
         while True:
             path = usersetup_path()
-            src = (tr("接続中の Maya に確認済み", "confirmed by a running Maya")
-                   if app_dir_confirmed()
-                   else tr("推測（Maya が未接続のため）", "a guess (no Maya connected)"))
+            src = {
+                "confirmed": tr("接続中の Maya に確認済み",
+                                "confirmed by a running Maya"),
+                "manual": tr("手動で指定した場所", "chosen by you"),
+                "env": tr("環境変数 MAYA_APP_DIR の値（Maya 側と一致するかは未確認）",
+                          "from MAYA_APP_DIR (not verified against Maya)"),
+                "found": tr("実在するフォルダから推定（Maya が未接続のため）",
+                            "inferred from an existing folder (no Maya connected)"),
+                "guess": tr("推測（Maya が未接続で、該当フォルダも未作成）",
+                            "a guess (no Maya connected, folder not created yet)"),
+            }.get(app_dir_source(), "")
+            # MAYA_APP_DIR は Maya.env や起動バッチで «Maya 側にだけ» 設定
+            # されていることがあり、Manager から見えている値が正しいとは
+            # 限らない。確認できていない時は «聞けば確実» と伝える。
+            hint = ("" if app_dir_source() == "confirmed" else tr(
+                "　※ Maya を 1 つ起動した状態でもう一度実行すると、\n"
+                "　　 Maya 本人が答えた場所を使います（最も確実）。\n\n",
+                "　* Start one Maya and run this again to use the location\n"
+                "　　 Maya itself reports (most reliable).\n\n"))
             msg = tr(
                 "全てのMayaが起動時に連携ポートを自動で開くように、\n"
                 "以下のファイルへスニペットを書き込みます。\n\n"
@@ -504,6 +521,7 @@ class MainWindowDccMixin:
                 "「接続:」リストに表示されるようになります。\n"
                 "（次回のMaya起動から有効。作業中のMayaは\n"
                 "　「起動中の Maya を今すぐ接続...」で繋げます）\n\n"
+                "%s"
                 "この場所で良いですか？",
                 "Writes a snippet to the file below so every Maya opens a\n"
                 "bridge port automatically at startup.\n\n"
@@ -513,7 +531,8 @@ class MainWindowDccMixin:
                 "the Connect list.\n"
                 "(Takes effect from the next Maya launch; for a Maya that is\n"
                 "　already running, use \u201cConnect a running Maya now...\u201d)\n\n"
-                "Use this location?") % (path, src)
+                "%s"
+                "Use this location?") % (path, src, hint)
             if is_usersetup_installed():
                 msg = tr("（既にインストール済みです。最新の内容に更新します）\n\n",
                          "(Already installed; will update to the latest snippet)\n\n"

@@ -143,12 +143,28 @@ assert got and got.replace("\\", "/").rstrip("/") == "C:/Users/owner/Documents/m
 assert _mb.parse_app_dir("") is None and _mb.parse_app_dir("ごみ") is None
 print("parse_app_dir extracts Maya's own answer: OK")
 
-# 2) 確定値は他の全てに優先する
+# 2) 確定値は他の全てに優先する（MAYA_APP_DIR より «も» 上）
+#    MAYA_APP_DIR は Maya.env や起動バッチで «Maya 側にだけ» 設定され得る。
+#    Manager から見えている値が Maya の実際の値とは限らないので、
+#    聞けた時は必ずそちらを採る。
+os.environ["MAYA_APP_DIR"] = "C:/env_only/maya"
 _mb.set_maya_app_dir("C:/real/maya", confirmed=True)
-assert _mb.app_dir_confirmed()
+assert _mb.app_dir_confirmed() and _mb.app_dir_source() == "confirmed"
 assert _mb.maya_app_dir().replace("\\", "/") == "C:/real/maya"
 assert _mb.usersetup_path().replace("\\", "/") == "C:/real/maya/scripts/userSetup.py"
-print("confirmed app dir wins and drives usersetup_path: OK")
+print("confirmed app dir beats MAYA_APP_DIR and drives usersetup_path: OK")
+
+# 2b) 聞けていない時は 手動指定 > MAYA_APP_DIR > 実在性 の順
+_mb._app_dir_confirmed = None
+assert _mb.app_dir_confirmed() is False, "env だけで «確認済み» にしてはいけない"
+assert _mb.app_dir_source() == "env"
+assert _mb.maya_app_dir().replace("\\", "/") == "C:/env_only/maya"
+_mb.set_maya_app_dir("C:/chosen/maya")
+assert _mb.app_dir_source() == "manual"
+assert _mb.maya_app_dir().replace("\\", "/") == "C:/chosen/maya"
+_mb._app_dir_override = None
+os.environ.pop("MAYA_APP_DIR", None)
+print("manual > MAYA_APP_DIR, and env alone is never 'confirmed': OK")
 
 # 3) 聞けない時は «実在するそれらしい方» を選ぶ（空の既知フォルダに負けない）
 _mb._app_dir_confirmed = None
@@ -164,10 +180,13 @@ _mb.maya_app_dir_candidates = lambda: [real, fake]
 try:
     assert _mb._looks_like_maya_app_dir(real) > _mb._looks_like_maya_app_dir(fake)
     assert _mb.maya_app_dir() == real, _mb.maya_app_dir()
-    # どちらも空なら «最後の候補»（既知フォルダ）へ落ちる
+    assert _mb.app_dir_source() == "found"
+    # どちらも実在しないなら «先頭»（%USERPROFILE%/Documents/maya）を採る。
+    # 既知フォルダ（OneDrive 側）へ作ると Maya が読まないファイルになる。
     _mb.maya_app_dir_candidates = lambda: [os.path.join(base, "nope1"),
                                            os.path.join(base, "nope2")]
-    assert _mb.maya_app_dir() == os.path.join(base, "nope2")
+    assert _mb.maya_app_dir() == os.path.join(base, "nope1")
+    assert _mb.app_dir_source() == "guess"
 finally:
     _mb.maya_app_dir_candidates = _orig_cands
     _mb._app_dir_confirmed = None
