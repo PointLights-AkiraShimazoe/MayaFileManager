@@ -181,7 +181,7 @@ class MayaBridgeDialog(QDialog):
         rows = [(None, tr("全バージョン共通", "All versions"))]
         versions = mb.installed_versions()
         for v in versions:
-            rows.append((v, tr("Maya %s のみ", "Maya %s only") % v))
+            rows.append((v, "Maya %s" % v))
         any_installed = False
         for ver, label in rows:
             try:
