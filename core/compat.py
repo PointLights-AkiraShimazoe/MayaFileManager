@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+# ============================================================================
+# 【重要】本モジュールは **再エクスポート専用のハブ**。
+# ここの import は «このファイル内で使っていない» のが正常で、
+# 他モジュールが `from core.compat import Qxxx` で受け取るためにある。
+# pyflakes/flake8 の «imported but unused» を鵜呑みにして消さないこと
+# （2026-10 に自動整理で 77 個消してアプリ全体が起動不能になった）。
+# 整理ツールを掛ける時は本ファイルを除外する。
+# ============================================================================
 """
 PySide2 / PySide6 compatibility layer.
 Maya 2023-2024 uses PySide2, Maya 2025-2027+ uses PySide6.
@@ -29,7 +38,7 @@ try:
         QSpinBox, QGroupBox, QListWidget, QListWidgetItem,
         QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
         QStyledItemDelegate, QStyle, QStyleOption,
-        QSizeGrip, QScrollBar
+        QSizeGrip, QScrollBar, QSlider
     )
     from PySide6.QtGui import (
         QIcon, QPixmap, QImage, QFont, QColor, QPalette,
@@ -63,7 +72,7 @@ except ImportError:
         QSpinBox, QGroupBox, QListWidget, QListWidgetItem,
         QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
         QStyledItemDelegate, QStyle, QStyleOption,
-        QSizeGrip, QScrollBar, QAction,
+        QSizeGrip, QScrollBar, QSlider, QAction,
         QFileSystemModel
     )
     from PySide2.QtGui import (

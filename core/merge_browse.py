@@ -60,9 +60,10 @@ def merge_children(source_dirs: List[str]) -> Tuple[List[MergedFolder], List[str
 
 
 def flatten_files(source_dirs: List[str], max_files: int = 5000,
-                  time_budget_sec: float = 2.0) -> List[str]:
+                  time_budget_sec: float = 2.0, recursive: bool = True) -> List[str]:
     """選択フォルダ群以下の «全階層の全ファイル» を再帰収集（平坦・ベース名昇順）。
     「全ファイル平坦表示」モード用。フォルダは返さずファイルのみ。
+    recursive=False なら各フォルダの «直下のファイルだけ»（子フォルダへ降りない）。
 
     安全弁: プロジェクト直下など巨大ツリーを選択した場合に UI が
     フリーズしないよう、件数(max_files)と走査時間(time_budget_sec)で
@@ -86,7 +87,8 @@ def flatten_files(source_dirs: List[str], max_files: int = 5000,
             for e in os.scandir(d):
                 try:
                     if e.is_dir():
-                        stack.append(e.path)
+                        if recursive:
+                            stack.append(e.path)
                     else:
                         out.append(e.path)
                 except OSError:

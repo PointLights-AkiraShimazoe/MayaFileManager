@@ -37,6 +37,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "double_click_action": "open",
     "show_hidden_files": False,
     "thumbnail_size": 128,                 # px
+    # カラムの表示サイズ（ヘッダの表示切替ボタンにマウスオーバーで出るスライダー。r85）
+    "column_icon_size_list": 16,           # リスト表示のアイコン px
+    "column_icon_size_thumb": 96,          # サムネイル表示のセル px
     "thumbnail_cache_size": 256,           # number of cached thumbnails
     "sort_by": "name",                     # "name" | "type" | "timestamp"
     "sort_order": "asc",                   # "asc" | "desc"
@@ -118,8 +121,38 @@ class SettingsManager:
 
     @staticmethod
     def _resolve_root() -> Path:
+        # テスト等で本番設定を汚さないための退避先（r63）。tests/offscreen/_common.py
+        # が一時フォルダを指定する。未指定なら従来どおり ~/.maya_file_manager。
+        import os
+        override = os.environ.get("MFM_SETTINGS_ROOT")
+        if override:
+            return Path(override)
         home = Path.home()
         return home / ".maya_file_manager"
+
+    def _backup_daily(self):
+        """settings.json を «1日1回» backups/ へ退避（14世代）。
+        誤上書き（テストが本番設定へ書いた事故、r63）からの復旧点にする。"""
+        import datetime, shutil
+        try:
+            src = self._settings_path()
+            if not src.exists():
+                return
+            bdir = self._root / "backups"
+            bdir.mkdir(exist_ok=True)
+            today = datetime.date.today().strftime("%Y%m%d")
+            dst = bdir / f"settings_{today}.json"
+            if dst.exists():
+                return
+            shutil.copy2(str(src), str(dst))
+            olds = sorted(bdir.glob("settings_*.json"))
+            for p in olds[:-14]:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+        except Exception:
+            pass
 
     def _settings_path(self) -> Path:
         return self._root / "settings.json"
@@ -145,6 +178,7 @@ class SettingsManager:
 
     def save(self):
         """Persist all state to disk."""
+        self._backup_daily()
         self._save_json(self._settings_path(), self._settings)
         self._save_json(self._global_state_path(), self._global_state)
         if self._maya_version:
@@ -154,6 +188,7 @@ class SettingsManager:
             )
 
     def save_settings_only(self):
+        self._backup_daily()
         self._save_json(self._settings_path(), self._settings)
 
     # ------------------------------------------------------------------

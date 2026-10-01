@@ -13,7 +13,7 @@ import struct
 import subprocess
 import platform
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict
 
 # ---------------------------------------------------------------------------
 # Platform-specific Maya install roots
@@ -280,8 +280,10 @@ def launch_maya(installation: MayaInstallation,
     cmd: List[str] = [str(installation.executable)]
     if command_port:
         # 起動後に Python commandPort を開く（既に開いていればエラーを握りつぶす）
-        mel = ('catchQuiet(`commandPort -name ":%d" -sourceType "python" '
-               '-echoOutput`);' % int(command_port))
+        # 注意: -echoOutput は付けない。付けるとスクリプトエディタの全出力が
+        # ソケットへ垂れ流され、応答にMELダンプ等のゴミが混入する（実機で発生）。
+        mel = ('catchQuiet(`commandPort -name ":%d" -sourceType "python"`);'
+               % int(command_port))
         cmd += ["-command", mel]
     if file_path:
         cmd += [file_path]

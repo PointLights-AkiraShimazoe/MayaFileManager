@@ -26,17 +26,23 @@ class FileOperationError(Exception):
 
 
 def copy_items(src_paths: List[str], dst_dir: str,
-               progress_cb: Optional[Callable[[int, int], None]] = None) -> List[str]:
+               progress_cb: Optional[Callable[[int, int], None]] = None,
+               results: Optional[List[str]] = None) -> List[str]:
     """
     Copy files/directories to dst_dir.
     Returns list of destination paths.
+    progress_cb(i, total) は各項目の完了後に呼ばれる（例外を投げれば中断＝
+    キャンセル。その時点までの完了分は results に残る。r62）。
+    results: 呼び出し側が渡すと部分完了分をそこへ積む（キャンセル時の Undo 用）。
     """
     dst = Path(dst_dir)
     if not dst.exists():
         raise FileOperationError(f"Destination does not exist: {dst_dir}")
 
-    results = []
+    results = results if results is not None else []
     total = len(src_paths)
+    if progress_cb:
+        progress_cb(0, total)
     for i, src_str in enumerate(src_paths, 1):
         src = Path(src_str)
         dest = _unique_dest(dst / src.name)
@@ -54,21 +60,87 @@ def copy_items(src_paths: List[str], dst_dir: str,
     return results
 
 
+# 名前が衝突した時の解決方法（conflict_cb の戻り値。r87）
+CONFLICT_RENAME = "rename"        # 連番を付けて別名で置く（従来の既定）
+CONFLICT_OVERWRITE = "overwrite"  # 既存を置き換える（フォルダ同士は中身を統合）
+CONFLICT_SKIP = "skip"            # その項目は何もしない
+
+
+def _merge_move(src: Path, dst: Path, pairs: list):
+    """フォルダ同士の «上書き» ＝ Explorer と同じ «統合»（r87）。
+    src の中身を dst へ移し、ファイル名が衝突したら置き換える。
+    移動できたものは pairs に (元, 先) で積む（Undo 用）。"""
+    dst.mkdir(parents=True, exist_ok=True)
+    for entry in list(src.iterdir()):
+        target = dst / entry.name
+        if entry.is_dir() and not entry.is_symlink():
+            _merge_move(entry, target, pairs)
+        else:
+            if target.exists() or target.is_symlink():
+                _clear_readonly(str(target))
+                try:
+                    target.unlink()
+                except IsADirectoryError:
+                    _rmtree_force(str(target))
+            shutil.move(str(entry), str(target))
+            pairs.append((str(entry), str(target)))
+    try:
+        src.rmdir()          # 中身を出し切っていれば消える
+    except OSError:
+        pass
+
+
 def move_items(src_paths: List[str], dst_dir: str,
-               progress_cb: Optional[Callable[[int, int], None]] = None) -> List[str]:
-    """Move files/directories to dst_dir. Returns destination paths."""
+               progress_cb: Optional[Callable[[int, int], None]] = None,
+               results: Optional[List[str]] = None,
+               conflict_cb: Optional[Callable[[str, str], str]] = None,
+               pairs: Optional[list] = None) -> List[str]:
+    """Move files/directories to dst_dir. Returns destination paths.
+    progress_cb / results は copy_items と同じ。
+
+    conflict_cb(src, dest) は «同名が既にある» 時に呼ばれ、
+    CONFLICT_RENAME / CONFLICT_OVERWRITE / CONFLICT_SKIP のいずれかを返す
+    （None を渡すと従来どおり常に連番リネーム。r87）。
+    pairs を渡すと (元パス, 移動後パス) を積む（Undo の MoveOp 用）。"""
     dst = Path(dst_dir)
     if not dst.exists():
         raise FileOperationError(f"Destination does not exist: {dst_dir}")
 
-    results = []
+    results = results if results is not None else []
+    pairs = pairs if pairs is not None else []
     total = len(src_paths)
+    if progress_cb:
+        progress_cb(0, total)
     for i, src_str in enumerate(src_paths, 1):
         src = Path(src_str)
-        dest = _unique_dest(dst / src.name)
+        naive = dst / src.name
         try:
+            if naive.exists() or naive.is_symlink():
+                how = conflict_cb(str(src), str(naive)) if conflict_cb else CONFLICT_RENAME
+                if how == CONFLICT_SKIP:
+                    if progress_cb:
+                        progress_cb(i, total)
+                    continue
+                if how == CONFLICT_OVERWRITE:
+                    if src.is_dir() and naive.is_dir():
+                        _merge_move(src, naive, pairs)   # フォルダ同士は統合
+                        results.append(str(naive))
+                        if progress_cb:
+                            progress_cb(i, total)
+                        continue
+                    _clear_readonly(str(naive))
+                    if naive.is_dir() and not naive.is_symlink():
+                        _rmtree_force(str(naive))
+                    else:
+                        naive.unlink()
+                    dest = naive
+                else:
+                    dest = _unique_dest(naive)
+            else:
+                dest = naive
             shutil.move(str(src), str(dest))
             results.append(str(dest))
+            pairs.append((str(src), str(dest)))
         except Exception as e:
             raise FileOperationError(f"Cannot move {src}: {e}") from e
         if progress_cb:
@@ -77,11 +149,110 @@ def move_items(src_paths: List[str], dst_dir: str,
     return results
 
 
+def default_copy_name(path: str, taken=None) -> str:
+    """複製の既定名 «元名_Copy»（拡張子は保持）。同名があれば _Copy2, _Copy3…（r67）。"""
+    p = Path(path)
+    is_dir = p.is_dir()
+    stem, suffix = (p.name, "") if is_dir else (p.stem, p.suffix)
+    taken = set(taken or [])
+    n = 1
+    while True:
+        cand = f"{stem}_Copy{'' if n == 1 else n}{suffix}"
+        full = p.parent / cand
+        if cand not in taken and not full.exists():
+            return cand
+        n += 1
+
+
+def apply_replace_name(name: str, search: str, replace: str) -> str:
+    """Search/Replace モードの新名（拡張子も含めた単純置換。search 空なら不変）。"""
+    return name.replace(search, replace) if search else name
+
+
+def duplicate_items(specs, progress_cb=None, results=None,
+                    rename_inside=None) -> List[str]:
+    """複製（r67）。specs: [(src, dst_path), ...]（dst は同じ親フォルダ内の新名）。
+    rename_inside: (search, replace) を渡すと、複製した «フォルダの中身» にも
+    再帰的に同じ置換を適用して改名する。results に完了分を積む（キャンセル時の
+    Undo 用）。戻り値は複製先パスのリスト。"""
+    results = results if results is not None else []
+    total = len(specs)
+    if progress_cb:
+        progress_cb(0, total)
+    for i, (src, dst) in enumerate(specs, 1):
+        s, d = Path(src), Path(dst)
+        if d.exists():
+            raise FileOperationError(f"既に存在します: {d}")
+        try:
+            if s.is_dir():
+                shutil.copytree(str(s), str(d))
+                if rename_inside and rename_inside[0]:
+                    _rename_tree(str(d), rename_inside[0], rename_inside[1])
+            else:
+                shutil.copy2(str(s), str(d))
+            results.append(str(d))
+        except FileOperationError:
+            raise
+        except Exception as e:
+            raise FileOperationError(f"複製に失敗: {s} → {e}") from e
+        if progress_cb:
+            progress_cb(i, total)
+    return results
+
+
+def _rename_tree(root: str, search: str, replace: str):
+    """root 配下の全ファイル/フォルダ名に置換を適用（深い方から改名して親の
+    改名で子のパスが無効にならないようにする）。"""
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        for n in filenames + dirnames:
+            new = apply_replace_name(n, search, replace)
+            if new != n:
+                src = os.path.join(dirpath, n)
+                dst = os.path.join(dirpath, new)
+                if not os.path.exists(dst):
+                    os.rename(src, dst)
+
+
+def _clear_readonly(path: str):
+    """読み取り専用属性を外す（Perforce/SVN が同期ファイルに付ける。
+    Windows では read-only のファイルは unlink/rmtree が PermissionError になる）。"""
+    import stat
+    try:
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+    except OSError:
+        pass
+
+
+def _rmtree_force(path: str):
+    """read-only を外しながら削除する rmtree。"""
+    import stat
+
+    def _retry(func, p, _exc):
+        os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+        func(p)
+    import sys
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_retry)          # onerror は 3.12 で非推奨
+    else:
+        shutil.rmtree(path, onerror=_retry)
+
+
+def _delete_reason(e: Exception) -> str:
+    """失敗理由を人が読める短文に（ダイアログ表示用）。"""
+    if isinstance(e, PermissionError):
+        return "アクセス拒否（Maya 等で開いている／権限なし）"
+    if isinstance(e, OSError) and getattr(e, "winerror", None) == 32:
+        return "他のプロセスが使用中"
+    return str(e) or e.__class__.__name__
+
+
 def delete_items(paths: List[str], use_trash: bool = True) -> List[str]:
     """
     Delete files/directories.
     When use_trash=True, attempt to send to OS trash (requires 'send2trash').
-    Returns list of paths that were NOT deleted (errors).
+    Returns list of "path — reason" strings for items that were NOT deleted.
+    r61: 読み取り専用（Perforce/SVN 同期ファイル）は属性を外してから削除する。
+    失敗理由を返す（従来は path だけで「なぜ」が分からなかった）。
     """
     failed = []
     for path_str in paths:
@@ -92,17 +263,19 @@ def delete_items(paths: List[str], use_trash: bool = True) -> List[str]:
             if use_trash:
                 try:
                     import send2trash
+                    _clear_readonly(str(p))
                     send2trash.send2trash(str(p))
                     continue
                 except ImportError:
                     pass  # Fall through to permanent delete
             if p.is_dir():
-                shutil.rmtree(str(p))
+                _rmtree_force(str(p))
             else:
+                _clear_readonly(str(p))
                 p.unlink()
         except Exception as e:
             print(f"[FileOps] Cannot delete {p}: {e}")
-            failed.append(path_str)
+            failed.append("%s — %s" % (path_str, _delete_reason(e)))
     return failed
 
 
@@ -419,7 +592,27 @@ THUMBNAIL_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tga", ".tif", ".tiff",
 
 MAYA_EXTENSIONS = {".ma", ".mb"}
 FBX_EXTENSIONS = {".fbx"}
-SCENE_EXTENSIONS = MAYA_EXTENSIONS | FBX_EXTENSIONS | {".obj", ".abc", ".usd", ".usda", ".usdc"}
+# DCC 間で共通に扱える交換形式（r65）
+INTERCHANGE_EXTENSIONS = {".fbx", ".obj", ".abc", ".usd", ".usda", ".usdc", ".usdz"}
+SCENE_EXTENSIONS = MAYA_EXTENSIONS | INTERCHANGE_EXTENSIONS
+# Blender（r65）: ネイティブ .blend ＋ 交換形式 ＋ glTF/STL/PLY
+BLENDER_EXTENSIONS = {".blend"}
+BLENDER_IMPORT_EXTENSIONS = BLENDER_EXTENSIONS | INTERCHANGE_EXTENSIONS | {".gltf", ".glb", ".stl", ".ply"}
+# Maya 側でインポート可能な形式（開けるのは .ma/.mb のみ）
+MAYA_IMPORT_EXTENSIONS = MAYA_EXTENSIONS | INTERCHANGE_EXTENSIONS
+
+
+def dcc_for_path(path: str, default: str = "maya") -> str:
+    """ファイル形式から送り先 DCC を決める（r65）。
+    .blend → blender / .ma .mb → maya / 共通形式 → default（選択中の DCC）。"""
+    ext = os.path.splitext(path or "")[1].lower()
+    if ext in BLENDER_EXTENSIONS:
+        return "blender"
+    if ext in MAYA_EXTENSIONS:
+        return "maya"
+    if ext in BLENDER_IMPORT_EXTENSIONS and ext not in MAYA_IMPORT_EXTENSIONS:
+        return "blender"     # glTF/STL/PLY は Blender のみ
+    return default
 
 
 def get_file_type_category(path: str) -> str:
@@ -491,3 +684,85 @@ def format_size(size_bytes: int) -> str:
             return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024
     return f"{size_bytes:.1f} PB"
+
+
+# ---------------------------------------------------------------------------
+# リネーム（r98）: Windows の「アクセスが拒否されました」対策つき
+# ---------------------------------------------------------------------------
+
+WIN_ACCESS_DENIED = 5
+WIN_SHARING_VIOLATION = 32
+
+
+def _shell_rename(src: str, dst: str) -> bool:
+    """Windows シェルのリネーム（SHFileOperationW / FO_RENAME）。
+    OneDrive のプレースホルダ等、os.rename が拒否される場面で通ることがある。
+    Windows 以外・失敗時は False。"""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class SHFILEOPSTRUCTW(ctypes.Structure):
+            _fields_ = [("hwnd", wintypes.HWND),
+                        ("wFunc", wintypes.UINT),
+                        ("pFrom", wintypes.LPCWSTR),
+                        ("pTo", wintypes.LPCWSTR),
+                        ("fFlags", ctypes.c_uint16),
+                        ("fAnyOperationsAborted", wintypes.BOOL),
+                        ("hNameMappings", wintypes.LPVOID),
+                        ("lpszProgressTitle", wintypes.LPCWSTR)]
+
+        FO_RENAME = 4
+        FOF_SILENT = 0x0004
+        FOF_NOCONFIRMATION = 0x0010
+        FOF_NOERRORUI = 0x0400
+        op = SHFILEOPSTRUCTW()
+        op.wFunc = FO_RENAME
+        op.pFrom = src + "\0\0"
+        op.pTo = dst + "\0\0"
+        op.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI
+        rc = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+        return rc == 0 and not op.fAnyOperationsAborted and os.path.lexists(dst)
+    except Exception:
+        return False
+
+
+def rename_path(src: str, dst: str, release_cb=None, attempts: int = 4,
+                delay: float = 0.15):
+    """src を dst へリネームする。成功なら (True, None)、失敗なら (False, 例外)。
+
+    Windows でフォルダのリネームが [WinError 5] / [WinError 32] で失敗するのは、
+    そのフォルダのハンドルを誰かが握っている時（OneDrive の同期、シェル拡張、
+    QFileSystemModel の監視スレッド等）。一時的なことが多いので、
+    release_cb() で自前の監視を外してから間を置いて再試行し、最後に
+    Windows シェルのリネームへフォールバックする。
+    """
+    import time as _t
+    last = None
+    for i in range(max(1, attempts)):
+        try:
+            os.rename(src, dst)
+            return True, None
+        except OSError as e:
+            last = e
+            werr = getattr(e, "winerror", None)
+            if werr not in (WIN_ACCESS_DENIED, WIN_SHARING_VIOLATION) and \
+                    os.name == "nt":
+                return False, e             # 権限以外（同名・不正文字等）は即返す
+            if callable(release_cb):
+                # release_cb(attempt) … 回を追うごとに «強く» 手放してもらう
+                try:
+                    release_cb(i + 1)
+                except TypeError:
+                    try:
+                        release_cb()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            _t.sleep(delay * (i + 1))
+    if _shell_rename(src, dst):
+        return True, None
+    return False, last
