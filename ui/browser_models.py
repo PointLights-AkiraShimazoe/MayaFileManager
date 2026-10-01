@@ -39,6 +39,7 @@ from core.file_operations import (
 )
 from core.thumbnail_generator import ThumbnailManager
 
+from ui.browser_delegates import _badge_tooltip  # noqa: F401
 from ui.browser_util import (  # noqa: F401  （再エクスポート）
     _cursor_over_maya_window, _cursor_over_dcc_window, _time_mod, _MFM_T0,
     _MFM_STARTUP_LOG, _MFM_FREEZE_LOG, _re_mod, _DRIVE_IN_LABEL_RE,

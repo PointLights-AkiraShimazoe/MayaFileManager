@@ -4,8 +4,7 @@ Maya File Manager — Entry Point
 
 Standalone mode
 ---------------
-    python main.py                  → Launcher dialog → pick Maya → open manager
-    python main.py --no-launcher    → Skip launcher, open manager directly
+    python main.py                  → マネージャーを直接開く
 
 Inside Maya (shelf button or userSetup.py)
 ------------------------------------------
@@ -201,9 +200,13 @@ def _log_env(tag: str):
         pass
 
 
-def run_standalone(skip_launcher: bool = False):
-    """
-    Start as a standalone application.
+def run_standalone(skip_launcher: bool = True):
+    """スタンドアロン起動。**常にマネージャーを直接開く**（r111）。
+
+    旧 Launcher ダイアログ（Maya バージョンを選んでから開く）は廃止した。
+    Maya の起動はマネージャー側のヘッダから行えるため、起動のたびに
+    1 枚挟む意味が無くなったため（2026-10 指示）。
+    引数 skip_launcher は後方互換のために残しているが参照しない。
     """
     app, created = _bootstrap_pyside()
     _setup_error_logging()
@@ -216,42 +219,11 @@ def run_standalone(skip_launcher: bool = False):
     from core import i18n
     i18n.init(sm)
 
-    if skip_launcher:
-        # Open manager immediately without choosing Maya version
+    try:
         _open_main_window(sm, maya_installation=None)
-    else:
-        from ui.launcher_dialog import LauncherDialog
-        launcher = LauncherDialog()
-
-        _pending_window = []  # hold reference to prevent GC
-
-        def on_launch(installation, file_path):
-            try:
-                win = _open_main_window(sm, maya_installation=installation)
-                _pending_window.append(win)
-                if file_path:
-                    win._browser.navigate_to(
-                        os.path.dirname(file_path) if os.path.isfile(file_path) else file_path
-                    )
-            except Exception as e:
-                _report_window_error(e)
-
-        def on_manager_only():
-            try:
-                win = _open_main_window(sm, maya_installation=None)
-                _pending_window.append(win)
-            except Exception as e:
-                _report_window_error(e)
-
-        launcher.launch_requested.connect(on_launch)
-        launcher.open_manager_only.connect(on_manager_only)
-
-        result = launcher.exec_() if hasattr(launcher, "exec_") else launcher.exec()
-
-        # ウィンドウが1つも開けなかった場合は終了
-        # （キャンセル時だけでなく、生成失敗時も透明なプロセスを残さない）
-        if not _pending_window:
-            sys.exit(0)
+    except Exception as e:
+        _report_window_error(e)
+        sys.exit(1)
 
     if created:
         from core.compat import exec_app
@@ -379,7 +351,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Maya File Manager")
     parser.add_argument("--no-launcher", action="store_true",
-                        help="Launcher ダイアログをスキップしてマネージャーを直接開く")
+                        help="（廃止）常にマネージャーを直接開くため、指定しても動作は変わらない")
     parser.add_argument("--maya-ver", default="",
                         help="使用する Maya バージョン (例: 2027)")
     args = parser.parse_args()

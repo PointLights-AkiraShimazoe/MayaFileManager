@@ -367,6 +367,9 @@ def _on_integration_action_finished(ok: bool, label: str, msg: str):
             QMessageBox.warning(win, "⎇ %s" % label, msg)
         # 表示中の全ブラウザの状態を更新
         from core.integrations import get_manager
+        # r111: BrowserPanel は上位モジュール。トップレベルで import すると
+        # 循環するため、ここで遅延解決する（分割時に取りこぼしていた）
+        from ui.browser_panel import BrowserPanel
         mgr = get_manager()
         for w in QApplication.allWidgets():
             if isinstance(w, BrowserPanel):

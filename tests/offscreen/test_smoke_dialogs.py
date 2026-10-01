@@ -72,7 +72,7 @@ def t_settings():
 
 
 def t_others():
-    from ui.launcher_dialog import LauncherDialog; LauncherDialog().show(); app.processEvents()
+    # r111: Launcher ダイアログは廃止（常にマネージャーを直接開く）
     from ui.preset_editor import ReferencePresetEditor; d = ReferencePresetEditor(sm); d.show(); click_all(d)
     from ui.reference_editor import ReferenceEditor; ReferenceEditor().show(); app.processEvents()
     from ui.batch_rename_dialog import BatchRenameDialog
