@@ -5,9 +5,10 @@
     "title": "MayaFileManager アーキテクチャ",
     "quality_profile": "showcase",
     "viewBox": [
-      1300,
+      1240,
       740
-    ]
+    ],
+    "output": "architecture.html"
   },
   "components": [
     {
@@ -56,7 +57,7 @@
       "id": "browser",
       "type": "frontend",
       "label": "ui/browser_panel.py",
-      "sublabel": "QColumnView ブラウザ・右クリック",
+      "sublabel": "QColumnView ブラウザ・右クリック・表示名",
       "pos": [
         340,
         320
@@ -279,7 +280,8 @@
       "items": [
         "BrowserArea = プリセット行＋ブックマーク/履歴＋BrowserPanel",
         "ヘッダ行は setMenuWidget（menuBar() は使わない）",
-        "ダイアログは非ネイティブ（AA_DontUseNativeDialogs）"
+        "表示名は core/display_names.py（隠しファイルが無ければ走らない）",
+        "文言は core/i18n.tr(ja, en)／言語は設定 ui_language"
       ]
     },
     {

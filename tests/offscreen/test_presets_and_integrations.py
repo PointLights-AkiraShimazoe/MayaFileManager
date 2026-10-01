@@ -41,18 +41,31 @@ def s1():
     def fake_send(self_, code, timeout=1.0):
         seq["n"] += 1
         return (True, "MFMID<2027><C:/x/scene.ma><123>MFMID") if seq["n"] == 1 else (True, None)
-    orig_scan, orig_send = _mw.scan_open_ports, _mb.MayaBridge.send_python
-    _mw.scan_open_ports = lambda *a, **k: [20261]
+    # r118: _refresh_maya_connections の実装は r114 の分割で
+    # ui.main_window_dcc へ移った。_mw 側だけ差し替えても効かない。
+    import ui.main_window_dcc as _mwd
+    orig_scan, orig_send = _mwd.scan_open_ports, _mb.MayaBridge.send_python
+    _mwd.scan_open_ports = lambda *a, **k: [20261]
     _mb.MayaBridge.send_python = fake_send
     got = []
     w._bridge_notify.conn_list.connect(lambda items, dcc: got.append((list(items), dcc)))
+    # r118: 固定 sleep だとワーカーの完了に間に合わず環境次第で落ちていた。
+    # 期待件数が届くまで待つ（上限 6 秒）。
+    def _wait(n):
+        for _ in range(300):
+            app.processEvents()
+            if len([1 for _it, d in got if d == "maya"]) >= n:
+                return
+            time.sleep(0.02)
+        app.processEvents()
+
     try:
-        w._refresh_maya_connections(); time.sleep(0.8); app.processEvents()
-        w._refresh_maya_connections(); time.sleep(0.8); app.processEvents()
-        _mw.scan_open_ports = lambda *a, **k: []
-        w._refresh_maya_connections(); time.sleep(0.8); app.processEvents()
+        w._refresh_maya_connections(); _wait(1)
+        w._refresh_maya_connections(); _wait(2)
+        _mwd.scan_open_ports = lambda *a, **k: []
+        w._refresh_maya_connections(); _wait(3)
     finally:
-        _mw.scan_open_ports, _mb.MayaBridge.send_python = orig_scan, orig_send
+        _mwd.scan_open_ports, _mb.MayaBridge.send_python = orig_scan, orig_send
     maya_lists = [it for it, d in got if d == "maya"]
     assert len(maya_lists) >= 3, got
     first, second, third = maya_lists[0], maya_lists[1], maya_lists[2]

@@ -3,7 +3,8 @@
   "diagram_type": "workflow",
   "meta": {
     "title": "MayaFileManager: ファイルを整理する（コピー / 移動 / 削除 / 名前変更）",
-    "quality_profile": "showcase"
+    "quality_profile": "showcase",
+    "output": "workflow_fileops.html"
   },
   "lanes": [
     {

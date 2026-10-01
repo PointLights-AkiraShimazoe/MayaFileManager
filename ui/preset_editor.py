@@ -16,6 +16,8 @@ from core.diag import swallow as _swallow  # r112
 import os
 from typing import Any, Dict, List, Optional
 
+from core.i18n import tr  # r118
+
 from core.compat import (
     Qt, Signal,
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QLineEdit, QTextEdit, QComboBox,
@@ -82,7 +84,7 @@ class ReferenceEntryWidget(QFrame):
 
         self._enabled_cb = QCheckBox()
         self._enabled_cb.setChecked(self._entry.get("enabled", True))
-        self._enabled_cb.setToolTip("有効/無効")
+        self._enabled_cb.setToolTip(tr("有効/無効", "Enable / disable"))
         self._enabled_cb.toggled.connect(self._sync)
         layout.addWidget(self._enabled_cb)
 
@@ -96,7 +98,7 @@ class ReferenceEntryWidget(QFrame):
 
         # File path
         self._path_edit = QLineEdit(self._entry.get("path", ""))
-        self._path_edit.setPlaceholderText("ファイルパス (.ma / .mb / .fbx)")
+        self._path_edit.setPlaceholderText(tr("ファイルパス (.ma / .mb / .fbx)", "File path (.ma / .mb / .fbx)"))
         self._path_edit.textChanged.connect(self._sync)
         layout.addWidget(self._path_edit)
 
@@ -107,7 +109,7 @@ class ReferenceEntryWidget(QFrame):
 
         del_btn = QToolButton()
         del_btn.setText("✕")
-        del_btn.setToolTip("削除")
+        del_btn.setToolTip(tr("削除", "Delete"))
         del_btn.clicked.connect(lambda: self.remove_requested.emit(self))
         layout.addWidget(del_btn)
 
@@ -242,7 +244,7 @@ class ScriptEntryWidget(QFrame):
         top.addWidget(self._phase_combo)
 
         # Language
-        top.addWidget(QLabel("言語:"))
+        top.addWidget(QLabel(tr("言語:", "Language:")))
         self._lang_combo = QComboBox()
         self._lang_combo.addItems(["python", "mel"])
         self._lang_combo.setCurrentText(self._entry.get("lang", "python"))
@@ -251,7 +253,7 @@ class ScriptEntryWidget(QFrame):
 
         # File picker
         self._file_edit = QLineEdit(self._entry.get("file", ""))
-        self._file_edit.setPlaceholderText("ファイルパス（空でインライン）")
+        self._file_edit.setPlaceholderText(tr("ファイルパス（空でインライン）", "File path (empty = inline)"))
         self._file_edit.textChanged.connect(self._sync)
         top.addWidget(self._file_edit)
 
@@ -269,7 +271,7 @@ class ScriptEntryWidget(QFrame):
 
         # Inline code editor
         self._code_edit = QTextEdit()
-        self._code_edit.setPlaceholderText("インラインスクリプトをここに記述…")
+        self._code_edit.setPlaceholderText(tr("インラインスクリプトをここに記述…", "Write the inline script here..."))
         self._code_edit.setPlainText(self._entry.get("content", ""))
         self._code_edit.setFixedHeight(80)
         self._code_edit.textChanged.connect(self._sync)
@@ -278,7 +280,7 @@ class ScriptEntryWidget(QFrame):
     def _browse_file(self):
         lang = self._lang_combo.currentText()
         ext_filter = "Python (*.py)" if lang == "python" else "MEL (*.mel)"
-        path, _ = QFileDialog.getOpenFileName(self, "スクリプトファイルを選択",
+        path, _ = QFileDialog.getOpenFileName(self, tr("スクリプトファイルを選択", "Select a script file"),
                                               "", ext_filter + ";;All (*.*)")
         if path:
             self._file_edit.setText(path)
@@ -312,7 +314,7 @@ class ReferencePresetEditor(QDialog):
         self._current_name: Optional[str] = None
         self._dirty: bool = False
 
-        self.setWindowTitle("リファレンスプリセットエディタ")
+        self.setWindowTitle(tr("リファレンスプリセットエディタ", "Reference Preset Editor"))
         self.setMinimumSize(800, 640)
         self._build_ui()
         self._disable_auto_default()
@@ -353,7 +355,7 @@ class ReferencePresetEditor(QDialog):
         ll.setContentsMargins(0, 0, 0, 0)
         ll.setSpacing(4)
 
-        ll.addWidget(QLabel("プリセット一覧"))
+        ll.addWidget(QLabel(tr("プリセット一覧", "Presets")))
 
         self._preset_list = QListWidget()
         self._preset_list.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -361,16 +363,16 @@ class ReferencePresetEditor(QDialog):
         ll.addWidget(self._preset_list)
 
         btn_row = QHBoxLayout()
-        new_btn = QPushButton("✚ 新規")
+        new_btn = QPushButton(tr("✚ 新規", "✚ New"))
         new_btn.clicked.connect(self._new_preset)
         btn_row.addWidget(new_btn)
 
-        dup_btn = QPushButton("⧉ 複製")
+        dup_btn = QPushButton(tr("⧉ 複製", "⧉ Duplicate"))
         dup_btn.clicked.connect(self._duplicate_preset)
         btn_row.addWidget(dup_btn)
         ll.addLayout(btn_row)
 
-        del_btn = QPushButton("🗑 削除")
+        del_btn = QPushButton(tr("🗑 削除", "🗑 Delete"))
         del_btn.clicked.connect(self._delete_preset)
         ll.addWidget(del_btn)
 
@@ -384,7 +386,7 @@ class ReferencePresetEditor(QDialog):
 
         # Preset name
         name_row = QHBoxLayout()
-        name_row.addWidget(QLabel("プリセット名:"))
+        name_row.addWidget(QLabel(tr("プリセット名:", "Preset name:")))
         self._name_edit = QLineEdit()
         self._name_edit.textChanged.connect(lambda t: self._mark_dirty())
         name_row.addWidget(self._name_edit)
@@ -397,7 +399,7 @@ class ReferencePresetEditor(QDialog):
         ref_layout = QVBoxLayout(self._ref_tab)
 
         ref_toolbar = QHBoxLayout()
-        add_ref_btn = QPushButton("＋ リファレンス追加")
+        add_ref_btn = QPushButton(tr("＋ リファレンス追加", "+ Add reference"))
         add_ref_btn.clicked.connect(self._add_reference)
         ref_toolbar.addWidget(add_ref_btn)
         ref_toolbar.addStretch()
@@ -414,14 +416,14 @@ class ReferencePresetEditor(QDialog):
         ref_scroll.setWidget(self._ref_container)
         ref_scroll.setWidgetResizable(True)
         ref_layout.addWidget(ref_scroll)
-        tabs.addTab(self._ref_tab, "🔗 リファレンス")
+        tabs.addTab(self._ref_tab, tr("🔗 リファレンス", "🔗 References"))
 
         # ── Tab: Constraints ──────────────────────────────────────────
         self._con_tab = QWidget()
         con_layout = QVBoxLayout(self._con_tab)
 
         con_toolbar = QHBoxLayout()
-        add_con_btn = QPushButton("＋ コンストレイン追加")
+        add_con_btn = QPushButton(tr("＋ コンストレイン追加", "+ Add constraint"))
         add_con_btn.clicked.connect(self._add_constraint)
         con_toolbar.addWidget(add_con_btn)
         con_toolbar.addStretch()
@@ -438,14 +440,14 @@ class ReferencePresetEditor(QDialog):
         con_scroll.setWidget(self._con_container)
         con_scroll.setWidgetResizable(True)
         con_layout.addWidget(con_scroll)
-        tabs.addTab(self._con_tab, "⛓ コンストレイン")
+        tabs.addTab(self._con_tab, tr("⛓ コンストレイン", "⛓ Constraints"))
 
         # ── Tab: Scripts ──────────────────────────────────────────────
         self._scr_tab = QWidget()
         scr_layout = QVBoxLayout(self._scr_tab)
 
         scr_toolbar = QHBoxLayout()
-        add_scr_btn = QPushButton("＋ スクリプト追加")
+        add_scr_btn = QPushButton(tr("＋ スクリプト追加", "+ Add script"))
         add_scr_btn.clicked.connect(self._add_script)
         scr_toolbar.addWidget(add_scr_btn)
         scr_toolbar.addStretch()
@@ -462,24 +464,24 @@ class ReferencePresetEditor(QDialog):
         scr_scroll.setWidget(self._scr_container)
         scr_scroll.setWidgetResizable(True)
         scr_layout.addWidget(scr_scroll)
-        tabs.addTab(self._scr_tab, "📜 スクリプト")
+        tabs.addTab(self._scr_tab, tr("📜 スクリプト", "📜 Scripts"))
 
         rl.addWidget(tabs)
 
         # ── Bottom buttons ────────────────────────────────────────────
         btn_row = QHBoxLayout()
-        self._save_btn = QPushButton("💾 保存")
+        self._save_btn = QPushButton(tr("💾 保存", "💾 Save"))
         self._save_btn.clicked.connect(self._save_preset)
         btn_row.addWidget(self._save_btn)
 
         btn_row.addStretch()
 
-        self._apply_btn = QPushButton("▶  Maya に適用")
+        self._apply_btn = QPushButton(tr("▶  Maya に適用", "▶  Apply to Maya"))
         self._apply_btn.setEnabled(is_running_inside_maya())
         self._apply_btn.clicked.connect(self._apply_preset)
         btn_row.addWidget(self._apply_btn)
 
-        close_btn = QPushButton("閉じる")
+        close_btn = QPushButton(tr("閉じる", "Close"))
         close_btn.clicked.connect(self.close)
         btn_row.addWidget(close_btn)
 
@@ -508,8 +510,8 @@ class ReferencePresetEditor(QDialog):
 
     def _load_preset(self, name: str):
         if self._dirty:
-            ret = QMessageBox.question(self, "未保存の変更",
-                                       "変更を保存しますか？",
+            ret = QMessageBox.question(self, tr("未保存の変更", "Unsaved Changes"),
+                                       tr("変更を保存しますか？", "Save the changes?"),
                                        QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
             if ret == QMessageBox.Cancel:
                 return
@@ -658,8 +660,9 @@ class ReferencePresetEditor(QDialog):
     def _delete_preset(self):
         if not self._current_name:
             return
-        ret = QMessageBox.question(self, "削除確認",
-                                   f"「{self._current_name}」を削除しますか？",
+        ret = QMessageBox.question(self, tr("削除確認", "Confirm Delete"),
+                                   tr("「%s」を削除しますか？", "Delete \u201c%s\u201d?")
+                                   % self._current_name,
                                    QMessageBox.Yes | QMessageBox.No)
         if ret == QMessageBox.Yes:
             del self._presets[self._current_name]
@@ -669,7 +672,8 @@ class ReferencePresetEditor(QDialog):
     def _save_preset(self):
         name = self._name_edit.text().strip()
         if not name:
-            QMessageBox.warning(self, "エラー", "プリセット名を入力してください。")
+            QMessageBox.warning(self, tr("エラー", "Error"),
+                                tr("プリセット名を入力してください。", "Enter a preset name."))
             return
 
         # Handle rename
@@ -696,19 +700,21 @@ class ReferencePresetEditor(QDialog):
             _execute_preset_in_maya(preset)
             self.preset_applied.emit(preset)
         except Exception as e:
-            QMessageBox.critical(self, "適用エラー", str(e))
+            QMessageBox.critical(self, tr("適用エラー", "Apply Error"), str(e))
 
     # ------------------------------------------------------------------
     # Preset list CRUD buttons
     # ------------------------------------------------------------------
 
     def _new_preset(self):
-        name, ok = QInputDialog.getText(self, "新しいプリセット", "プリセット名:")
+        name, ok = QInputDialog.getText(self, tr("新しいプリセット", "New Preset"), tr("プリセット名:", "Preset name:"))
         if not ok or not name.strip():
             return
         name = name.strip()
         if name in self._presets:
-            QMessageBox.warning(self, "重複", "同名のプリセットが既に存在します。")
+            QMessageBox.warning(self, tr("重複", "Duplicate"),
+                                tr("同名のプリセットが既に存在します。",
+                                   "A preset with that name already exists."))
             return
         self._presets[name] = {"references": [], "constraints": [], "scripts": []}
         self._sm.save_reference_presets(self._presets)

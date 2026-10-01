@@ -485,7 +485,8 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             else:
                 self._bm_mgr.add_file(p)
             added += 1
-        self.statusBar().showMessage(f"ブックマークに追加: {added} 件")
+        self.statusBar().showMessage(tr("ブックマークに追加: %d 件",
+                                        "Added %d item(s) to bookmarks") % added)
 
     def _open_dialog(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -573,7 +574,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             except Exception as _e:
                 _swallow(_e, "ui/main_window.py:1937 _on_settings_changed")
         self._thumb_mgr.set_cache_size(self._sm.get("thumbnail_cache_size", 256))
-        self.statusBar().showMessage("設定を適用しました")
+        self.statusBar().showMessage(tr("設定を適用しました", "Settings applied"))
 
     def _open_batch_rename(self, paths=None):
         """バッチリネームを開く。
@@ -593,7 +594,9 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
                 paths = [os.path.join(current, f) for f in os.listdir(current)
                          if os.path.isfile(os.path.join(current, f))]
         if not paths:
-            QMessageBox.information(self, "情報", "リネーム対象のファイルが選択されていません。")
+            QMessageBox.information(self, tr("情報", "Information"),
+                                    tr("リネーム対象のファイルが選択されていません。",
+                                       "No files are selected for renaming."))
             return
         dlg = BatchRenameDialog(paths, parent=self)
         dlg.renamed.connect(lambda results: self.statusBar().showMessage(

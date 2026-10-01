@@ -14,6 +14,8 @@ Batch Rename Dialog
 from pathlib import Path
 from typing import List, Tuple, Optional
 
+from core.i18n import tr  # r118
+
 from core.compat import (
     Qt, Signal,
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QLineEdit, QComboBox,
@@ -42,7 +44,8 @@ class PreviewTable(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setColumnCount(3)
-        self.setHorizontalHeaderLabels(["変換前", "変換後", "状態"])
+        self.setHorizontalHeaderLabels([tr("変換前", "Before"), tr("変換後", "After"),
+                                        tr("状態", "Status")])
         self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
@@ -62,17 +65,17 @@ class PreviewTable(QTableWidget):
             new_item = QTableWidgetItem(new_name)
 
             if err:
-                status = QTableWidgetItem("⚠ エラー")
+                status = QTableWidgetItem(tr("⚠ エラー", "⚠ Error"))
                 status.setForeground(QColor(_tv()["error"]))
                 new_item.setForeground(QColor(_tv()["error"]))
             elif old_name == new_name:
-                status = QTableWidgetItem("変化なし")
+                status = QTableWidgetItem(tr("変化なし", "No change"))
                 status.setForeground(QColor(_tv()["on_surface_dim"]))
             else:
                 # Check if new file already exists
                 new_path = Path(new)
                 if new_path.exists() and new_path != Path(old):
-                    status = QTableWidgetItem("⚠ 競合")
+                    status = QTableWidgetItem(tr("⚠ 競合", "⚠ Conflict"))
                     status.setForeground(QColor(_tv()["warning"]))
                     new_item.setForeground(QColor(_tv()["warning"]))
                 else:
@@ -98,7 +101,7 @@ class BatchRenameDialog(QDialog):
         self._paths = list(paths)
         self._current_results: List[Tuple] = []
 
-        self.setWindowTitle("バッチリネーム")
+        self.setWindowTitle(tr("バッチリネーム", "Batch Rename"))
         self.setMinimumSize(720, 560)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
@@ -115,18 +118,18 @@ class BatchRenameDialog(QDialog):
         root.setSpacing(10)
 
         # ── Rule area ─────────────────────────────────────────────────
-        rule_group = QGroupBox("変換ルール")
+        rule_group = QGroupBox(tr("変換ルール", "Rename Rule"))
         rule_layout = QGridLayout(rule_group)
         rule_layout.setSpacing(8)
 
-        rule_layout.addWidget(QLabel("モード:"), 0, 0)
+        rule_layout.addWidget(QLabel(tr("モード:", "Mode:")), 0, 0)
         self._mode_combo = QComboBox()
         self._mode_combo.addItems([
-            "文字列置換",
-            "プレフィックス追加",
-            "サフィックス追加",
-            "連番",
-            "正規表現",
+            tr("文字列置換", "Find & Replace"),
+            tr("プレフィックス追加", "Add Prefix"),
+            tr("サフィックス追加", "Add Suffix"),
+            tr("連番", "Numbering"),
+            tr("正規表現", "Regular Expression"),
         ])
         self._mode_combo.setFixedWidth(160)
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
@@ -141,20 +144,20 @@ class BatchRenameDialog(QDialog):
 
         # 文字列置換
         self._replace_find_edit = QLineEdit()
-        self._replace_find_edit.setPlaceholderText("検索文字列")
+        self._replace_find_edit.setPlaceholderText(tr("検索文字列", "Text to find"))
         self._replace_find_edit.textChanged.connect(self._update_preview)
         self._replace_repl_edit = QLineEdit()
-        self._replace_repl_edit.setPlaceholderText("置換文字列")
+        self._replace_repl_edit.setPlaceholderText(tr("置換文字列", "Replacement text"))
         self._replace_repl_edit.textChanged.connect(self._update_preview)
 
         # プレフィックス
         self._prefix_edit = QLineEdit()
-        self._prefix_edit.setPlaceholderText("追加するプレフィックス")
+        self._prefix_edit.setPlaceholderText(tr("追加するプレフィックス", "Prefix to add"))
         self._prefix_edit.textChanged.connect(self._update_preview)
 
         # サフィックス
         self._suffix_edit = QLineEdit()
-        self._suffix_edit.setPlaceholderText("追加するサフィックス")
+        self._suffix_edit.setPlaceholderText(tr("追加するサフィックス", "Suffix to add"))
         self._suffix_edit.textChanged.connect(self._update_preview)
 
         # 連番
@@ -172,10 +175,12 @@ class BatchRenameDialog(QDialog):
 
         # 正規表現
         self._regex_pattern_edit = QLineEdit()
-        self._regex_pattern_edit.setPlaceholderText("正規表現パターン (例: ^(.+)_v\\d+$)")
+        self._regex_pattern_edit.setPlaceholderText(tr("正規表現パターン (例: ^(.+)_v\\d+$)",
+                                                       "Regex pattern (e.g. ^(.+)_v\\d+$)"))
         self._regex_pattern_edit.textChanged.connect(self._update_preview)
         self._regex_replace_edit = QLineEdit()
-        self._regex_replace_edit.setPlaceholderText("置換文字列 (例: \\1)")
+        self._regex_replace_edit.setPlaceholderText(tr("置換文字列 (例: \\1)",
+                                                       "Replacement (e.g. \\1)"))
         self._regex_replace_edit.textChanged.connect(self._update_preview)
 
         root.addWidget(rule_group)
@@ -184,15 +189,16 @@ class BatchRenameDialog(QDialog):
         # ── Case options ──────────────────────────────────────────────
         case_row = QHBoxLayout()
         self._case_combo = QComboBox()
-        self._case_combo.addItems(["変更なし", "小文字", "大文字", "タイトルケース"])
+        self._case_combo.addItems([tr("変更なし", "No change"), tr("小文字", "lowercase"),
+                                   tr("大文字", "UPPERCASE"), tr("タイトルケース", "Title Case")])
         self._case_combo.currentIndexChanged.connect(self._update_preview)
-        case_row.addWidget(QLabel("大文字小文字:"))
+        case_row.addWidget(QLabel(tr("大文字小文字:", "Letter case:")))
         case_row.addWidget(self._case_combo)
         case_row.addStretch()
         root.addLayout(case_row)
 
         # ── Preview table ─────────────────────────────────────────────
-        root.addWidget(QLabel("プレビュー:"))
+        root.addWidget(QLabel(tr("プレビュー:", "Preview:")))
         self._preview_table = PreviewTable()
         root.addWidget(self._preview_table)
 
@@ -204,11 +210,11 @@ class BatchRenameDialog(QDialog):
         btn_row.addWidget(self._status_label)
         btn_row.addStretch()
 
-        cancel_btn = QPushButton("キャンセル")
+        cancel_btn = QPushButton(tr("キャンセル", "Cancel"))
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
 
-        self._apply_btn = QPushButton("▶  実行")
+        self._apply_btn = QPushButton(tr("▶  実行", "▶  Apply"))
         self._apply_btn.setStyleSheet(
             "QPushButton { background:%(primary)s; color:%(on_primary)s;"
             " font-weight:%(w_strong)s; border:1px solid %(primary)s;"
@@ -242,31 +248,31 @@ class BatchRenameDialog(QDialog):
         pl = self._params_layout
 
         if idx == 0:  # 文字列置換
-            pl.addWidget(QLabel("検索:"), 0, 0)
+            pl.addWidget(QLabel(tr("検索:", "Find:")), 0, 0)
             pl.addWidget(self._replace_find_edit, 0, 1)
-            pl.addWidget(QLabel("置換:"), 0, 2)
+            pl.addWidget(QLabel(tr("置換:", "Replace:")), 0, 2)
             pl.addWidget(self._replace_repl_edit, 0, 3)
 
         elif idx == 1:  # プレフィックス
-            pl.addWidget(QLabel("プレフィックス:"), 0, 0)
+            pl.addWidget(QLabel(tr("プレフィックス:", "Prefix:")), 0, 0)
             pl.addWidget(self._prefix_edit, 0, 1)
 
         elif idx == 2:  # サフィックス
-            pl.addWidget(QLabel("サフィックス:"), 0, 0)
+            pl.addWidget(QLabel(tr("サフィックス:", "Suffix:")), 0, 0)
             pl.addWidget(self._suffix_edit, 0, 1)
 
         elif idx == 3:  # 連番
-            pl.addWidget(QLabel("置換トークン:"), 0, 0)
+            pl.addWidget(QLabel(tr("置換トークン:", "Token:")), 0, 0)
             pl.addWidget(self._seq_token_edit, 0, 1)
-            pl.addWidget(QLabel("開始番号:"), 0, 2)
+            pl.addWidget(QLabel(tr("開始番号:", "Start:")), 0, 2)
             pl.addWidget(self._seq_start_spin, 0, 3)
-            pl.addWidget(QLabel("桁数:"), 0, 4)
+            pl.addWidget(QLabel(tr("桁数:", "Digits:")), 0, 4)
             pl.addWidget(self._seq_pad_spin, 0, 5)
 
         elif idx == 4:  # 正規表現
-            pl.addWidget(QLabel("パターン:"), 0, 0)
+            pl.addWidget(QLabel(tr("パターン:", "Pattern:")), 0, 0)
             pl.addWidget(self._regex_pattern_edit, 0, 1, 1, 3)
-            pl.addWidget(QLabel("置換:"), 1, 0)
+            pl.addWidget(QLabel(tr("置換:", "Replace:")), 1, 0)
             pl.addWidget(self._regex_replace_edit, 1, 1, 1, 3)
 
     # ------------------------------------------------------------------
@@ -324,8 +330,9 @@ class BatchRenameDialog(QDialog):
         ok_count = sum(1 for _, _, e in case_results if e is None)
         err_count = sum(1 for _, _, e in case_results if e is not None)
         self._status_label.setText(
-            f"{ok_count} 件変換可能  /  {len(case_results)} 件  "
-            + (f"⚠ {err_count} 件エラー" if err_count else "")
+            tr("%d 件変換可能  /  %d 件  ", "%d of %d can be renamed  ")
+            % (ok_count, len(case_results))
+            + ((tr("⚠ %d 件エラー", "⚠ %d error(s)") % err_count) if err_count else "")
         )
         self._apply_btn.setEnabled(ok_count > 0 and err_count == 0)
 
@@ -338,12 +345,15 @@ class BatchRenameDialog(QDialog):
         ok_paths = [(old, new) for old, new, err in self._current_results
                     if err is None and Path(old).name != Path(new).name]
         if not ok_paths:
-            QMessageBox.information(self, "情報", "変更するファイルはありません。")
+            QMessageBox.information(self, tr("情報", "Information"),
+                                    tr("変更するファイルはありません。",
+                                       "There are no files to rename."))
             return
 
         ret = QMessageBox.question(
-            self, "実行確認",
-            f"{len(ok_paths)} 件のファイルをリネームしますか？",
+            self, tr("実行確認", "Confirm"),
+            tr("%d 件のファイルをリネームしますか？",
+               "Rename %d file(s)?") % len(ok_paths),
             QMessageBox.Yes | QMessageBox.No
         )
         if ret != QMessageBox.Yes:
@@ -355,8 +365,9 @@ class BatchRenameDialog(QDialog):
         failed = [(o, n, e) for o, n, e in results if e]
         if failed:
             msg = "\n".join(f"{Path(o).name}: {e}" for o, n, e in failed[:10])
-            QMessageBox.warning(self, "一部失敗",
-                                f"{len(failed)} 件のリネームに失敗しました:\n{msg}")
+            QMessageBox.warning(self, tr("一部失敗", "Partially Failed"),
+                                tr("%d 件のリネームに失敗しました:\n%s",
+                                   "Failed to rename %d file(s):\n%s") % (len(failed), msg))
 
         done = [(o, n) for o, n, e in results if not e]
         self.renamed.emit(done)

@@ -8,6 +8,7 @@ import types
 from _common import *  # noqa: F401,F403
 from _common import app, make_panel, tmpdir, finish, run, sm
 import ui.browser_panel as bp
+import ui.browser_column_view as bcv   # r118: 分割後の実装先（patch はこちらへ）
 
 b = make_panel()
 cv = b._column_view
@@ -106,9 +107,11 @@ def test_routing_and_notify():
     # ネイティブに処理させた（実ファイルを渡した）場合は Manager から送らない
     fired = []
     cv._maya_drop_cb = lambda paths, app: fired.append(app)
-    orig_w, orig_c = bp.QApplication.widgetAt, bp._cursor_over_dcc_window
-    bp.QApplication.widgetAt = staticmethod(lambda *a: None)
-    bp._cursor_over_dcc_window = lambda: "maya"
+    # r118: _notify_drag_finished は ui.browser_column_view にある。
+    # bp 側だけ差し替えても効かない（r110 の分割で実装が移った）。
+    orig_w, orig_c = bcv.QApplication.widgetAt, bcv._cursor_over_dcc_window
+    bcv.QApplication.widgetAt = staticmethod(lambda *a: None)
+    bcv._cursor_over_dcc_window = lambda: "maya"
     try:
         m = bp._DccAwareMime([MA], lambda: ("maya", [])); m.urls()
         cv._notify_drag_finished([MA], m)
@@ -118,8 +121,8 @@ def test_routing_and_notify():
         cv._notify_drag_finished([PY], m2)
         assert fired == ["maya"], "引き受けた落下が実行されない"
     finally:
-        bp.QApplication.widgetAt = orig_w
-        bp._cursor_over_dcc_window = orig_c
+        bcv.QApplication.widgetAt = orig_w
+        bcv._cursor_over_dcc_window = orig_c
     print("routing (.py -> run script) and no double execution: OK")
 
 

@@ -22,7 +22,11 @@ print("p4 badge PNGs present (24x24): OK")
 
 # 2) ポリシー: p4 はフォルダ無印・clean/untracked 無印・その他は PNG
 assert _badge_kind("p4", ST_MODIFIED, True) is None
-assert _badge_kind("p4", ST_CLEAN, False) is None
+# r118: clean は「サーバー管理下」の目印として緑丸（文字なし）を出す
+k_clean = _badge_kind("p4", ST_CLEAN, False)
+assert k_clean and k_clean[0] == "dot" and k_clean[1][0] == "status_ok", k_clean
+assert k_clean[1][1] == "", "P4V 準拠: clean の丸には文字を入れない"
+assert _badge_kind("p4", ST_CLEAN, True) is None, "フォルダには付けない"
 assert _badge_kind("p4", ST_UNTRACKED, False) is None
 for st in (ST_MODIFIED, ST_ADDED, ST_DELETED, ST_OUTDATED, ST_LOCKED, ST_OTHER_OPEN):
     k = _badge_kind("p4", st, False)
@@ -33,9 +37,10 @@ assert _badge_kind("cloud", "online_only", False)[0] == "dot"
 assert _badge_kind("git", "nonsense", False) is None
 # ツールチップ: p4 フォルダは空、ファイルは Perforce: ...
 assert _badge_tooltip("p4", ST_MODIFIED, True) == ""
-assert _badge_tooltip("p4", ST_CLEAN, False).startswith("Perforce:")
+tip_clean = _badge_tooltip("p4", ST_CLEAN, False)
+assert tip_clean.startswith("Perforce:") and "デポ" in tip_clean, tip_clean
 assert _badge_tooltip("git", ST_CLEAN, True).startswith("Git:")
-print("badge policy (p4 folders/clean/untracked hidden, others PNG): OK")
+print("badge policy (p4 folders/untracked hidden, clean=green dot, others PNG): OK")
 
 # 3) fstat -ztag 出力の解析（otherLock > otherOpen、headRev≠haveRev → outdated）
 prov = p4_provider.P4Provider()

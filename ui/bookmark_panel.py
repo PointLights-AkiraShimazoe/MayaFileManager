@@ -13,6 +13,7 @@ Features
 * Emits navigate_requested(path) for the browser to pick up
 """
 from core.diag import swallow as _swallow  # r112
+from core.i18n import tr  # r118
 
 from pathlib import Path
 from typing import List, Optional
@@ -199,12 +200,12 @@ class BookmarkPanel(QWidget):
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(4, 4, 4, 4)
         h_layout.setSpacing(4)
-        h_layout.addWidget(QLabel("⭐ ブックマーク"))
+        h_layout.addWidget(QLabel(tr("⭐ ブックマーク", "⭐ Bookmarks")))
         h_layout.addStretch()
 
         add_folder_btn = QToolButton()
         add_folder_btn.setText("📁+")
-        add_folder_btn.setToolTip("フォルダを追加")
+        add_folder_btn.setToolTip(tr("フォルダを追加", "Add folder"))
         add_folder_btn.clicked.connect(self._add_folder)
         h_layout.addWidget(add_folder_btn)
 
@@ -217,15 +218,16 @@ class BookmarkPanel(QWidget):
         t_layout.setSpacing(4)
 
         self._filter_edit = QLineEdit()
-        self._filter_edit.setPlaceholderText("🔍 フィルター...")
+        self._filter_edit.setPlaceholderText(tr("🔍 フィルター...", "🔍 Filter..."))
         self._filter_edit.setClearButtonEnabled(True)
         self._filter_edit.textChanged.connect(self._on_filter_changed)
         t_layout.addWidget(self._filter_edit, 1)
 
         # ソート On/Off（元の並びは保持。Offで元順に戻る）
         self._sort_btn = QToolButton()
-        self._sort_btn.setText("↕ ソート")
-        self._sort_btn.setToolTip("名前順で表示（元の並びは保持。OFFで元の順序に戻る）")
+        self._sort_btn.setText(tr("↕ ソート", "↕ Sort"))
+        self._sort_btn.setToolTip(tr("名前順で表示（元の並びは保持。OFFで元の順序に戻る）",
+                                     "Sort by name (original order kept; OFF restores it)"))
         self._sort_btn.setCheckable(True)
         self._sort_btn.toggled.connect(self._on_sort_toggled)
         t_layout.addWidget(self._sort_btn)
@@ -233,16 +235,17 @@ class BookmarkPanel(QWidget):
         # 昇順/降順トグル（ソートON時のみ有効）
         self._sort_dir_btn = QToolButton()
         self._sort_dir_btn.setText("A→Z")
-        self._sort_dir_btn.setToolTip("昇順 / 降順を切替")
+        self._sort_dir_btn.setToolTip(tr("昇順 / 降順を切替", "Toggle ascending / descending"))
         self._sort_dir_btn.setEnabled(False)
         self._sort_dir_btn.clicked.connect(self._on_sort_dir_toggled)
         t_layout.addWidget(self._sort_dir_btn)
 
         # ソート順を本来の並びとして確定（確定後ソートはOFF）
         self._apply_sort_btn = QToolButton()
-        self._apply_sort_btn.setText("✓ 確定")
-        self._apply_sort_btn.setToolTip(
-            "現在のソート順を本来の並び順として保存します（適用後ソートはOFF）")
+        self._apply_sort_btn.setText(tr("✓ 確定", "✓ Apply"))
+        self._apply_sort_btn.setToolTip(tr(
+            "現在のソート順を本来の並び順として保存します（適用後ソートはOFF）",
+            "Save the current sort order as the stored order (sort turns OFF after applying)"))
         self._apply_sort_btn.setEnabled(False)
         self._apply_sort_btn.clicked.connect(self._apply_sort_to_order)
         t_layout.addWidget(self._apply_sort_btn)
@@ -442,38 +445,38 @@ class BookmarkPanel(QWidget):
             bid   = item.data(0, ROLE_ID)
 
             if path:
-                nav_act = menu.addAction("🗂  ここへ移動")
+                nav_act = menu.addAction(tr("🗂  ここへ移動", "🗂  Go here"))
                 nav_act.triggered.connect(lambda: self.navigate_requested.emit(path))
 
             if btype in ("file",) and path:
                 menu.addSeparator()
-                open_act = menu.addAction("🎬  Maya で開く")
+                open_act = menu.addAction(tr("🎬  Maya で開く", "🎬  Open in Maya"))
                 open_act.triggered.connect(lambda: self.open_requested.emit(path))
-                imp_act = menu.addAction("⬇  インポート")
+                imp_act = menu.addAction(tr("⬇  インポート", "⬇  Import"))
                 imp_act.triggered.connect(lambda: self.import_requested.emit(path))
-                ref_act = menu.addAction("🔗  リファレンス")
+                ref_act = menu.addAction(tr("🔗  リファレンス", "🔗  Reference"))
                 ref_act.triggered.connect(lambda: self.reference_requested.emit(path))
 
             menu.addSeparator()
 
-            ren_act = menu.addAction("✏  名前変更...")
+            ren_act = menu.addAction(tr("✏  名前変更...", "✏  Rename..."))
             ren_act.triggered.connect(lambda: self._rename_item(item, bid))
 
-            color_menu = menu.addMenu("🎨  色を設定")
+            color_menu = menu.addMenu(tr("🎨  色を設定", "🎨  Set color"))
             for name, hex_color in [
-                ("赤", "#E87070"), ("オレンジ", "#E8A070"),
-                ("黄", "#E8E070"), ("緑", "#70E870"),
-                ("青", "#70A0E8"), ("なし", None)
+                (tr("赤", "Red"), "#E87070"), (tr("オレンジ", "Orange"), "#E8A070"),
+                (tr("黄", "Yellow"), "#E8E070"), (tr("緑", "Green"), "#70E870"),
+                (tr("青", "Blue"), "#70A0E8"), (tr("なし", "None"), None)
             ]:
                 act = color_menu.addAction(name)
                 act.triggered.connect(lambda checked=False, c=hex_color: self._bm.set_color(bid, c))
 
             menu.addSeparator()
-            del_act = menu.addAction("🗑  削除")
+            del_act = menu.addAction(tr("🗑  削除", "🗑  Delete"))
             del_act.triggered.connect(lambda: self._remove_item(bid))
 
         menu.addSeparator()
-        add_folder_act = menu.addAction("📁  新しいフォルダ...")
+        add_folder_act = menu.addAction(tr("📁  新しいフォルダ...", "📁  New folder..."))
         add_folder_act.triggered.connect(self._add_folder)
 
         menu.exec_(self._tree.viewport().mapToGlobal(pos))
@@ -483,7 +486,7 @@ class BookmarkPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _add_folder(self):
-        name, ok = QInputDialog.getText(self, "新しいフォルダ", "フォルダ名:")
+        name, ok = QInputDialog.getText(self, tr("新しいフォルダ", "New Folder"), tr("フォルダ名:", "Folder name:"))
         if ok and name:
             # Add under selected folder if possible
             selected = self._tree.currentItem()
@@ -494,13 +497,14 @@ class BookmarkPanel(QWidget):
 
     def _rename_item(self, item: QTreeWidgetItem, bid: str):
         old_name = item.text(0).split("  ", 1)[-1]
-        new_name, ok = QInputDialog.getText(self, "名前変更", "新しい名前:", text=old_name)
+        new_name, ok = QInputDialog.getText(self, tr("名前変更", "Rename"), tr("新しい名前:", "New name:"), text=old_name)
         if ok and new_name:
             self._bm.rename(bid, new_name)
 
     def _remove_item(self, bid: str):
-        ret = QMessageBox.question(self, "削除確認",
-                                   "このブックマークを削除しますか？",
+        ret = QMessageBox.question(self, tr("削除確認", "Confirm Delete"),
+                                   tr("このブックマークを削除しますか？",
+                                      "Delete this bookmark?"),
                                    QMessageBox.Yes | QMessageBox.No)
         if ret == QMessageBox.Yes:
             self._bm.remove(bid)

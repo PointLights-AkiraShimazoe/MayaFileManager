@@ -6,6 +6,7 @@
 r110 でモジュールを分割した。旧 browser_panel.* の名前は互換のため
 ここで再エクスポートしているので、既存の import は変更不要。"""
 from core.diag import swallow as _swallow  # r112
+from core.i18n import tr  # r118: モジュールレベルで提供（ローカル import 不要）
 
 import os
 import struct
@@ -199,7 +200,7 @@ class BrowserPanel(QWidget):
 
         # Address bar
         self._addr_bar = QLineEdit()
-        self._addr_bar.setPlaceholderText("パスを入力...")
+        self._addr_bar.setPlaceholderText(tr("パスを入力...", "Enter a path..."))
         self._addr_bar.returnPressed.connect(lambda: self._navigate(self._addr_bar.text()))
         tb_layout.addWidget(self._addr_bar)
 
@@ -509,7 +510,7 @@ class BrowserPanel(QWidget):
         except Exception as _e:
             _swallow(_e, "ui/browser_panel.py:511 _navigate")
         self._pending_nav = (path, add_to_history)
-        self.status_message.emit(f"確認中: {path}")
+        self.status_message.emit(tr("確認中: %s", "Checking: %s") % path)
         self._prober.probe(path)
 
     def _on_probe_result(self, path: str, reachable: bool):
@@ -1042,7 +1043,9 @@ class BrowserPanel(QWidget):
         self._drive_combo.blockSignals(True)
         self._drive_combo.clear()
         for root, ok in results:
-            self._drive_combo.addItem(root if ok else f"{root} (応答なし)", root)
+            self._drive_combo.addItem(
+                root if ok else tr("%s (応答なし)", "%s (not responding)") % root,
+                root)
             if not ok:
                 # 応答しないドライブは選択不可にして隔離
                 model_item = self._drive_combo.model().item(
@@ -1254,11 +1257,15 @@ class BrowserPanel(QWidget):
         _mfm_log("follow_shortcut: path=%r -> target=%r exists=%s"
                  % (path, target, (os.path.exists(target) if target else None)))
         if target and os.path.exists(target):
-            self.status_message.emit(f"ショートカット解決: {path} → {target}")
+            self.status_message.emit(
+                tr("ショートカット解決: %s → %s",
+                   "Shortcut resolved: %s -> %s") % (path, target))
             self._navigate(target)
             return True
         if target:
-            self.status_message.emit(f"ショートカット参照先が見つかりません: {target}")
+            self.status_message.emit(
+                tr("ショートカット参照先が見つかりません: %s",
+                   "Shortcut target not found: %s") % target)
         return False
 
     def _dispatch_action(self, action: str, path: str):
@@ -1699,7 +1706,6 @@ class BrowserPanel(QWidget):
         target はフォルダ（空白右クリック）または単一ファイル（ダイアログの
         ファイル名欄に入る）。実行は _dcc_callback(app, action, [target])
         → MainWindow 側でダイアログ→DCC へ送信。"""
-        from core.i18n import tr
         from core import dcc_save
         from core.file_operations import dcc_for_path
         dcc_cb = getattr(self, "_dcc_callback", None)
@@ -1732,7 +1738,6 @@ class BrowserPanel(QWidget):
 
     def _popup_folder_context_menu(self, folder: str, global_pos):
         """カラムの空白（項目の無い所）の右クリックメニュー（r70）。"""
-        from core.i18n import tr
         menu = QMenu(self)
         # r73: 新規作成（作成後はそのまま名前変更モード）
         nf = menu.addAction(tr("📁  新規フォルダ", "📁  New folder") + "\tCtrl+Shift+N")
@@ -1775,7 +1780,6 @@ class BrowserPanel(QWidget):
         r58: extra["confirm"] があれば実行前に Yes/No 確認。結果は manager の
         action_finished（→ _on_integration_action_finished）で通知される。
         数秒後に状態を再取得して表示へ反映する。"""
-        from core.i18n import tr
         extra = extra or {}
         if extra.get("confirm"):
             ret = QMessageBox.question(
@@ -1836,8 +1840,9 @@ class BrowserPanel(QWidget):
             import traceback
             _mfm_warn("display name dialog failed: %r\n%s"
                       % (e, traceback.format_exc()))
-            QMessageBox.critical(self, "表示名",
-                                 "表示名ウィンドウを開けませんでした:\n%s" % e)
+            QMessageBox.critical(self, tr("表示名", "Display Names"),
+                                 tr("表示名ウィンドウを開けませんでした:\n%s",
+                                    "Could not open the display-name window:\n%s") % e)
 
     def _display_name_target(self, paths):
         """表示名を編集する «対象ディレクトリ»（r115）。
@@ -1857,7 +1862,6 @@ class BrowserPanel(QWidget):
             return ""
 
     def _popup_context_menu(self, paths, global_pos):
-        from core.i18n import tr
         menu = QMenu(self)
         is_maya = all(Path(p).suffix.lower() in MAYA_EXTENSIONS for p in paths)
         is_single = len(paths) == 1
@@ -2042,7 +2046,8 @@ class BrowserPanel(QWidget):
         # 実際の登録は MainWindow 側の BookmarkManager で行う（signalで依頼）
         if paths:
             self.bookmark_requested.emit(list(paths))
-            self.status_message.emit(f"ブックマークに追加: {len(paths)} 件")
+            self.status_message.emit(
+                tr("ブックマークに追加: %d 件", "Bookmarked %d item(s)") % len(paths))
 
     def _copy_paths_to_clipboard(self, paths: List[str]):
         """選択中のフルパスをクリップボードへコピー（複数は改行区切り）。"""
@@ -2052,18 +2057,19 @@ class BrowserPanel(QWidget):
         cb = QApplication.clipboard()
         if cb is not None:
             cb.setText("\n".join(paths))
-        self.status_message.emit(f"パスをコピー: {len(paths)} 件")
+        self.status_message.emit(
+                tr("パスをコピー: %d 件", "Copied %d path(s)") % len(paths))
 
     _DIR_DLG_OPTS = QFileDialog.ShowDirsOnly | QFileDialog.DontUseNativeDialog
 
     def _copy_dialog(self, paths: List[str]):
-        dst = QFileDialog.getExistingDirectory(self, "コピー先を選択", self._current_path,
+        dst = QFileDialog.getExistingDirectory(self, tr("コピー先を選択", "Select a destination"), self._current_path,
                                                self._DIR_DLG_OPTS)
         if dst:
             self._transfer_with_progress(paths, dst, False, "コピー")
 
     def _move_dialog(self, paths: List[str]):
-        dst = QFileDialog.getExistingDirectory(self, "移動先を選択", self._current_path,
+        dst = QFileDialog.getExistingDirectory(self, tr("移動先を選択", "Select a destination"), self._current_path,
                                                self._DIR_DLG_OPTS)
         if dst:
             self._transfer_with_progress(paths, dst, True, "移動")
@@ -2102,7 +2108,8 @@ class BrowserPanel(QWidget):
         待ってから _rename_inline を開く。"""
         folder = folder or self._active_column_folder()
         if not folder or not os.path.isdir(folder):
-            self.status_message.emit("作成先フォルダを特定できません")
+            self.status_message.emit(tr("作成先フォルダを特定できません",
+                                       "Cannot determine the target folder"))
             return
         try:
             if kind == "folder":
@@ -2115,9 +2122,9 @@ class BrowserPanel(QWidget):
                 with open(path, "x", encoding="utf-8"):
                     pass
         except Exception as e:
-            QMessageBox.critical(self, "新規作成", str(e))
+            QMessageBox.critical(self, tr("新規作成", "New item"), str(e))
             return
-        self.status_message.emit("作成: %s" % name)
+        self.status_message.emit(tr("作成: %s", "Created: %s") % name)
         self._last_created_path = path
         self._refresh_flat_view()
         self._rename_when_visible(path)
@@ -2392,7 +2399,8 @@ class BrowserPanel(QWidget):
             if path is None:
                 targets = self._operation_targets()
                 if len(targets) != 1:
-                    self.status_message.emit("名前変更は1件だけ選択してください")
+                    self.status_message.emit(tr("名前変更は1件だけ選択してください",
+                                            "Select exactly one item to rename"))
                     return False
                 path = targets[0]
             idx = self._column_view._proxy_index_for_path(path)
@@ -2467,16 +2475,21 @@ class BrowserPanel(QWidget):
             if not commit or not new_name or new_name == name:
                 return
             if any(c in new_name for c in '\\/:*?"<>|'):
-                QMessageBox.warning(self, "名前変更", "ファイル名に使えない文字が含まれています。")
+                QMessageBox.warning(self, tr("名前変更", "Rename"),
+                                    tr("ファイル名に使えない文字が含まれています。",
+                                       "The name contains characters that cannot be used."))
                 return
             new_path = os.path.join(os.path.dirname(path), new_name)
             if os.path.lexists(new_path):
-                QMessageBox.warning(self, "名前変更", "同名の項目が既にあります:\n%s" % new_name)
+                QMessageBox.warning(self, tr("名前変更", "Rename"),
+                                    tr("同名の項目が既にあります:\n%s",
+                                       "An item with that name already exists:\n%s")
+                                    % new_name)
                 return
             from core.undo_stack import RenameOp
             ok, err = self._rename_path(path, new_path)
             if not ok:
-                QMessageBox.critical(self, "名前変更",
+                QMessageBox.critical(self, tr("名前変更", "Rename"),
                                      self._rename_error_text(path, err))
                 return
             try:
@@ -2544,7 +2557,8 @@ class BrowserPanel(QWidget):
             if record:
                 from core.undo_stack import RenameOp
                 self._undo_stack().push(RenameOp(old_p, new_p))
-            self.status_message.emit(f"名前変更: {old_name} → {new_name}")
+            self.status_message.emit(
+                tr("名前変更: %s → %s", "Renamed: %s -> %s") % (old_name, new_name))
             # r98: 表示中のフォルダ自身／その祖先を変更した場合は新しい場所へ追従
             cur = (self._current_path or "").replace("\\", "/").rstrip("/")
             o = old_p.rstrip("/")
@@ -2568,7 +2582,7 @@ class BrowserPanel(QWidget):
             from core.undo_stack import RenameOp
             ok, err = self._rename_path(str(old), str(new_path))
             if not ok:
-                QMessageBox.critical(self, "名前変更",
+                QMessageBox.critical(self, tr("名前変更", "Rename"),
                                      self._rename_error_text(str(old), err))
                 return
             try:
@@ -2586,7 +2600,7 @@ class BrowserPanel(QWidget):
         if len(names) > 10:
             shown += "\n  …他 %d 件" % (len(names) - 10)
         msg = f"{len(paths)} 件を削除しますか？\n\n{shown}"
-        ret = QMessageBox.warning(self, "削除の確認", msg,
+        ret = QMessageBox.warning(self, tr("削除の確認", "Confirm delete"), msg,
                                   QMessageBox.Yes | QMessageBox.Cancel)
         if ret != QMessageBox.Yes:
             return
@@ -2607,16 +2621,21 @@ class BrowserPanel(QWidget):
             if op is not None:
                 self._undo_stack().push(op)
             if err:
-                QMessageBox.critical(self, "削除", err)
+                QMessageBox.critical(self, tr("削除", "Delete"), err)
             elif failed:
-                QMessageBox.warning(self, "削除エラー",
-                                    f"{len(failed)} 件の削除に失敗しました:\n" +
+                QMessageBox.warning(self, tr("削除エラー", "Delete Error"),
+                                    tr("%d 件の削除に失敗しました:\n",
+                                       "Failed to delete %d item(s):\n") % len(failed) +
                                     "\n".join(failed))
             elif cancelled:
-                self.status_message.emit(f"削除をキャンセルしました（完了 {len(pairs) + len(direct)} 件）")
+                self.status_message.emit(
+                    tr("削除をキャンセルしました（完了 %d 件）",
+                       "Delete cancelled (%d done)") % (len(pairs) + len(direct)))
             else:
                 hint = "（Ctrl+Z で元に戻せます）" if op is not None else ""
-                self.status_message.emit(f"{len(paths)} 件を削除しました{hint}")
+                self.status_message.emit(
+                    tr("%d 件を削除しました%s", "Deleted %d item(s)%s")
+                    % (len(paths), hint))
         self._run_file_op("削除", work, done, total=len(paths))
 
     def _show_properties(self, path: str):
@@ -2630,7 +2649,7 @@ class BrowserPanel(QWidget):
             f"更新日時: {datetime.datetime.fromtimestamp(stat.st_mtime)}\n"
             f"種類: {get_file_type_category(path)}"
         )
-        QMessageBox.information(self, "プロパティ", msg)
+        QMessageBox.information(self, tr("プロパティ", "Properties"), msg)
 
     # ------------------------------------------------------------------
     # Drag & Drop / Clipboard （Explorer 互換）
@@ -2784,29 +2803,33 @@ class BrowserPanel(QWidget):
     def _undo_op(self):
         st = self._undo_stack()
         if not st.can_undo():
-            self.status_message.emit("元に戻す操作はありません")
+            self.status_message.emit(tr("元に戻す操作はありません", "Nothing to undo"))
             return
         label = st.undo_label()
 
         def done(res, cancelled, err):
             if err:
-                QMessageBox.warning(self, "元に戻す", "元に戻せませんでした:\n%s" % err)
+                QMessageBox.warning(self, tr("元に戻す", "Undo"),
+                                tr("元に戻せませんでした:\n%s",
+                                   "Could not undo:\n%s") % err)
             else:
-                self.status_message.emit("元に戻しました: " + label)
+                self.status_message.emit(tr("元に戻しました: ", "Undone: ") + label)
         self._run_file_op("元に戻す: " + label, lambda cb: st.undo(), done)
 
     def _redo_op(self):
         st = self._undo_stack()
         if not st.can_redo():
-            self.status_message.emit("やり直す操作はありません")
+            self.status_message.emit(tr("やり直す操作はありません", "Nothing to redo"))
             return
         label = st.redo_label()
 
         def done(res, cancelled, err):
             if err:
-                QMessageBox.warning(self, "やり直す", "やり直せませんでした:\n%s" % err)
+                QMessageBox.warning(self, tr("やり直す", "Redo"),
+                                tr("やり直せませんでした:\n%s",
+                                   "Could not redo:\n%s") % err)
             else:
-                self.status_message.emit("やり直しました: " + label)
+                self.status_message.emit(tr("やり直しました: ", "Redone: ") + label)
         self._run_file_op("やり直す: " + label, lambda cb: st.redo(), done)
 
     # ------------------------------------------------------------------
@@ -2816,7 +2839,6 @@ class BrowserPanel(QWidget):
     def _on_files_dropped(self, paths: List[str], dest_dir: str, move: bool):
         """カラム間 D&D の実行。移動（既定）／コピー（Ctrl）。
         同名が既にある時は «上書き / 名前を変えて / スキップ» を選ばせる。"""
-        from core.i18n import tr
         from core.file_operations import (move_items, copy_items,
                                           CONFLICT_RENAME, CONFLICT_SKIP)
         from core.undo_stack import MoveOp, CopyOp
@@ -2915,7 +2937,8 @@ class BrowserPanel(QWidget):
         paths = list(paths) if paths else self._operation_targets()
         paths = [p for p in paths if p and os.path.lexists(p)]
         if not paths:
-            self.status_message.emit("複製する項目を選択してください")
+            self.status_message.emit(tr("複製する項目を選択してください",
+                                        "Select items to duplicate"))
             return
         from ui.duplicate_dialog import DuplicateDialog
         from core.file_operations import duplicate_items
@@ -2936,11 +2959,15 @@ class BrowserPanel(QWidget):
             if pairs:
                 self._undo_stack().push(CopyOp(pairs))
             if err:
-                QMessageBox.critical(self, "複製", err)
+                QMessageBox.critical(self, tr("複製", "Duplicate"), err)
             elif cancelled:
-                self.status_message.emit("複製をキャンセルしました（完了 %d 件）" % len(results))
+                self.status_message.emit(
+                    tr("複製をキャンセルしました（完了 %d 件）",
+                       "Duplicate cancelled (%d done)") % len(results))
             else:
-                self.status_message.emit("複製: %d 件（Ctrl+Z で元に戻せます）" % len(results))
+                self.status_message.emit(
+                    tr("複製: %d 件（Ctrl+Z で元に戻せます）",
+                       "Duplicated %d item(s) (Ctrl+Z to undo)") % len(results))
         self._run_file_op("複製", work, done, total=len(specs))
 
     def _operation_targets(self) -> List[str]:
@@ -3013,7 +3040,9 @@ class BrowserPanel(QWidget):
 
         target = self._paste_target_dir()
         if not target:
-            QMessageBox.warning(self, "貼り付け", "貼り付け先フォルダを特定できません。")
+            QMessageBox.warning(self, tr("貼り付け", "Paste"),
+                                tr("貼り付け先フォルダを特定できません。",
+                                   "Cannot determine the destination folder."))
             return
 
         # 同一フォルダへの移動は無意味なのでコピーへ降格
@@ -3054,9 +3083,13 @@ class BrowserPanel(QWidget):
             if err:
                 QMessageBox.critical(self, verb, err)
             elif cancelled:
-                self.status_message.emit(f"{verb}をキャンセルしました（完了 {len(results)} 件）")
+                self.status_message.emit(
+                    tr("%sをキャンセルしました（完了 %d 件）",
+                       "%s cancelled (%d done)") % (verb, len(results)))
             else:
-                self.status_message.emit(f"{verb}完了: {len(results)} 件")
+                self.status_message.emit(
+                    tr("%s完了: %d 件", "%s finished: %d item(s)")
+                    % (verb, len(results)))
             self._check_current_gone_async()          # r98/r107
         self._run_file_op(verb, work, done, total=len(paths))
 

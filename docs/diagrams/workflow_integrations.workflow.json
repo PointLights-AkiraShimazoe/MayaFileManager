@@ -3,7 +3,8 @@
   "diagram_type": "workflow",
   "meta": {
     "title": "MayaFileManager: Git / SVN / Perforce と連携する",
-    "quality_profile": "showcase"
+    "quality_profile": "showcase",
+    "output": "workflow_integrations.html"
   },
   "lanes": [
     {

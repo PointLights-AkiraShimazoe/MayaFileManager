@@ -3,7 +3,8 @@
   "diagram_type": "workflow",
   "meta": {
     "title": "MayaFileManager: ファイルを Maya / Blender へ送る",
-    "quality_profile": "showcase"
+    "quality_profile": "showcase",
+    "output": "workflow.html"
   },
   "lanes": [
     {

@@ -157,7 +157,8 @@ class ArchiveColumn(QWidget):
         note = ""
         if ab.has_encrypted(self._entries):
             note = tr("／🔒パスワード付き（展開不可）", " / password protected")
-        self._title.setText("📦 %s（%d ファイル）%s" % (name, n_files, note))
+        self._title.setText(tr("📦 %s（%d ファイル）%s", "📦 %s (%d files)%s")
+                            % (name, n_files, note))
         self._title.setToolTip(self._archive)
         self._build_model()
         return True

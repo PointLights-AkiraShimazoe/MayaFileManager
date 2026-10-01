@@ -282,7 +282,9 @@ _BADGE_STYLE = {
 # PNG を resources/icons/badge_p4_*.png に配置）。
 #   チェックアウト中=赤チェック / 追加=赤プラス / 削除=赤× / 未同期=黄三角 /
 #   他者ロック=南京錠 / 他者チェックアウト=人＋チェック
-#   「最新」「デポに無い」は P4V 同様に無印。フォルダにも付けない。
+#   「デポに無い（未追跡）」は無印。フォルダにも付けない。
+# r118: 「無印」だと "サーバー管理外" と見分けが付かないという指摘を受け、
+#   最新（clean）には P4V 同様の小さな緑丸を付けることにした（文字なし）。
 _P4_BADGE_PNG = {
     "modified":   "badge_p4_edit",
     "added":      "badge_p4_add",
@@ -290,6 +292,10 @@ _P4_BADGE_PNG = {
     "outdated":   "badge_p4_outdated",
     "locked":     "badge_p4_locked",
     "other_open": "badge_p4_other",
+}
+# r118: PNG を持たないが丸で描く Perforce 状態（文字なし＝P4V の緑丸相当）
+_P4_BADGE_DOT = {
+    "clean": ("status_ok", "", ("デポにあり / 最新", "In depot / up to date")),
 }
 _BADGE_ICON_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resources", "icons")
@@ -319,7 +325,8 @@ def _badge_kind(provider_key: str, state: str, is_dir: bool):
             return None          # P4V 準拠: フォルダには状態を付けない
         stem = _P4_BADGE_PNG.get(state)
         if not stem:
-            return None          # clean / untracked は無印
+            dot = _P4_BADGE_DOT.get(state)   # r118: clean は緑丸
+            return ("dot", dot) if dot else None   # untracked は無印
         if _badge_pixmap(stem) is not None:
             return ("png", stem)
         style = _BADGE_STYLE.get(state)
@@ -369,11 +376,14 @@ def _on_integration_action_finished(ok: bool, label: str, msg: str):
 
 def _badge_tooltip(provider_key: str, state: str, is_dir: bool = False) -> str:
     from core.i18n import tr
-    style = _BADGE_STYLE.get(state)
+    if provider_key == "p4":
+        if is_dir:
+            return ""            # フォルダの Perforce 状態は fstat 直下のみで不正確
+        style = _P4_BADGE_DOT.get(state) or _BADGE_STYLE.get(state)
+    else:
+        style = _BADGE_STYLE.get(state)
     if not style:
         return ""
-    if provider_key == "p4" and is_dir:
-        return ""                # フォルダの Perforce 状態は fstat 直下のみで不正確
     names = {"git": "Git", "svn": "Subversion", "p4": "Perforce", "cloud": "Cloud"}
     return "%s: %s" % (names.get(provider_key, provider_key), tr(*style[2]))
 

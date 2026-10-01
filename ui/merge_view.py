@@ -15,6 +15,8 @@ from core.diag import swallow as _swallow  # r112
 
 import os
 
+from core.i18n import tr  # r118
+
 from core.compat import (
     Qt, Signal, QModelIndex, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QColumnView, QAbstractItemView, QFileInfo,
@@ -285,20 +287,23 @@ class MergePanel(QWidget):
         blay.setContentsMargins(4, 2, 4, 2)
         blay.setSpacing(3)
         self._label = QLabel("", bar)
-        self._label.setToolTip("マージ表示中のフォルダ")
-        self._tree_btn = QPushButton("ツリー", bar)
+        self._label.setToolTip(tr("マージ表示中のフォルダ", "Folders shown merged"))
+        self._tree_btn = QPushButton(tr("ツリー", "Tree"), bar)
         self._tree_btn.setCheckable(True)
         self._tree_btn.setFixedHeight(22)
-        self._tree_btn.setToolTip("同名フォルダを全階層で統合したツリーをブラウズ")
+        self._tree_btn.setToolTip(tr("同名フォルダを全階層で統合したツリーをブラウズ",
+                                     "Browse a tree that merges same-named folders at every level"))
         self._tree_btn.clicked.connect(lambda: self._set_mode("tree"))
-        self._flat_btn = QPushButton("平坦", bar)
+        self._flat_btn = QPushButton(tr("平坦", "Flat"), bar)
         self._flat_btn.setCheckable(True)
         self._flat_btn.setFixedHeight(22)
-        self._flat_btn.setToolTip("選択フォルダ以下の全ファイルを階層無視で一覧表示")
+        self._flat_btn.setToolTip(tr("選択フォルダ以下の全ファイルを階層無視で一覧表示",
+                                     "List every file below the selected folders, ignoring hierarchy"))
         self._flat_btn.clicked.connect(lambda: self._set_mode("flat"))
         self._back_btn = QPushButton("✕", bar)
         self._back_btn.setFixedSize(24, 22)
-        self._back_btn.setToolTip("マージ表示を閉じる（通常表示に戻る）")
+        self._back_btn.setToolTip(tr("マージ表示を閉じる（通常表示に戻る）",
+                                     "Close the merged view (back to normal)"))
         self._back_btn.clicked.connect(self.closed.emit)
         blay.addWidget(self._label, 1)
         blay.addWidget(self._tree_btn, 0)
@@ -316,8 +321,8 @@ class MergePanel(QWidget):
         self._sources = list(source_dirs)
         self._mode = mode if mode in ("tree", "flat") else "tree"
         names = ", ".join(os.path.basename(p.rstrip("/\\")) or p for p in source_dirs)
-        self._label.setText(f"⛓ {len(source_dirs)}フォルダ統合")
-        self._label.setToolTip("マージ元: " + names)
+        self._label.setText(tr("⛓ %dフォルダ統合", "⛓ %d folders merged") % len(source_dirs))
+        self._label.setToolTip(tr("マージ元: ", "Merged from: ") + names)
         self._rebuild()
 
     def _set_mode(self, mode):

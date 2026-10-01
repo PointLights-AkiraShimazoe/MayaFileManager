@@ -3,7 +3,8 @@
   "diagram_type": "workflow",
   "meta": {
     "title": "MayaFileManager: 起動してフォルダを見る",
-    "quality_profile": "showcase"
+    "quality_profile": "showcase",
+    "output": "workflow_startup.html"
   },
   "lanes": [
     {

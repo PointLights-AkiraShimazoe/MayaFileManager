@@ -4,6 +4,7 @@
 CappedColumnView: 深さ上限つき QColumnView。選択・D&D・カラム幅・
 表示モード切替など、カラム上の操作はすべてここに集約する。"""
 from core.diag import swallow as _swallow  # r112
+from core.i18n import tr  # r118
 
 import os
 
@@ -139,8 +140,7 @@ class _ColumnSizePopup(QFrame):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(8, 4, 8, 4)
         lay.setSpacing(6)
-        from core.i18n import tr
-        self._icon = QLabel("▦ 全体", self)
+        self._icon = QLabel(tr("▦ 全体", "▦ All"), self)
         self._slider = QSlider(Qt.Horizontal, self)
         self._slider.setFixedWidth(130)
         self._slider.setToolTip(tr("表示サイズ", "Item size"))
@@ -287,7 +287,8 @@ class _ColumnResizeHandle(QWidget):
         self.setFixedWidth(self.WIDTH)
         self.setCursor(Qt.SplitHCursor)
         self.setMouseTracking(True)
-        self.setToolTip("ドラッグで幅を変更 / ダブルクリックで内容に合わせる")
+        self.setToolTip(tr("ドラッグで幅を変更 / ダブルクリックで内容に合わせる",
+                           "Drag to resize / double-click to fit contents"))
 
     def enterEvent(self, e):
         self._hover = True
@@ -802,7 +803,6 @@ class CappedColumnView(QColumnView):
 
     @property
     def _SORT_KEYS(self):
-        from core.i18n import tr
         return [("name", tr("名前", "Name")), ("type", tr("種類", "Type")),
                 ("date", tr("日付", "Date")), ("size", tr("サイズ", "Size"))]
 
@@ -1013,7 +1013,6 @@ class CappedColumnView(QColumnView):
         row1 = QHBoxLayout()
         row1.setContentsMargins(0, 0, 0, 0)
         row1.setSpacing(3)
-        from core.i18n import tr
         edit = QLineEdit(hdr)
         edit.setPlaceholderText(tr("フィルタ", "Filter"))
         edit.setClearButtonEnabled(True)
@@ -1051,7 +1050,7 @@ class CappedColumnView(QColumnView):
         order_btn.setFixedSize(26, 20)
         order_btn.setChecked(not cur_asc)            # checked=降順
         order_btn.setText("▲" if cur_asc else "▼")
-        order_btn.setToolTip("昇順／降順")
+        order_btn.setToolTip(tr("昇順／降順", "Ascending / Descending"))
 
         def _apply_sort(p=folder_path, c=sort_combo, b=order_btn):
             key = c.currentData()
@@ -1117,7 +1116,6 @@ class CappedColumnView(QColumnView):
         «表示名が変わっている印» を兼ねる。ファイルが無ければ作らない
         （＝通常のフォルダでは一切コストが掛からない）。"""
         from core import display_names
-        from core.i18n import tr
         if not folder_path or not display_names.has_file(folder_path):
             view._mfm_dn_footer = None
             return

@@ -16,6 +16,8 @@ macOS Finder / OneCommander の Quick Look 相当。
 """
 
 import os
+
+from core.i18n import tr  # r118
 from datetime import datetime
 from pathlib import Path
 
@@ -91,7 +93,7 @@ class QuickLookWindow(QWidget):
         self._info_label.setAlignment(Qt.AlignCenter)
         self._stack.addWidget(self._info_label)           # index 2
 
-        hint = QLabel("Space / Esc で閉じる")
+        hint = QLabel(tr("Space / Esc で閉じる", "Space / Esc to close"))
         hint.setAlignment(Qt.AlignRight)
         layout.addWidget(hint)
 

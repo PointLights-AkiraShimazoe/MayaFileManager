@@ -19,6 +19,8 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from core.i18n import tr  # r118
+
 from core.compat import (
     Qt, Signal,
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QLineEdit, QListWidget, QAbstractItemView,
@@ -55,27 +57,27 @@ class NavItemRow(QWidget):
         up_btn = QToolButton()
         up_btn.setText("▲")
         up_btn.setFixedSize(24, 24)
-        up_btn.setToolTip("上へ")
+        up_btn.setToolTip(tr("上へ", "Move up"))
         up_btn.clicked.connect(lambda: self.move_up_requested.emit(self))
         layout.addWidget(up_btn)
 
         down_btn = QToolButton()
         down_btn.setText("▼")
         down_btn.setFixedSize(24, 24)
-        down_btn.setToolTip("下へ")
+        down_btn.setToolTip(tr("下へ", "Move down"))
         down_btn.clicked.connect(lambda: self.move_down_requested.emit(self))
         layout.addWidget(down_btn)
 
         # Label
-        layout.addWidget(QLabel("ラベル:"))
+        layout.addWidget(QLabel(tr("ラベル:", "Label:")))
         self._label_edit = QLineEdit(self._item.get("label", ""))
         self._label_edit.setFixedWidth(100)
-        self._label_edit.setPlaceholderText("ボタン名")
+        self._label_edit.setPlaceholderText(tr("ボタン名", "Button name"))
         self._label_edit.textChanged.connect(self._sync)
         layout.addWidget(self._label_edit)
 
         # Path
-        layout.addWidget(QLabel("パス:"))
+        layout.addWidget(QLabel(tr("パス:", "Path:")))
         self._path_edit = QLineEdit(self._item.get("path", ""))
         self._path_edit.setPlaceholderText("/path/to/directory")
         self._path_edit.textChanged.connect(self._sync)
@@ -138,7 +140,7 @@ class QuickNavPresetEditor(QDialog):
         self._current_preset: Optional[str] = None
         self._rows: List[NavItemRow] = []
 
-        self.setWindowTitle("クイックナビ プリセットエディタ")
+        self.setWindowTitle(tr("クイックナビ プリセットエディタ", "Quick Nav Preset Editor"))
         self.setMinimumSize(760, 500)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
@@ -162,22 +164,22 @@ class QuickNavPresetEditor(QDialog):
         ll.setContentsMargins(0, 0, 0, 0)
         ll.setSpacing(4)
 
-        ll.addWidget(QLabel("プリセット"))
+        ll.addWidget(QLabel(tr("プリセット", "Presets")))
         self._preset_list = QListWidget()
         self._preset_list.setSelectionMode(QAbstractItemView.SingleSelection)
         self._preset_list.currentRowChanged.connect(self._on_preset_selected)
         ll.addWidget(self._preset_list)
 
         btn_row = QHBoxLayout()
-        new_btn = QPushButton("✚ 新規")
+        new_btn = QPushButton(tr("✚ 新規", "✚ New"))
         new_btn.clicked.connect(self._new_preset)
         btn_row.addWidget(new_btn)
-        dup_btn = QPushButton("⧉ 複製")
+        dup_btn = QPushButton(tr("⧉ 複製", "⧉ Duplicate"))
         dup_btn.clicked.connect(self._duplicate_preset)
         btn_row.addWidget(dup_btn)
         ll.addLayout(btn_row)
 
-        del_btn = QPushButton("🗑 削除")
+        del_btn = QPushButton(tr("🗑 削除", "🗑 Delete"))
         del_btn.clicked.connect(self._delete_preset)
         ll.addWidget(del_btn)
 
@@ -191,7 +193,7 @@ class QuickNavPresetEditor(QDialog):
 
         # Preset name
         name_row = QHBoxLayout()
-        name_row.addWidget(QLabel("プリセット名:"))
+        name_row.addWidget(QLabel(tr("プリセット名:", "Preset name:")))
         self._name_edit = QLineEdit()
         # r63: 名前欄の Enter / フォーカス喪失で «その場で» 改名を反映する。
         # 従来は Enter がダイアログの既定ボタン（保存して閉じる）に流れて閉じて
@@ -204,7 +206,8 @@ class QuickNavPresetEditor(QDialog):
         name_row.addWidget(self._name_edit)
         rl.addLayout(name_row)
 
-        rl.addWidget(QLabel("ナビゲーションボタン （上から左ツールバーの順）:"))
+        rl.addWidget(QLabel(tr("ナビゲーションボタン （上から左ツールバーの順）:",
+                               "Navigation buttons (top to bottom = left toolbar order):")))
 
         # Item container
         self._items_container = QWidget()
@@ -221,14 +224,14 @@ class QuickNavPresetEditor(QDialog):
         scroll.setAcceptDrops(True)
         rl.addWidget(scroll)
 
-        add_item_btn = QPushButton("＋ ボタンを追加")
+        add_item_btn = QPushButton(tr("＋ ボタンを追加", "+ Add button"))
         # clicked(bool) の checked 引数が label に流れ込むのを防ぐ（lambdaで遮断）
         add_item_btn.clicked.connect(lambda _c=False: self._add_item())
         rl.addWidget(add_item_btn)
 
         # Quick-add standard directories
         quick_row = QHBoxLayout()
-        quick_row.addWidget(QLabel("クイック追加:"))
+        quick_row.addWidget(QLabel(tr("クイック追加:", "Quick add:")))
         for label, path_fn in [
             ("ホーム",      lambda: str(Path.home())),
             ("デスクトップ", lambda: str(Path.home() / "Desktop")),
@@ -244,11 +247,11 @@ class QuickNavPresetEditor(QDialog):
         # Buttons
         btn_row2 = QHBoxLayout()
         btn_row2.addStretch()
-        cancel_btn = QPushButton("キャンセル")
+        cancel_btn = QPushButton(tr("キャンセル", "Cancel"))
         cancel_btn.clicked.connect(self.reject)
         btn_row2.addWidget(cancel_btn)
 
-        save_btn = QPushButton("💾 保存して閉じる")
+        save_btn = QPushButton(tr("💾 保存して閉じる", "💾 Save and close"))
         # 既定ボタンにしない: 名前欄・ラベル欄・パス欄で Enter を押すたびに
         # ダイアログが閉じてしまうため（r63）
         save_btn.setDefault(False)
@@ -340,7 +343,9 @@ class QuickNavPresetEditor(QDialog):
         if not cur or not new_name or new_name == cur:
             return
         if new_name in self._presets:
-            QMessageBox.warning(self, "重複", "同名のプリセットが既に存在します。")
+            QMessageBox.warning(self, tr("重複", "Duplicate"),
+                                tr("同名のプリセットが既に存在します。",
+                                   "A preset with that name already exists."))
             self._name_edit.blockSignals(True)
             self._name_edit.setText(cur)
             self._name_edit.blockSignals(False)
@@ -351,12 +356,14 @@ class QuickNavPresetEditor(QDialog):
             it.setText(new_name)
 
     def _new_preset(self):
-        name, ok = QInputDialog.getText(self, "新しいプリセット", "プリセット名:")
+        name, ok = QInputDialog.getText(self, tr("新しいプリセット", "New Preset"), tr("プリセット名:", "Preset name:"))
         if not ok or not name.strip():
             return
         name = name.strip()
         if name in self._presets:
-            QMessageBox.warning(self, "重複", "同名のプリセットが既に存在します。")
+            QMessageBox.warning(self, tr("重複", "Duplicate"),
+                                tr("同名のプリセットが既に存在します。",
+                                   "A preset with that name already exists."))
             return
         self._presets[name] = []
         self._preset_list.addItem(name)
@@ -378,8 +385,9 @@ class QuickNavPresetEditor(QDialog):
     def _delete_preset(self):
         if not self._current_preset:
             return
-        ret = QMessageBox.question(self, "削除確認",
-                                   f"「{self._current_preset}」を削除しますか？",
+        ret = QMessageBox.question(self, tr("削除確認", "Confirm Delete"),
+                                   tr("「%s」を削除しますか？", "Delete \u201c%s\u201d?")
+                                   % self._current_preset,
                                    QMessageBox.Yes | QMessageBox.No)
         if ret != QMessageBox.Yes:
             return
@@ -459,7 +467,9 @@ class QuickNavPresetEditor(QDialog):
         new_name = self._name_edit.text().strip()
         if self._current_preset and new_name and new_name != self._current_preset:
             if new_name in self._presets:
-                QMessageBox.warning(self, "重複", "同名のプリセットが既に存在します。")
+                QMessageBox.warning(self, tr("重複", "Duplicate"),
+                                tr("同名のプリセットが既に存在します。",
+                                   "A preset with that name already exists."))
                 return
             self._apply_rename()
 

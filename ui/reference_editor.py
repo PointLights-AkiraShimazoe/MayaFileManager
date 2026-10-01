@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
+from core.i18n import tr  # r118
+
 from core.compat import (
     Qt, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QToolButton, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
@@ -131,12 +133,12 @@ class ReferenceEditor(QDialog):
         # ── Toolbar ───────────────────────────────────────────────────
         toolbar = QHBoxLayout()
 
-        refresh_btn = QPushButton("🔄 更新")
+        refresh_btn = QPushButton(tr("🔄 更新", "🔄 Refresh"))
         refresh_btn.clicked.connect(self._load_references)
         toolbar.addWidget(refresh_btn)
 
         if not self._inside_maya and not self._ma_file_path:
-            open_btn = QPushButton("📂 .ma ファイルを開く…")
+            open_btn = QPushButton(tr("📂 .ma ファイルを開く…", "📂 Open a .ma file..."))
             open_btn.clicked.connect(self._open_ma_file)
             toolbar.addWidget(open_btn)
 
@@ -159,9 +161,9 @@ class ReferenceEditor(QDialog):
         edit_layout = QGridLayout(edit_group)
         edit_layout.setSpacing(8)
 
-        edit_layout.addWidget(QLabel("ファイルパス:"), 0, 0)
+        edit_layout.addWidget(QLabel(tr("ファイルパス:", "File path:")), 0, 0)
         self._path_edit = QLineEdit()
-        self._path_edit.setPlaceholderText("リファレンスファイルのパス")
+        self._path_edit.setPlaceholderText(tr("リファレンスファイルのパス", "Path of the reference file"))
         edit_layout.addWidget(self._path_edit, 0, 1)
 
         browse_btn = QToolButton()
@@ -174,22 +176,22 @@ class ReferenceEditor(QDialog):
         self._ns_edit.setPlaceholderText("namespace")
         edit_layout.addWidget(self._ns_edit, 1, 1)
 
-        self._loaded_cb = QCheckBox("ロード済み")
+        self._loaded_cb = QCheckBox(tr("ロード済み", "Loaded"))
         edit_layout.addWidget(self._loaded_cb, 1, 2)
 
         # Action buttons
         action_row = QHBoxLayout()
-        self._apply_change_btn = QPushButton("✓ 変更を適用")
+        self._apply_change_btn = QPushButton(tr("✓ 変更を適用", "✓ Apply change"))
         self._apply_change_btn.setEnabled(False)
         self._apply_change_btn.clicked.connect(self._apply_change)
         action_row.addWidget(self._apply_change_btn)
 
-        self._reload_btn = QPushButton("↺ リロード")
+        self._reload_btn = QPushButton(tr("↺ リロード", "↺ Reload"))
         self._reload_btn.setEnabled(False)
         self._reload_btn.clicked.connect(self._reload_reference)
         action_row.addWidget(self._reload_btn)
 
-        self._remove_btn = QPushButton("🗑 削除")
+        self._remove_btn = QPushButton(tr("🗑 削除", "🗑 Remove"))
         self._remove_btn.setEnabled(False)
         self._remove_btn.setStyleSheet("color:%(error)s;" % _tv())
         self._remove_btn.clicked.connect(self._remove_reference)
@@ -216,9 +218,10 @@ class ReferenceEditor(QDialog):
         # ── Footer ────────────────────────────────────────────────────
         footer = QHBoxLayout()
         if not self._inside_maya:
-            footer.addWidget(QLabel("⚠ Maya外ではファイルパス変更のみ可能（.ma ファイルのテキスト編集）"))
+            footer.addWidget(QLabel(tr("⚠ Maya外ではファイルパス変更のみ可能（.ma ファイルのテキスト編集）",
+                                   "⚠ Outside Maya only the file path can be changed (text edit of the .ma)")))
         footer.addStretch()
-        close_btn = QPushButton("閉じる")
+        close_btn = QPushButton(tr("閉じる", "Close"))
         close_btn.clicked.connect(self.close)
         footer.addWidget(close_btn)
         root.addLayout(footer)
@@ -238,7 +241,9 @@ class ReferenceEditor(QDialog):
         self._table.populate(self._entries)
         count = len(self._entries)
         loaded = sum(1 for e in self._entries if e.loaded)
-        self._status_label.setText(f"{count} 件  （ロード: {loaded}  アンロード: {count - loaded}）")
+        self._status_label.setText(
+            tr("%d 件  （ロード: %d  アンロード: %d）",
+               "%d item(s)  (loaded: %d  unloaded: %d)") % (count, loaded, count - loaded))
 
         if self._raw_text and self._ma_file_path:
             self._raw_text.setPlainText(self._build_raw_text())
@@ -258,7 +263,9 @@ class ReferenceEditor(QDialog):
                     _swallow(_e, "ui/reference_editor.py:256 _load_from_maya")
             return entries
         except Exception as e:
-            QMessageBox.warning(self, "エラー", f"Maya からの読み込みに失敗: {e}")
+            QMessageBox.warning(self, tr("エラー", "Error"),
+                                tr("Maya からの読み込みに失敗: %s",
+                                   "Failed to read from Maya: %s") % e)
             return []
 
     @staticmethod
@@ -366,7 +373,7 @@ class ReferenceEditor(QDialog):
 
             self._load_references()
         except Exception as e:
-            QMessageBox.critical(self, "エラー", str(e))
+            QMessageBox.critical(self, tr("エラー", "Error"), str(e))
 
     def _reload_reference(self):
         if not self._inside_maya:
@@ -380,7 +387,7 @@ class ReferenceEditor(QDialog):
             cmds.file(loadReference=entry.ref_node)
             self._load_references()
         except Exception as e:
-            QMessageBox.critical(self, "リロードエラー", str(e))
+            QMessageBox.critical(self, tr("リロードエラー", "Reload Error"), str(e))
 
     def _remove_reference(self):
         row = self._table.currentRow()
@@ -402,17 +409,18 @@ class ReferenceEditor(QDialog):
                 cmds.file(removeReference=True, referenceNode=entry.ref_node)
                 self._load_references()
             except Exception as e:
-                QMessageBox.critical(self, "エラー", str(e))
+                QMessageBox.critical(self, tr("エラー", "Error"), str(e))
         else:
             # Standalone: edit .ma file text
             if not self._ma_file_path:
-                QMessageBox.warning(self, "エラー", ".ma ファイルが開かれていません。")
+                QMessageBox.warning(self, tr("エラー", "Error"),
+                                tr(".ma ファイルが開かれていません。", "No .ma file is open."))
                 return
             try:
                 self._remove_from_ma_file(entry)
                 self._load_references()
             except Exception as e:
-                QMessageBox.critical(self, "ファイル編集エラー", str(e))
+                QMessageBox.critical(self, tr("ファイル編集エラー", "File Edit Error"), str(e))
 
     def _remove_from_ma_file(self, entry: ReferenceEntry):
         """Best-effort removal of the reference block from .ma text."""
@@ -445,7 +453,8 @@ class ReferenceEditor(QDialog):
         )
         if path:
             self._ma_file_path = path
-            self.setWindowTitle(f"リファレンス エディタ  —  {Path(path).name}")
+            self.setWindowTitle(tr("リファレンス エディタ  —  %s", "Reference Editor  —  %s")
+                            % Path(path).name)
             self._load_references()
 
     # ------------------------------------------------------------------

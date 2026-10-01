@@ -19,6 +19,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from core.i18n import tr  # r118
+
 from core.compat import (
     Qt, Signal,
     QWidget, QVBoxLayout, QHBoxLayout,
@@ -134,9 +136,9 @@ class DuplicateFolderPanel(QWidget):
         # ── Toolbar ───────────────────────────────────────────────────
         tb = QHBoxLayout()
 
-        tb.addWidget(QLabel("スキャン対象:"))
+        tb.addWidget(QLabel(tr("スキャン対象:", "Scan root:")))
         self._root_edit = QLineEdit()
-        self._root_edit.setPlaceholderText("スキャンするルートディレクトリ")
+        self._root_edit.setPlaceholderText(tr("スキャンするルートディレクトリ", "Root directory to scan"))
         tb.addWidget(self._root_edit)
 
         browse_btn = QToolButton()
@@ -144,21 +146,21 @@ class DuplicateFolderPanel(QWidget):
         browse_btn.clicked.connect(self._browse_root)
         tb.addWidget(browse_btn)
 
-        tb.addWidget(QLabel("深度:"))
+        tb.addWidget(QLabel(tr("深度:", "Depth:")))
         self._depth_spin = QSpinBox()
         self._depth_spin.setRange(1, 20)
         self._depth_spin.setValue(6)
         self._depth_spin.setFixedWidth(55)
         tb.addWidget(self._depth_spin)
 
-        tb.addWidget(QLabel("最低重複数:"))
+        tb.addWidget(QLabel(tr("最低重複数:", "Min duplicates:")))
         self._min_spin = QSpinBox()
         self._min_spin.setRange(2, 99)
         self._min_spin.setValue(2)
         self._min_spin.setFixedWidth(50)
         tb.addWidget(self._min_spin)
 
-        self._scan_btn = QPushButton("🔍 スキャン")
+        self._scan_btn = QPushButton(tr("🔍 スキャン", "🔍 Scan"))
         self._scan_btn.setStyleSheet(
             "QPushButton { background:%(primary)s; color:%(on_primary)s;"
             " font-weight:%(w_strong)s; border:1px solid %(primary)s;"
@@ -177,11 +179,11 @@ class DuplicateFolderPanel(QWidget):
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("🔍"))
         self._filter_edit = QLineEdit()
-        self._filter_edit.setPlaceholderText("フォルダ名でフィルタ…")
+        self._filter_edit.setPlaceholderText(tr("フォルダ名でフィルタ…", "Filter by folder name..."))
         self._filter_edit.textChanged.connect(self._apply_filter)
         filter_row.addWidget(self._filter_edit)
 
-        self._count_label = QLabel("0 件")
+        self._count_label = QLabel(tr("0 件", "0 items"))
         self._count_label.setStyleSheet(
             "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
         filter_row.addWidget(self._count_label)
@@ -205,7 +207,8 @@ class DuplicateFolderPanel(QWidget):
         layout.addWidget(self._tree)
 
         # Status
-        self._status_label = QLabel("スキャンするディレクトリを指定してください")
+        self._status_label = QLabel(tr("スキャンするディレクトリを指定してください",
+                                       "Choose a directory to scan"))
         self._status_label.setStyleSheet(
             "color:%(on_surface_dim)s;font-size:%(label_px)spx;padding:2px;" % _tv())
         layout.addWidget(self._status_label)
@@ -215,7 +218,7 @@ class DuplicateFolderPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _browse_root(self):
-        d = QFileDialog.getExistingDirectory(self, "スキャン対象を選択",
+        d = QFileDialog.getExistingDirectory(self, tr("スキャン対象を選択", "Select Scan Root"),
                                              self._root_edit.text() or str(Path.home()))
         if d:
             self._root_edit.setText(d)
@@ -227,7 +230,9 @@ class DuplicateFolderPanel(QWidget):
     def _start_scan(self):
         root = self._root_edit.text().strip()
         if not root or not os.path.isdir(root):
-            QMessageBox.warning(self, "エラー", "有効なディレクトリを指定してください。")
+            QMessageBox.warning(self, tr("エラー", "Error"),
+                                tr("有効なディレクトリを指定してください。",
+                                   "Specify a valid directory."))
             return
 
         if self._scanner and self._scanner.isRunning():
@@ -235,7 +240,7 @@ class DuplicateFolderPanel(QWidget):
             self._scanner.wait()
 
         self._tree.clear()
-        self._status_label.setText("スキャン中...")
+        self._status_label.setText(tr("スキャン中...", "Scanning..."))
         self._scan_btn.setEnabled(False)
 
         self._scanner = FolderScanner(
@@ -244,7 +249,8 @@ class DuplicateFolderPanel(QWidget):
             min_duplicates=self._min_spin.value(),
         )
         self._scanner.finished.connect(self._on_scan_finished)
-        self._scanner.progress.connect(lambda n: self._status_label.setText(f"スキャン中… {n} ディレクトリ"))
+        self._scanner.progress.connect(lambda n: self._status_label.setText(
+            tr("スキャン中… %d ディレクトリ", "Scanning... %d directories") % n))
         self._scanner.start()
 
     def _on_scan_finished(self, data: Dict[str, List[str]]):
@@ -313,7 +319,7 @@ class DuplicateFolderPanel(QWidget):
             root_item.setExpanded(True)
             shown += 1
 
-        self._count_label.setText(f"{shown} 件")
+        self._count_label.setText(tr("%d 件", "%d items") % shown)
 
     def _apply_filter(self, text: str):
         self._populate_tree(self._data, filter_text=text)
@@ -343,38 +349,38 @@ class DuplicateFolderPanel(QWidget):
             return
 
         menu = QMenu(self)
-        nav_act = menu.addAction("🗂 ここへ移動")
+        nav_act = menu.addAction(tr("🗂 ここへ移動", "🗂 Go here"))
         nav_act.triggered.connect(lambda: self.navigate_requested.emit(paths[0]))
 
-        reveal_act = menu.addAction("📁 エクスプローラーで表示")
+        reveal_act = menu.addAction(tr("📁 エクスプローラーで表示", "📁 Reveal in Explorer"))
         reveal_act.triggered.connect(lambda: reveal_in_explorer(paths[0]))
 
         menu.addSeparator()
 
-        copy_act = menu.addAction("📋 コピー...")
+        copy_act = menu.addAction(tr("📋 コピー...", "📋 Copy..."))
         copy_act.triggered.connect(lambda: self._copy_paths(paths))
 
-        move_act = menu.addAction("✂ 移動...")
+        move_act = menu.addAction(tr("✂ 移動...", "✂ Move..."))
         move_act.triggered.connect(lambda: self._move_paths(paths))
 
         menu.exec_(self._tree.viewport().mapToGlobal(pos))
 
     def _copy_paths(self, paths: List[str]):
-        dst = QFileDialog.getExistingDirectory(self, "コピー先を選択")
+        dst = QFileDialog.getExistingDirectory(self, tr("コピー先を選択", "Select Copy Destination"))
         if not dst:
             return
         try:
             copy_items(paths, dst)
-            self._status_label.setText(f"{len(paths)} 件コピー完了")
+            self._status_label.setText(tr("%d 件コピー完了", "Copied %d item(s)") % len(paths))
         except FileOperationError as e:
-            QMessageBox.critical(self, "エラー", str(e))
+            QMessageBox.critical(self, tr("エラー", "Error"), str(e))
 
     def _move_paths(self, paths: List[str]):
-        dst = QFileDialog.getExistingDirectory(self, "移動先を選択")
+        dst = QFileDialog.getExistingDirectory(self, tr("移動先を選択", "Select Move Destination"))
         if not dst:
             return
         try:
             move_items(paths, dst)
-            self._status_label.setText(f"{len(paths)} 件移動完了")
+            self._status_label.setText(tr("%d 件移動完了", "Moved %d item(s)") % len(paths))
         except FileOperationError as e:
-            QMessageBox.critical(self, "エラー", str(e))
+            QMessageBox.critical(self, tr("エラー", "Error"), str(e))

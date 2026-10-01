@@ -80,10 +80,10 @@ class HistoryPanel(QWidget):
 
         header = QHBoxLayout()
         header.setContentsMargins(4, 4, 4, 4)
-        header.addWidget(QLabel("🕐 履歴"))
+        header.addWidget(QLabel(tr("🕐 履歴", "🕐 History")))
         header.addStretch()
         clr_btn = QToolButton()
-        clr_btn.setText("クリア")
+        clr_btn.setText(tr("クリア", "Clear"))
         clr_btn.clicked.connect(self._clear_history)
         header.addWidget(clr_btn)
         layout.addLayout(header)
@@ -192,7 +192,7 @@ class QuickNavBar(QWidget):
 
         edit_btn = QToolButton()
         edit_btn.setText("⚙")
-        edit_btn.setToolTip("クイックナビを編集")
+        edit_btn.setToolTip(tr("クイックナビを編集", "Edit Quick Nav"))
         edit_btn.clicked.connect(self._edit_presets)
         layout.addWidget(edit_btn)
 

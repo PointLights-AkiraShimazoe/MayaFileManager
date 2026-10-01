@@ -14,6 +14,8 @@ Settings Dialog
 
 from typing import Dict, List
 
+from core.i18n import tr  # r118
+
 from core.compat import (
     Qt, Signal,
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
@@ -77,10 +79,10 @@ class ExtensionListWidget(QWidget):
         self._add_edit.setPlaceholderText(".usd")
         self._add_edit.setFixedWidth(80)
         add_row.addWidget(self._add_edit)
-        add_btn = QPushButton("追加")
+        add_btn = QPushButton(tr("追加", "Add"))
         add_btn.clicked.connect(self._add_ext)
         add_row.addWidget(add_btn)
-        del_btn = QPushButton("削除")
+        del_btn = QPushButton(tr("削除", "Delete"))
         del_btn.clicked.connect(self._del_selected)
         add_row.addWidget(del_btn)
         add_row.addStretch()
@@ -141,7 +143,7 @@ class AutoNamingRuleRow(QFrame):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
 
-        layout.addWidget(QLabel("ディレクトリ:"), 0, 0)
+        layout.addWidget(QLabel(tr("ディレクトリ:", "Directory:")), 0, 0)
         self._dir_edit = QLineEdit(directory)
         self._dir_edit.setPlaceholderText("/projects/CHR")
         layout.addWidget(self._dir_edit, 0, 1)
@@ -156,7 +158,7 @@ class AutoNamingRuleRow(QFrame):
         del_btn.clicked.connect(lambda: self.remove_requested.emit(self))
         layout.addWidget(del_btn, 0, 3)
 
-        layout.addWidget(QLabel("テンプレート:"), 1, 0)
+        layout.addWidget(QLabel(tr("テンプレート:", "Template:")), 1, 0)
         self._tmpl_edit = QLineEdit(self._rule.get("template", "{seq:04d}"))
         self._tmpl_edit.setToolTip(
             "利用可能トークン:\n"
@@ -166,7 +168,7 @@ class AutoNamingRuleRow(QFrame):
         )
         layout.addWidget(self._tmpl_edit, 1, 1)
 
-        layout.addWidget(QLabel("開始番号:"), 1, 2)
+        layout.addWidget(QLabel(tr("開始番号:", "Start number:")), 1, 2)
         self._start_spin = QSpinBox()
         self._start_spin.setRange(0, 99999)
         self._start_spin.setValue(self._rule.get("seq_start", 1))
@@ -199,7 +201,7 @@ class SettingsDialog(QDialog):
     def __init__(self, settings_manager, parent=None):
         super().__init__(parent)
         self._sm = settings_manager
-        self.setWindowTitle("設定")
+        self.setWindowTitle(tr("設定", "Settings"))
         self.setMinimumSize(640, 520)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self._auto_naming_rows: List[AutoNamingRuleRow] = []
@@ -218,21 +220,21 @@ class SettingsDialog(QDialog):
         self._tabs = QTabWidget()
         root.addWidget(self._tabs)
 
-        self._tabs.addTab(self._tab_general(),     "一般")
-        self._tabs.addTab(self._tab_browser(),     "ブラウザ")
-        self._tabs.addTab(self._tab_history(),     "履歴 / ブックマーク")
+        self._tabs.addTab(self._tab_general(),     tr("一般", "General"))
+        self._tabs.addTab(self._tab_browser(),     tr("ブラウザ", "Browser"))
+        self._tabs.addTab(self._tab_history(),     tr("履歴 / ブックマーク", "History / Bookmarks"))
         self._tabs.addTab(self._tab_maya(),        "Maya")
-        self._tabs.addTab(self._tab_auto_naming(), "自動命名")
+        self._tabs.addTab(self._tab_auto_naming(), tr("自動命名", "Auto Naming"))
 
         # ── Bottom buttons ────────────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        reset_btn = QPushButton("デフォルトに戻す")
+        reset_btn = QPushButton(tr("デフォルトに戻す", "Restore Defaults"))
         reset_btn.clicked.connect(self._reset_defaults)
         btn_row.addWidget(reset_btn)
 
-        cancel_btn = QPushButton("キャンセル")
+        cancel_btn = QPushButton(tr("キャンセル", "Cancel"))
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
 
@@ -241,7 +243,7 @@ class SettingsDialog(QDialog):
         ok_btn.clicked.connect(self._apply_and_close)
         btn_row.addWidget(ok_btn)
 
-        apply_btn = QPushButton("適用")
+        apply_btn = QPushButton(tr("適用", "Apply"))
         apply_btn.clicked.connect(self._apply)
         btn_row.addWidget(apply_btn)
 
@@ -254,7 +256,6 @@ class SettingsDialog(QDialog):
         layout = QFormLayout(w)
         layout.setSpacing(8)
 
-        from core.i18n import tr
         layout.addRow(_SectionLabel(tr("言語 / Language", "Language")))
         self._lang_combo = QComboBox()
         self._lang_combo.addItems([
@@ -301,7 +302,7 @@ class SettingsDialog(QDialog):
         layout.addRow(_HLine())
         layout.addRow(_SectionLabel("表示"))
 
-        self._show_hidden_cb = QCheckBox("隠しファイルを表示")
+        self._show_hidden_cb = QCheckBox(tr("隠しファイルを表示", "Show hidden files"))
         layout.addRow("", self._show_hidden_cb)
 
         return w
@@ -322,7 +323,8 @@ class SettingsDialog(QDialog):
         self._col_depth_spin.setRange(1, 12)
         self._col_depth_spin.setVisible(False)
 
-        self._col_auto_width_cb = QCheckBox("カラム幅を最大文字数に合わせる")
+        self._col_auto_width_cb = QCheckBox(tr("カラム幅を最大文字数に合わせる",
+                                               "Fit column width to the longest name"))
         layout.addRow("", self._col_auto_width_cb)
 
         layout.addRow(_HLine())
@@ -337,7 +339,7 @@ class SettingsDialog(QDialog):
         self._thumb_cache_spin = QSpinBox()
         self._thumb_cache_spin.setRange(16, 2048)
         self._thumb_cache_spin.setSingleStep(32)
-        self._thumb_cache_spin.setSuffix(" 件")
+        self._thumb_cache_spin.setSuffix(tr(" 件", " items"))
         layout.addRow("キャッシュ件数:", self._thumb_cache_spin)
 
         layout.addRow(_HLine())
@@ -361,7 +363,7 @@ class SettingsDialog(QDialog):
 
         self._history_max_spin = QSpinBox()
         self._history_max_spin.setRange(5, 1000)
-        self._history_max_spin.setSuffix(" 件")
+        self._history_max_spin.setSuffix(tr(" 件", " items"))
         layout.addRow("保持件数:", self._history_max_spin)
 
         self._history_per_maya_cb = QCheckBox(
@@ -391,7 +393,8 @@ class SettingsDialog(QDialog):
         layout.addRow(_SectionLabel("起動"))
 
         self._maya_args_edit = QLineEdit()
-        self._maya_args_edit.setPlaceholderText("-batch など（スペース区切り）")
+        self._maya_args_edit.setPlaceholderText(tr("-batch など（スペース区切り）",
+                                                   "e.g. -batch (space separated)"))
         layout.addRow("追加引数:", self._maya_args_edit)
 
         self._last_maya_ver_edit = QLineEdit()
@@ -408,7 +411,7 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(w)
         layout.setSpacing(6)
 
-        self._auto_naming_enabled_cb = QCheckBox("自動命名を有効にする")
+        self._auto_naming_enabled_cb = QCheckBox(tr("自動命名を有効にする", "Enable auto naming"))
         layout.addWidget(self._auto_naming_enabled_cb)
 
         info = QLabel(
@@ -433,7 +436,7 @@ class SettingsDialog(QDialog):
         scroll.setWidgetResizable(True)
         layout.addWidget(scroll)
 
-        add_btn = QPushButton("＋ ルールを追加")
+        add_btn = QPushButton(tr("＋ ルールを追加", "+ Add rule"))
         # clicked(bool) の checked 引数が directory に流れ込むのを防ぐ
         add_btn.clicked.connect(lambda _c=False: self._add_naming_rule())
         layout.addWidget(add_btn)

@@ -930,7 +930,7 @@ class MainWindowDccMixin:
             self._maya_local_log(act, path, "done")
         except Exception as e:
             self._maya_local_log(act, path, "fail", str(e))
-            QMessageBox.critical(self, "エラー", str(e))
+            QMessageBox.critical(self, tr("エラー", "Error"), str(e))
 
     def _maya_import(self, path: str):
         if not self._inside_maya:
@@ -983,7 +983,7 @@ class MainWindowDccMixin:
             self._maya_local_log(act, path, "done")
         except Exception as e:
             self._maya_local_log(act, path, "fail", str(e))
-            QMessageBox.critical(self, "インポートエラー", str(e))
+            QMessageBox.critical(self, tr("インポートエラー", "Import Error"), str(e))
 
     def _on_maya_drop(self, action: str, paths, app: str = None):
         """ブラウザから Maya/Blender のウィンドウへD&Dされた時のアクション実行。
@@ -1152,7 +1152,7 @@ class MainWindowDccMixin:
                 raise
             self._maya_local_log(act, path, "done")
         except Exception as e:
-            QMessageBox.critical(self, "リファレンスエラー", str(e))
+            QMessageBox.critical(self, tr("リファレンスエラー", "Reference Error"), str(e))
 
     # ------------------------------------------------------------------
     # Maya version (standalone)
@@ -1170,7 +1170,9 @@ class MainWindowDccMixin:
     def _launch_maya(self):
         inst = self._maya_inst
         if not inst:
-            QMessageBox.warning(self, "エラー", "Maya バージョンが選択されていません。")
+            QMessageBox.warning(self, tr("エラー", "Error"),
+                                tr("Maya バージョンが選択されていません。",
+                                   "No Maya version is selected."))
             return
         try:
             # 連携用 commandPort 付きで起動（スタンドアロンから開く/インポート/
