@@ -79,14 +79,31 @@ def _cursor_over_dcc_window():
 
 
 # ---------------------------------------------------------------------------
-# 起動タイムライン（初回読み込みの所要時間調査用・常時有効）
-# 出力先: ツールフォルダ直下の mfm_startup.log（起動ごとに上書き）
+# 起動タイムライン・フリーズ記録・UI操作ログ（常時有効のもの）
+#
+# 【重要】出力先は **ユーザープロファイル直下**（~/.maya_file_manager/logs）。
+# r117: 以前はツールフォルダ直下（= ツールを置いたドライブ）に書いていたが、
+# **そのドライブが応答しなくなると、記録しようとした書き込み自体がブロック
+# される**。2026-10-01 に D: が無応答になった際、UI は固まっているのに
+# mfm_freeze.log へ 1 行も残らず、原因を特定できなかった。
+# 監視ログは «監視対象と別のディスク» に置く。
 # ---------------------------------------------------------------------------
 import time as _time_mod
 _MFM_T0 = _time_mod.monotonic()
-_MFM_STARTUP_LOG = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "mfm_startup.log")
+
+
+def _log_dir() -> str:
+    """ログの置き場所。ホーム直下に作れなければツールフォルダへ退避する。"""
+    try:
+        d = os.path.join(os.path.expanduser("~"), ".maya_file_manager", "logs")
+        os.makedirs(d, exist_ok=True)
+        return d
+    except OSError:
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+_MFM_LOG_DIR = _log_dir()
+_MFM_STARTUP_LOG = os.path.join(_MFM_LOG_DIR, "mfm_startup.log")
 try:
     with open(_MFM_STARTUP_LOG, "w", encoding="utf-8") as _f:
         _f.write("=== MayaFileManager 起動タイムライン ===\n")
@@ -94,8 +111,7 @@ except OSError:
     pass
 
 
-_MFM_FREEZE_LOG = os.path.join(os.path.dirname(_MFM_STARTUP_LOG),
-                               "mfm_freeze.log")
+_MFM_FREEZE_LOG = os.path.join(_MFM_LOG_DIR, "mfm_freeze.log")
 
 
 import re as _re_mod
@@ -217,7 +233,7 @@ def _mfm_slow_note(msg: str):
         pass
 
 
-_MFM_UI_LOG = os.path.join(os.path.dirname(_MFM_STARTUP_LOG), "mfm_ui.log")
+_MFM_UI_LOG = os.path.join(_MFM_LOG_DIR, "mfm_ui.log")
 # r109: 既定オフ。クリック・ドラッグのたびにファイルへ書いていたため、
 # 操作のたびに同期 I/O が走っていた（調査用の常時ログは平時は不要）。
 # 切り分けが要る時だけ MFM_UILOG=1 で有効にする。

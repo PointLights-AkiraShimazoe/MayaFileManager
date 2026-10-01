@@ -342,16 +342,18 @@ class MainWindowDccMixin:
 
     def _install_freeze_watchdog(self):
         """常時有効: UIスレッドが1.5秒以上止まったら、その瞬間のメインスレッドの
-        スタックを記録する（フリーズ原因の特定用）。出力先はツールフォルダ直下の
-        mfm_freeze.log（+ MFM_DEBUG時は mfm_debug.log にも）。"""
+        スタックを記録する（フリーズ原因の特定用）。
+
+        出力先は **ユーザープロファイル直下**（~/.maya_file_manager/logs）。
+        r117: 以前はツールフォルダ直下に書いていたため、**ツールを置いた
+        ドライブが無応答になると記録そのものがブロック**され、肝心な時に
+        何も残らなかった（2026-10-01、D: 無応答時に実際に発生）。"""
         import threading
         import time as _time
         import sys as _sys
         import traceback as _tb
-        from ui.browser_panel import _mfm_log
-        freeze_log = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "mfm_freeze.log")
+        from ui.browser_panel import _mfm_log, _MFM_FREEZE_LOG
+        freeze_log = _MFM_FREEZE_LOG
 
         def _dump(text):
             try:
