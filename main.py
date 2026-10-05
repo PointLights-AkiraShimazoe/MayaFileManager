@@ -391,38 +391,74 @@ _REQUIRED_MODULES = [
 ]
 
 
-def selfcheck() -> int:
+def selfcheck(out_path: str = "") -> int:
     """必要なモジュールが «この実行形態で» 全部読めるかを確かめる。
-    0=すべて揃っている / 1=欠けがある（CI はここで落とす）。"""
+    0=すべて揃っている / 1=欠けがある（CI はここで落とす）。
+
+    【重要】この EXE は **ウィンドウアプリ（console=False）** としてビルド
+    される。その形態では sys.stdout / sys.stderr が無い（None）ので、
+    print() はそれ自体が落ちる。結果は **必ずファイルへ** 書き、標準出力へは
+    «書ければ書く» に留める。未処理例外もメッセージボックスで CI を
+    止めてしまうので、ここで全部受け止める（2026-10-05 実機）。
+    """
     import importlib
     import traceback
-    missing = []
-    for name in _REQUIRED_MODULES:
-        try:
-            importlib.import_module(name)
-        except Exception as e:
-            missing.append((name, repr(e), traceback.format_exc()))
-    # 連携プロバイダが 4 種そろっているか（import だけでなく実体で確認）
-    try:
-        from core.integrations import get_manager
-        keys = sorted(p.key for p in get_manager().providers)
-        if keys != ["cloud", "git", "p4", "svn"]:
-            missing.append(("integrations.providers",
-                            "プロバイダが揃っていない: %r" % (keys,), ""))
-    except Exception as e:
-        missing.append(("integrations.providers", repr(e),
-                        __import__("traceback").format_exc()))
+    lines = []
 
-    if missing:
-        print("[selfcheck] 欠けている機能があります（%d 件）" % len(missing))
-        for name, err, tb in missing:
-            print("  - %s: %s" % (name, err))
-            if tb:
-                print("    " + tb.replace("\n", "\n    ").rstrip())
-        return 1
-    print("[selfcheck] OK — 必要なモジュール %d 件すべて読み込めました"
-          % len(_REQUIRED_MODULES))
-    return 0
+    def say(text):
+        lines.append(text)
+        try:
+            if sys.stdout is not None:
+                sys.stdout.write(text + "\n")
+        except Exception:
+            pass
+
+    code = 1
+    try:
+        missing = []
+        for name in _REQUIRED_MODULES:
+            try:
+                importlib.import_module(name)
+            except Exception as e:
+                missing.append((name, repr(e), traceback.format_exc()))
+        # 連携プロバイダが 4 種そろっているか（import だけでなく実体で確認）
+        try:
+            from core.integrations import get_manager
+            keys = sorted(p.key for p in get_manager().providers)
+            if keys != ["cloud", "git", "p4", "svn"]:
+                missing.append(("integrations.providers",
+                                "プロバイダが揃っていない: %r" % (keys,), ""))
+        except Exception as e:
+            missing.append(("integrations.providers", repr(e),
+                            traceback.format_exc()))
+
+        if missing:
+            say("[selfcheck] NG — 欠けている機能があります（%d 件）"
+                % len(missing))
+            for name, err, tb in missing:
+                say("  - %s: %s" % (name, err))
+                if tb:
+                    say("    " + tb.replace("\n", "\n    ").rstrip())
+            code = 1
+        else:
+            say("[selfcheck] OK — 必要なモジュール %d 件すべて読み込めました"
+                % len(_REQUIRED_MODULES))
+            code = 0
+    except BaseException as e:            # noqa: BLE001 — CI を止めない
+        say("[selfcheck] NG — セルフチェック自体が落ちました: %r" % (e,))
+        try:
+            say(traceback.format_exc())
+        except Exception:
+            pass
+        code = 1
+
+    if out_path:
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception:
+            pass
+    return code
 
 
 # ---------------------------------------------------------------------------
@@ -440,9 +476,12 @@ if __name__ == "__main__":
     parser.add_argument("--selfcheck", action="store_true",
                         help="画面を出さずに «機能が揃っているか» だけ検査して終了"
                              "（CI がビルドした EXE に対して実行する）")
+    parser.add_argument("--selfcheck-out", default="",
+                        help="セルフチェックの結果を書き出すファイル。"
+                             "ウィンドウアプリでは標準出力が無いので CI はこれを読む")
     args = parser.parse_args()
 
     if args.selfcheck:
-        raise SystemExit(selfcheck())
+        raise SystemExit(selfcheck(args.selfcheck_out))
 
     run_standalone(skip_launcher=args.no_launcher)

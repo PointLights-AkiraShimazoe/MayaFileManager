@@ -131,14 +131,25 @@ jobs:
       - name: Self-check the built EXE
         shell: pwsh
         run: |
-          $out = & "dist\MayaFileManager.exe" --selfcheck 2>&1
-          $code = $LASTEXITCODE
-          $out | ForEach-Object { Write-Host $_ }
-          if ($code -ne 0) {
-            Write-Error "EXE のセルフチェックに失敗しました（機能が欠けています）。リリースは作りません。"
+          # この EXE は console=False（ウィンドウアプリ）なので、
+          #  * 標準出力が存在しない   → 結果はファイルで受け取る
+          #  * & 演算子では終了を待たない／終了コードが当てにならない
+          #    → Start-Process -Wait -PassThru を使う
+          $report = Join-Path $PWD "selfcheck.txt"
+          if (Test-Path $report) { Remove-Item $report -Force }
+          $p = Start-Process -FilePath "dist\MayaFileManager.exe" `
+                 -ArgumentList "--selfcheck","--selfcheck-out","$report" `
+                 -Wait -PassThru
+          if (Test-Path $report) {
+            Get-Content $report -Encoding UTF8 | ForEach-Object { Write-Host $_ }
+          } else {
+            Write-Host "（結果ファイルが作られませんでした: $report）"
+          }
+          if ($p.ExitCode -ne 0) {
+            Write-Error "EXE のセルフチェックに失敗しました（終了コード $($p.ExitCode)）。機能が欠けているのでリリースは作りません。"
             exit 1
           }
-          Write-Host "✓ セルフチェック OK（EXE に機能の欠けなし）"
+          Write-Host "OK - セルフチェック成功（EXE に機能の欠けなし）"
 
       # --------------------------------------------------------
       # 6.5. Inno Setup でインストーラーを生成
