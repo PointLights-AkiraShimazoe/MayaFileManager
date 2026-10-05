@@ -260,9 +260,79 @@ class P4Provider(Provider):
                     "p4passwd", "access for user", "not opened on this client",
                     "file(s) not on client")
 
+    # r121: «やることが無かった» だけの行。フォルダ一括では必ず混ざる。
+    # 例: 既に追加済みのファイルが含まれる / 既にチェックアウト済み。
+    # これを失敗扱いにしていたため、フォルダへの操作が常に
+    # 「失敗しました」で終わっていた（ユーザー報告 2026-10-05）。
+    _SKIP_MARKERS = ("can't add existing file", "currently opened for add",
+                     "already opened for edit", "can't edit (already opened",
+                     "file(s) up-to-date", "file(s) not opened on this client",
+                     "no file(s) to reconcile", "can't add (already opened")
+    # 実際に何かが行われた行
+    _OK_MARKERS = ("opened for ", "reverted", "added as ", "refreshing ",
+                   "updating ", "deleted as ", "- opened", "submitted")
+
     def cli_output_is_error(self, text: str) -> bool:
         t = (text or "").lower()
         return any(m in t for m in self._ERR_MARKERS)
+
+    def classify_cli_result(self, rc, out, err):
+        """p4 の «行ごと» の結果を見て成否を決める（r121）。
+
+        p4 はファイル単位で成否を返し、1 つでも対象外があると rc が 0 以外に
+        なる。フォルダへの一括操作では「もう追加済み」等が必ず混ざるので、
+        rc と «エラー語がどこかにあるか» だけで判定すると **成功しているのに
+        失敗と出る**。行ごとに «実行された / 対象外だった / 本当に失敗» を
+        数え、本当の失敗が無ければ成功として扱う。"""
+        from core.i18n import tr
+        lines = [ln.strip() for ln in
+                 ((out or "") + "\n" + (err or "")).splitlines() if ln.strip()]
+        done = skipped = 0
+        hard = []
+        for ln in lines:
+            low = ln.lower()
+            if any(m in low for m in self._SKIP_MARKERS):
+                skipped += 1
+            elif any(m in low for m in self._ERR_MARKERS):
+                hard.append(ln)
+            elif any(m in low for m in self._OK_MARKERS):
+                done += 1
+        if hard:
+            return False, "\n".join(hard[:20])
+        if done == 0 and skipped == 0:
+            # 判定材料が無い。従来どおり rc で決める。
+            if rc == 0:
+                return True, self.summarize_output(out)
+            return False, (("\n".join(lines[:20])) or
+                           "（p4 からの出力なし / rc=%s）" % rc)
+        if done <= 1 and skipped == 0:
+            # 単一ファイルの操作は従来どおり p4 の出力をそのまま見せる
+            # （何が起きたかが一番分かりやすい）。
+            return True, self.summarize_output(out)
+        msg = tr("%d 件", "%d file(s)") % done
+        if skipped:
+            msg += tr("（対象外 %d 件はそのまま）",
+                      " (%d already done, left as is)") % skipped
+        return True, msg
+
+    @staticmethod
+    def recurse(paths):
+        """フォルダには «/...» を付ける（r121）。
+
+        P4V でフォルダに対して 追加 / チェックアウト / 元に戻す を行うと、
+        **その下の全ファイル** が対象になる。p4 CLI では素のフォルダパスは
+        «ファイル» として扱われてエラーになるので、再帰指定に直す必要がある。
+        従来は sync だけが付けていて、add / edit / revert はフォルダを渡すと
+        必ず失敗していた（ユーザー報告 2026-10-05）。"""
+        import os as _os
+        out = []
+        for p in paths:
+            try:
+                is_dir = _os.path.isdir(p)
+            except OSError:
+                is_dir = False
+            out.append(p.rstrip("\\/") + "/..." if is_dir else p)
+        return out
 
     def _cli(self, args, cwd, what):
         """actions() 用: 実行結果を report() で UI へ返す（r58）。"""
@@ -306,20 +376,20 @@ class P4Provider(Provider):
         from core.i18n import tr
         paths = list(paths)
         cwd = os.path.dirname(paths[0]) if paths else root
+        rpaths = self.recurse(paths)      # r121: フォルダは «その下すべて»
         co = (tr("チェックアウト（p4 edit）", "Checkout (p4 edit)"),
-              self._cli(["edit"] + paths, cwd, tr("チェックアウト", "Checkout")))
+              self._cli(["edit"] + rpaths, cwd, tr("チェックアウト", "Checkout")))
         extra = self._checkout_precheck(paths)
         if extra:
             co = co + (extra,)
         acts = [
             co,
             (tr("追加（p4 add）", "Add (p4 add)"),
-             self._cli(["add"] + paths, cwd, tr("追加", "Add"))),
+             self._cli(["add"] + rpaths, cwd, tr("追加", "Add"))),
             (tr("最新を取得（p4 sync）", "Get latest (p4 sync)"),
-             self._cli(["sync"] + [p + ("/..." if os.path.isdir(p) else "")
-                                   for p in paths], cwd, tr("最新を取得", "Sync"))),
+             self._cli(["sync"] + rpaths, cwd, tr("最新を取得", "Sync"))),
             (tr("変更を元に戻す（p4 revert）", "Revert (p4 revert)"),
-             self._cli(["revert"] + paths, cwd, tr("変更を元に戻す", "Revert")),
+             self._cli(["revert"] + rpaths, cwd, tr("変更を元に戻す", "Revert")),
              {"confirm": tr("%d 件のローカル変更を破棄して元に戻します。よろしいですか？"
                             % len(paths),
                             "Discard local changes of %d file(s) and revert?"

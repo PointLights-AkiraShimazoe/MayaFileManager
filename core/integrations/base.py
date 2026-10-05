@@ -192,19 +192,30 @@ class Provider:
         actions() が返す callable から使う（r58: 失敗を黙殺しない）。"""
         def _go():
             rc, out, err = run(cmd, cwd=cwd, timeout=timeout)
-            text = (err or out or "").strip()
-            ok = (rc == 0) and not self.cli_output_is_error(text)
+            ok, msg = self.classify_cli_result(rc, out, err)
             if ok:
                 self.note_success()
-                self.report(True, "%s: %s" % (what, self.summarize_output(out)))
+                self.report(True, "%s: %s" % (what, msg))
             else:
-                self.report(False, "%s に失敗しました。\n\n%s"
-                            % (what, text or "（p4 からの出力なし / rc=%s）" % rc))
+                self.report(False, "%s に失敗しました。\n\n%s" % (what, msg))
         threading.Thread(target=_go, daemon=True, name="mfm-integ-cli").start()
 
     def cli_output_is_error(self, text: str) -> bool:
         """rc=0 でも出力がエラーを表す CLI（p4 等）向けのフック。"""
         return False
+
+    def classify_cli_result(self, rc, out, err):
+        """実行結果を (成功か, 画面に出す文言) に落とす。
+
+        r121: **「一部は成功、一部は対象外」を失敗にしない** ためのフック。
+        フォルダを指定した一括操作では「もう追加済みのファイル」等の
+        警告が必ず混ざるが、それは失敗ではない。既定の判定（rc と
+        エラー語）はそのまま、必要なプロバイダだけが上書きする。"""
+        text = (err or out or "").strip()
+        ok = (rc == 0) and not self.cli_output_is_error(text)
+        if ok:
+            return True, self.summarize_output(out)
+        return False, text or "（出力なし / rc=%s）" % rc
 
     def summarize_output(self, out: str) -> str:
         lines = [l for l in (out or "").splitlines() if l.strip()]
