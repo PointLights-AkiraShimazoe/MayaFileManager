@@ -13,9 +13,23 @@ import time
 
 from core.compat import QObject, Signal
 
-_LOG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "mfm_integrations.log")
+# r121: ログは «ツールフォルダ» ではなく «ユーザーフォルダ» へ出す。
+# 従来は __file__ から 3 つ上（＝ツールフォルダ直下）に書いていたが、
+# EXE 版では展開先の一時フォルダになるため **ログが一切残らず**、
+# 「EXE だけ連携が効かない」の原因究明ができなかった（2026-10-05）。
+# Maya 連携ログ（mfm_maya.log）と同じ置き場に揃える。
+def _resolve_log_path():
+    try:
+        d = os.path.join(os.path.expanduser("~"), ".maya_file_manager", "logs")
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, "mfm_integrations.log")
+    except OSError:
+        return os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))), "mfm_integrations.log")
+
+
+_LOG_PATH = _resolve_log_path()
 try:
     with open(_LOG_PATH, "w", encoding="utf-8") as _f:
         _f.write("=== 外部サービス連携ログ（起動ごとに上書き） ===\n")

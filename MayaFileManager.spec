@@ -72,6 +72,18 @@ a = Analysis(
         'ui.quick_nav_editor',
         'ui.reference_editor',
         'ui.duplicate_folder_panel',
+        'ui.dialog_util',
+        'ui.maya_bridge_dialog',
+        'ui.maya_launch_dialog',
+        # 外部サービス連携（ここが欠けると «EXE だけ連携が丸ごと死ぬ»）
+        'core.integrations',
+        'core.integrations.manager',
+        'core.integrations.base',
+        'core.integrations.git_provider',
+        'core.integrations.svn_provider',
+        'core.integrations.p4_provider',
+        'core.integrations.cloud_provider',
+        'xml', 'xml.etree', 'xml.etree.ElementTree',
         # オプション依存
         'send2trash',
         'cv2',
@@ -89,7 +101,19 @@ a = Analysis(
         'PIL', 'Pillow',
         'tkinter', '_tkinter',
         'test', 'unittest',
-        'email', 'html', 'http', 'xml', 'xmlrpc',
+        # 【重要・2026-10-05 実機障害】**ここへ «アプリが import する標準
+        # ライブラリ» を入れてはいけない。** 'xml' を除外していたため、
+        # core/integrations/svn_provider.py の
+        #     import xml.etree.ElementTree
+        # が EXE 版でだけ ImportError になり、core.integrations の import
+        # 全体が失敗 → Git / SVN / Perforce / クラウドの連携が **丸ごと
+        # 無効**（バッジも右クリックメニューも出ない）になっていた。
+        # しかも BrowserPanel 側が例外を握り潰すだけだったので、
+        # 「開発版では動くのにリリース版だけ機能が欠ける」という
+        # 最悪の形で表に出た。
+        # 追加する前に必ず tests/offscreen/test_spec_excludes.py を通すこと
+        # （ソース中の import と突き合わせて弾く）。
+        'email', 'html', 'http', 'xmlrpc',
         'pydoc', 'doctest', 'difflib',
         'multiprocessing',  # QThreadPool で代替
     ],

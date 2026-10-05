@@ -344,6 +344,88 @@ def uninitializePlugin(plugin):  # noqa: N802
 
 
 # ---------------------------------------------------------------------------
+# セルフチェック（r121）
+# ---------------------------------------------------------------------------
+
+# 2026-10-05 実機障害: spec の excludes に 'xml' が入っていたため、EXE 版
+# でだけ core.integrations の import が失敗し、Git / SVN / Perforce /
+# クラウドの連携が丸ごと無効になっていた。開発版では標準ライブラリが普通に
+# 入っているので誰も気付けず、そのまま配布してしまった。
+#
+# 以後、**ビルドした EXE そのもの** に対して CI がこれを実行する。
+# 「開発版では動くのにリリース版だけ機能が欠ける」を機械で止めるための関所。
+# 新しい機能を足したら、その要になるモジュールをここへ追加すること。
+_REQUIRED_MODULES = [
+    # 外部サービス連携（ここが落ちるとバッジも右クリックメニューも消える）
+    "core.integrations",
+    "core.integrations.manager",
+    "core.integrations.git_provider",
+    "core.integrations.svn_provider",
+    "core.integrations.p4_provider",
+    "core.integrations.cloud_provider",
+    "xml.etree.ElementTree",
+    # DCC 連携
+    "core.maya_bridge",
+    "core.blender_bridge",
+    "core.dcc_save",
+    "core.dcc_caps",
+    # 画面
+    "ui.main_window",
+    "ui.browser_panel",
+    "ui.browser_column_view",
+    "ui.browser_delegates",
+    "ui.flat_column",
+    "ui.dialog_util",
+    "ui.maya_bridge_dialog",
+    "ui.maya_launch_dialog",
+    "ui.settings_dialog",
+    "ui.save_dialog",
+    # 下回り
+    "core.settings_manager",
+    "core.theme_engine",
+    "core.display_names",
+    "core.thumbnail_generator",
+    "core.file_operations",
+    "core.undo_stack",
+    "core.path_guard",
+]
+
+
+def selfcheck() -> int:
+    """必要なモジュールが «この実行形態で» 全部読めるかを確かめる。
+    0=すべて揃っている / 1=欠けがある（CI はここで落とす）。"""
+    import importlib
+    import traceback
+    missing = []
+    for name in _REQUIRED_MODULES:
+        try:
+            importlib.import_module(name)
+        except Exception as e:
+            missing.append((name, repr(e), traceback.format_exc()))
+    # 連携プロバイダが 4 種そろっているか（import だけでなく実体で確認）
+    try:
+        from core.integrations import get_manager
+        keys = sorted(p.key for p in get_manager().providers)
+        if keys != ["cloud", "git", "p4", "svn"]:
+            missing.append(("integrations.providers",
+                            "プロバイダが揃っていない: %r" % (keys,), ""))
+    except Exception as e:
+        missing.append(("integrations.providers", repr(e),
+                        __import__("traceback").format_exc()))
+
+    if missing:
+        print("[selfcheck] 欠けている機能があります（%d 件）" % len(missing))
+        for name, err, tb in missing:
+            print("  - %s: %s" % (name, err))
+            if tb:
+                print("    " + tb.replace("\n", "\n    ").rstrip())
+        return 1
+    print("[selfcheck] OK — 必要なモジュール %d 件すべて読み込めました"
+          % len(_REQUIRED_MODULES))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -355,6 +437,12 @@ if __name__ == "__main__":
                         help="（廃止）常にマネージャーを直接開くため、指定しても動作は変わらない")
     parser.add_argument("--maya-ver", default="",
                         help="使用する Maya バージョン (例: 2027)")
+    parser.add_argument("--selfcheck", action="store_true",
+                        help="画面を出さずに «機能が揃っているか» だけ検査して終了"
+                             "（CI がビルドした EXE に対して実行する）")
     args = parser.parse_args()
+
+    if args.selfcheck:
+        raise SystemExit(selfcheck())
 
     run_standalone(skip_launcher=args.no_launcher)

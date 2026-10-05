@@ -472,7 +472,24 @@ class BrowserPanel(QWidget):
                 _mgr.action_finished.connect(_on_integration_action_finished)
                 _INTEG_RESULT_CONNECTED = True
         except Exception as _e:
-            _mfm_log("integrations start error: %r" % (_e,))
+            # r121: **黙って無効にしない。** 以前はここで握り潰していたため、
+            # EXE 版で core.integrations の import が失敗していること
+            # （spec の excludes に 'xml' を入れていたのが原因）に気付けず、
+            # 「開発版では出るバッジとメニューがリリース版だけ出ない」
+            # という状態のまま配布してしまった（2026-10-05 実機）。
+            # 画面に出し、ログにも «連携が丸ごと死んでいる» と明記する。
+            import traceback
+            _mfm_log("integrations start error: %r\n%s"
+                     % (_e, traceback.format_exc()))
+            self._integrations_error = str(_e)
+            try:
+                self.status_message.emit(tr(
+                    "外部サービス連携を開始できませんでした（%s）"
+                    "— Git/SVN/Perforce/クラウドのバッジと右クリックは出ません",
+                    "Could not start integrations (%s) - Git/SVN/Perforce/"
+                    "Cloud badges and menu entries will not appear") % _e)
+            except Exception as _e2:
+                _swallow(_e2, "ui/browser_panel.py integrations start notice")
 
     # ------------------------------------------------------------------
     # Navigation
