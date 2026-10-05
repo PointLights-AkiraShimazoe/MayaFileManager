@@ -22,8 +22,18 @@ from _common import app, sm, finish, run
 from core.dcc_log import wrap_maya
 
 
+_FAKE_MAIN = None
+
+
 def _run_wrapped(code_expr, shared):
-    """DCC 側で実行されるのと同じように評価する（_l と __main__ を差し替え）。"""
+    """DCC 側で実行されるのと同じように評価する（_l と __main__ を差し替え）。
+
+    r119i: `__main__` は **呼び出しをまたいで同じもの** を使う。
+    実機の Maya では当然ひとつしかなく、ガードはそこに «実行中» の印を
+    置く。呼び出しごとに作り直すと、入れ子（確認ダイアログの最中に
+    2 通目が届く）を再現できない。
+    """
+    global _FAKE_MAIN
     import sys
     import types
     fake_om = types.ModuleType("maya.api.OpenMaya")
@@ -45,18 +55,18 @@ def _run_wrapped(code_expr, shared):
     fake_api = types.ModuleType("maya.api")
     fake_api.OpenMaya = fake_om
     fake_maya.api = fake_api
+    if _FAKE_MAIN is None:
+        _FAKE_MAIN = types.ModuleType("__main__")
     saved = {k: sys.modules.get(k)
              for k in ("maya", "maya.api", "maya.api.OpenMaya", "__main__")}
-    main_mod = types.ModuleType("__main__")
-    main_mod.__dict__.update(shared["main"])
     sys.modules["maya"] = fake_maya
     sys.modules["maya.api"] = fake_api
     sys.modules["maya.api.OpenMaya"] = fake_om
-    sys.modules["__main__"] = main_mod
+    sys.modules["__main__"] = _FAKE_MAIN
     try:
         return eval(code_expr)          # noqa: S307 — DCC と同じ評価
     finally:
-        shared["main"] = main_mod.__dict__
+        shared["main"] = _FAKE_MAIN.__dict__
         for k, v in saved.items():
             if v is None:
                 sys.modules.pop(k, None)
@@ -66,6 +76,8 @@ def _run_wrapped(code_expr, shared):
 
 def s1():
     # ── 1) DCC 側ガード: 2 通目は実行されない ───────────────────────
+    global _FAKE_MAIN
+    _FAKE_MAIN = None                  # 共有 __main__ を作り直す
     shared = {"log": [], "main": {}}
     ran = {"n": 0}
     import builtins
@@ -107,6 +119,35 @@ def s1():
 
     del builtins._mfm_test_ran
 
+    # ── 1b) **実行中** に届いた分も止める（r119i）───────────────────
+    # confirmDialog は入れ子のイベントループを回すので、ダイアログを出して
+    # いる最中に届いた 2 通目が «ダイアログの中で» 実行される。シーンを開く
+    # 処理が «開く確認の最中» に走ると Maya ごと固まる（実機 2026-10-02）。
+    shared2 = {"log": [], "main": {}}
+    _FAKE_MAIN.__dict__.pop("_mfm_recent_ops", None)   # 直前の記録は捨てる
+    inner_ran = {"n": 0}
+    nested = wrap_maya("__import__('builtins')._mfm_nested()", "開く",
+                       "C:/proj/busy.ma", guard=True)
+
+    def _simulate_dialog():
+        """«確認ダイアログの最中に 2 通目が届く» を再現する。"""
+        inner_ran["n"] += 1
+        _run_wrapped(nested, shared2)      # 入れ子で同じコマンドが走る
+    builtins._mfm_nested = _simulate_dialog
+    try:
+        _run_wrapped(nested, shared2)
+    finally:
+        del builtins._mfm_nested
+    assert inner_ran["n"] == 1, ("入れ子で本体が 2 回走った", inner_ran)
+    assert any(lv == "warning" for lv, _m in shared2["log"]), shared2["log"]
+    print("a command arriving while one is running is refused: OK")
+
+    # 終わったら «実行中» の印は残らない（残ると以後ずっと塞がれる）
+    assert not _FAKE_MAIN.__dict__.get("_mfm_running_ops"), \
+        ("実行が終わったのに «実行中» の印が残っている",
+         _FAKE_MAIN.__dict__.get("_mfm_running_ops"))
+    print("the running mark is cleared when the command finishes: OK")
+
     # ── 2) 送信側ガード: open は «前が片付くまで» 受け付けない ───────
     import ui.main_window_dcc as mwd
 
@@ -139,19 +180,39 @@ def s1():
     # **別のファイルでも** 前の open が終わるまで止まる（ここが r119e）
     assert h._dcc_once("open", b, "maya") is False, \
         "前の open が終わっていないのに別のシーンを送っている"
-    # 応答が返れば解放される
+    # **応答なし（reply=None）は «終わった» ではない**（r119i）。
+    # DCC が読み込み中／確認ダイアログ待ちのまま次を送れてしまうと、
+    # ダイアログの入れ子ループの中でシーン読み込みが走って Maya が固まる。
+    h._on_bridge_done(True, "開く a.ma", None)
+    assert h._dcc_once("open", b, "maya") is False, \
+        "応答が無い（まだ処理中）のに次の open を通している"
+    # 実際に応答が返れば解放される
     h._on_bridge_done(True, "開く a.ma", "ok")
     assert h._dcc_once("open", b, "maya") is True
     _send()
-    print("open is refused until the previous open reports back: OK")
+    # 送信自体に失敗した時は実行されていないので解放する
+    # （_Host は QWidget ではないのでエラーダイアログだけ抑える）
+    from core.compat import QMessageBox as _QMB
+    _orig_crit = _QMB.critical
+    _QMB.critical = staticmethod(lambda *a, **k: None)
+    try:
+        h._on_bridge_done(False, "開く b.ma", "Mayaに接続できません")
+    finally:
+        _QMB.critical = _orig_crit
+    assert h._dcc_once("open", a, "maya") is True
+    _send()
+    h._on_bridge_done(True, "x", "ok")
+    print("open is refused until the previous open really reports back: OK")
 
     # 送らなかった場合は «実行中» にならない（Maya 内実行・途中で止めた時）。
     # 昇格を _bridge_send_async に置いたのは、印が残り続けて以後 2 分間
     # «開く» が効かなくなるのを防ぐため。
     h._on_bridge_done(True, "x", "ok")
-    assert h._dcc_once("open", a, "maya") is True
+    # 直前に使ったパスは «1.2 秒窓» に掛かるので別のファイルで確かめる
+    c, d = os.path.abspath("c.ma"), os.path.abspath("d.ma")
+    assert h._dcc_once("open", c, "maya") is True
     h._dcc_arm = None                      # ＝送らなかった
-    assert h._dcc_once("open", b, "maya") is True, \
+    assert h._dcc_once("open", d, "maya") is True, \
         "送っていないのに «実行中» 扱いになっている"
     h._dcc_arm = None
     print("not sending never leaves the hold stuck: OK")
@@ -162,6 +223,50 @@ def s1():
     assert h._dcc_once("import", b, "maya") is True, \
         "インポートまで塞いでいる（重ねられる操作は止めない）"
     print("import/reference are not held back (they are additive): OK")
+
+    # ── 3) r120: 応答が返らない «開く» の後、印が永久に残らないこと ────
+    # 実機報告 2026-10-02:
+    #   「一度 maya で開くと、それ以降 maya への命令が飛んでいないようです。
+    #     マネージャーでは繋がっている様な表示なので、たちが悪いです。」
+    # 「開く」は読み込みに数十秒かかるので応答を待たない（reply=None）。
+    # r119i で «reply=None では解除しない» としたため、解除する機会が
+    # 二度と来ず、以後ずっと «前の〜がまだ終わっていない» になっていた。
+    # DCC が «また応答するようになった» ことを見張って解除する。
+    h._on_bridge_done(True, "x", "ok")
+    e, f = os.path.abspath("e.ma"), os.path.abspath("f.ma")
+    assert h._dcc_once("open", e, "maya") is True
+    _send()
+    h._dcc_pending_port = 20261
+    h._on_bridge_done(True, "開く e.ma", None)      # 応答なし＝まだ処理中
+    assert h._dcc_once("open", f, "maya") is False, "処理中なのに通している"
+
+    # 見張りが «まだビジー» と答えている間は塞がれたまま
+    h._on_dcc_idle(20261, False)
+    assert h._dcc_once("open", f, "maya") is False, \
+        "ビジーの報告で解除してしまっている"
+    # 別のポートが応答しても解除しない（別の Maya の話）
+    h._on_dcc_idle(20262, True)
+    assert h._dcc_once("open", f, "maya") is False, \
+        "関係ないポートの応答で解除してしまっている"
+    # 送った先の DCC が応答を返したら＝前の操作は終わっている → 解除
+    h._on_dcc_idle(20261, True)
+    assert h._dcc_once("open", f, "maya") is True, \
+        "DCC が応答を返しても «実行中» の印が落ちない（永久に送れなくなる）"
+    _send()
+    h._on_bridge_done(True, "x", "ok")
+    print("the hold is released once the DCC answers again: OK")
+
+    # 最後の歯止め: 保持時間を超えたら見張りが落とす
+    g = os.path.abspath("g.ma")
+    assert h._dcc_once("open", g, "maya") is True
+    _send()
+    import time as _t2
+    h._dcc_pending = (h._dcc_pending[0],
+                      _t2.monotonic() - mwd.DESTRUCTIVE_HOLD_SEC - 1)
+    h._dcc_pending_port = 20261
+    h._poll_dcc_idle()
+    assert h._dcc_pending[0] is None, "保持時間を超えても印が残っている"
+    print("the hold always expires at the cap: OK")
     finish(True)
 
 

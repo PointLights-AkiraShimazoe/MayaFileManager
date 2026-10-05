@@ -47,11 +47,17 @@ def _messages(action: str, path: str):
 
 
 # 結果判定と出力（DCC 側で exec される本体。_l(msg, level) は DCC ごとに差し替え）
-# r119e: **DCC 側の二重実行ガード**。
+# r119e/r119i: **DCC 側の二重実行ガード**。
 # commandPort は受け取ったデータを «後で» 処理するため、Maya がシーンを
 # 読み込んでいる間に届いた 2 通目は «読み込みが終わってから» 実行される。
 # 送信側のガードをすり抜けた分をここで止める（実機報告 2026-10-02:
 # シーンを開き終わった直後にもう一度コマンドが走りかけた）。
+#
+# r119i: **実行中（_mfm_busy）も止める。** confirmDialog は入れ子の
+# イベントループを回すので、ダイアログを出している最中に届いた 2 通目が
+# «ダイアログの中で» 実行される。シーンを開く処理が «開く確認の最中» に
+# 走ると Maya ごと固まる（実機 2026-10-02: 開こうとして完全に固まった）。
+# 完了時刻だけでは «まだ終わっていない» を表せないので、実行中の印を別に持つ。
 #
 # 判定は «前回の完了からの経過» で行う。開始時刻で測ると、読み込みに 60 秒
 # かかった場合に «直後に走る 2 通目» が窓から外れて素通りしてしまう。
@@ -62,12 +68,16 @@ _GUARD_SEC = 8.0
 _GUARD = r"""
 import time as _mfm_time, __main__ as _mfm_main
 _mfm_seen = _mfm_main.__dict__.setdefault("_mfm_recent_ops", {})
+_mfm_busy = _mfm_main.__dict__.setdefault("_mfm_running_ops", {})
 _mfm_key = _M.get("key") or _M["start"]
 _mfm_now = _mfm_time.monotonic()
 for _k in [k for k, t in _mfm_seen.items() if _mfm_now - t > 600.0]:
     _mfm_seen.pop(_k, None)
+for _k in [k for k, t in _mfm_busy.items() if _mfm_now - t > 1800.0]:
+    _mfm_busy.pop(_k, None)      # 異常終了で残った印の掃除
 _mfm_last = _mfm_seen.get(_mfm_key)
-_mfm_dup = _mfm_last is not None and (_mfm_now - _mfm_last) < %r
+_mfm_dup = (_mfm_key in _mfm_busy) or (
+    _mfm_last is not None and (_mfm_now - _mfm_last) < %r)
 """ % _GUARD_SEC
 
 # 結果判定と出力（DCC 側で exec される本体。_l(msg, level) は DCC ごとに差し替え）
@@ -76,6 +86,7 @@ if _mfm_dup:
     _l(_M["dup"], "warning")
     _mfm_r = "Cancelled: duplicate"
 else:
+ _mfm_busy[_mfm_key] = _mfm_time.monotonic()
  _l(_M["start"], "info")
  try:
     try:
@@ -84,9 +95,11 @@ else:
         exec(_CODE)
         _mfm_r = None
  except Exception as _e:
+    _mfm_busy.pop(_mfm_key, None)
     _mfm_seen[_mfm_key] = _mfm_time.monotonic()
     _l(_M["fail"] + str(_e), "error")
     raise
+ _mfm_busy.pop(_mfm_key, None)
  _mfm_seen[_mfm_key] = _mfm_time.monotonic()   # «完了» 時刻を記録する
  _s = "" if _mfm_r is None else str(_mfm_r)
  _low = _s.strip().lower()
@@ -134,6 +147,7 @@ def _l(m, lv):
 _NO_GUARD = ("import time as _mfm_time\n"
              "_mfm_dup = False\n"
              "_mfm_seen = {}\n"
+             "_mfm_busy = {}\n"
              "_mfm_key = None\n")
 
 

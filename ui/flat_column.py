@@ -17,7 +17,7 @@ import os
 from core.compat import (
     Qt, Signal, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QComboBox,
     QToolButton, QListView, QAbstractItemView, QSortFilterProxyModel,
-    QFileInfo, QApplication, QDrag, QMimeData, QUrl,
+    QFileInfo, QApplication, QDrag, QMimeData, QUrl, QSize,
 )
 
 try:  # PySide6
@@ -202,11 +202,19 @@ class FlatColumn(QWidget):
     file_selected = Signal(str)
     closed = Signal()
     drag_finished = Signal(list)      # r74: D&D 終了（選択パス群）
+    view_mode_changed = Signal(str)   # r120: "list" / "thumb"（保存は親の責務）
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._icons = QFileIconProvider()
         self._sources = []
+        # r120: 表示モード（ユーザー指示「平坦表示でもサムネイルモードを
+        # 選べるように」）。カラムと違い平坦カラムは «フォルダ» を持たないので、
+        # 記憶はフォルダ別ではなく 1 つ（保存は親＝BrowserPanel が行う）。
+        self._view_mode = "list"
+        self._thumb_mgr = None
+        self._thumb_prefetch_cb = None
+        self._item_size = {"list": 16, "thumb": 96}
         self.setMinimumWidth(200)
         self.setObjectName("mfmFlatCol")
         from core.theme_engine import qss_vars
@@ -267,6 +275,15 @@ class FlatColumn(QWidget):
         self._order_btn.setToolTip(tr("昇順／降順", "Ascending / Descending"))
         self._sort_combo.currentIndexChanged.connect(lambda _i: self._apply_sort())
         self._order_btn.clicked.connect(lambda _c=False: self._apply_sort())
+        self._view_btn = QToolButton(hdr)
+        self._view_btn.setText("▦")
+        self._view_btn.setCheckable(True)
+        self._view_btn.setFixedSize(26, 20)
+        self._view_btn.setToolTip(tr("リスト⇄サムネイル切替",
+                                     "Toggle list/thumbnail view"))
+        self._view_btn.clicked.connect(
+            lambda _c=False: self.set_view_mode(
+                "thumb" if self._view_mode == "list" else "list", remember=True))
         self._close_btn = QToolButton(hdr)
         self._close_btn.setText("✕")
         self._close_btn.setFixedSize(24, 20)
@@ -274,6 +291,7 @@ class FlatColumn(QWidget):
         self._close_btn.clicked.connect(self.closed.emit)
         row.addWidget(self._sort_combo, 1)
         row.addWidget(self._order_btn, 0)
+        row.addWidget(self._view_btn, 0)
         row.addWidget(self._close_btn, 0)
         hl.addLayout(row)
         lay.addWidget(hdr, 0)
@@ -291,6 +309,89 @@ class FlatColumn(QWidget):
         self._view.clicked.connect(self._on_clicked)
         self._view.activated.connect(self._on_activated)
         lay.addWidget(self._view, 1)
+
+    # ── r120: 表示モード（リスト／サムネイル）────────────────────────
+    def set_thumb_mgr(self, mgr):
+        """サムネイル供給元。設定後にサムネイル表示が選べるようになる。"""
+        self._thumb_mgr = mgr
+        if self._view_mode == "thumb":
+            self._apply_view_mode()
+
+    def set_thumb_prefetch_callback(self, cb):
+        """サムネイル先読みの依頼先 cb(paths)。サムネイル表示に «してから» 呼ぶ
+        （リスト表示で走らせても無駄なだけ。カラム側と同じ考え方）。"""
+        self._thumb_prefetch_cb = cb
+
+    def view_mode(self) -> str:
+        return self._view_mode
+
+    def set_view_mode(self, mode: str, remember: bool = False):
+        """"list" / "thumb" を切り替える。
+        remember=True のときだけ view_mode_changed を出す（保存は親の責務。
+        復元で呼ばれた分まで保存すると «最近の状態» を上書きしてしまう）。"""
+        mode = "thumb" if mode == "thumb" else "list"
+        self._view_mode = mode
+        try:
+            self._view_btn.setChecked(mode == "thumb")
+        except Exception as _e:
+            _swallow(_e, "ui/flat_column.py set_view_mode(btn)")
+        self._apply_view_mode()
+        if remember:
+            self.view_mode_changed.emit(mode)
+
+    def item_size(self, mode: str = None) -> int:
+        return int(self._item_size.get(mode or self._view_mode, 16))
+
+    def set_item_size(self, px: int, mode: str = None):
+        """表示サイズ(px)。モードごとに別の値を持つ（カラムと同じ）。"""
+        mode = mode or self._view_mode
+        self._item_size["thumb" if mode == "thumb" else "list"] = max(8, int(px))
+        if (mode == "thumb") == (self._view_mode == "thumb"):
+            self._apply_view_mode()
+
+    def _apply_view_mode(self):
+        from ui.browser_delegates import ThumbnailDelegate
+        px = self.item_size()
+        v = self._view
+        try:
+            v.setIconSize(QSize(px, px))
+            if self._view_mode == "thumb" and self._thumb_mgr is not None:
+                v.setViewMode(QListView.IconMode)
+                v.setResizeMode(QListView.Adjust)
+                v.setWrapping(True)
+                v.setSpacing(6)
+                v.setGridSize(QSize(px + 18, px + ThumbnailDelegate._TEXT_H + 8))
+                v.setItemDelegate(ThumbnailDelegate(
+                    self._thumb_mgr, px, v, path_of_index=self._path_of))
+                self._request_prefetch()
+            else:
+                v.setViewMode(QListView.ListMode)
+                v.setWrapping(False)
+                v.setSpacing(0)
+                v.setGridSize(QSize())
+                # 既定の描画へ戻す（None を渡すのは PySide 版により不安定）
+                from core.compat import QStyledItemDelegate
+                v.setItemDelegate(QStyledItemDelegate(v))
+            v.doItemsLayout()
+            v.viewport().update()
+        except Exception as _e:
+            _swallow(_e, "ui/flat_column.py _apply_view_mode")
+
+    def _request_prefetch(self):
+        if self._view_mode != "thumb" or not callable(self._thumb_prefetch_cb):
+            return
+        try:
+            self._thumb_prefetch_cb(self.all_paths())
+        except Exception as _e:
+            _swallow(_e, "ui/flat_column.py _request_prefetch")
+
+    def refresh_thumbs(self):
+        """サムネイルが届いた時の再描画（サムネイル表示の時だけ）。"""
+        if self._view_mode == "thumb":
+            try:
+                self._view.viewport().update()
+            except Exception as _e:
+                _swallow(_e, "ui/flat_column.py refresh_thumbs")
 
     def _apply_sort(self):
         key = self._sort_combo.currentData()
@@ -332,6 +433,7 @@ class FlatColumn(QWidget):
             self._src.appendRow(it)
         self._proxy.set_sort(self._sort_combo.currentData() or "name",
                              not self._order_btn.isChecked())
+        self._request_prefetch()      # r120: 中身が変わったら先読みし直す
 
     def all_paths(self):
         """一覧にある全ファイルパス（連携状態の要求などに使う）。"""

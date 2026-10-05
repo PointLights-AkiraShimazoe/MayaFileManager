@@ -294,6 +294,9 @@ class BrowserPanel(QWidget):
             _swallow(_e, "ui/browser_panel.py:294 _build_ui")
         # 保存済みのカラム幅を適用（未保存なら既定幅300）
         self._column_view.set_settings(self._sm)
+        # r120: カラムのスライドアニメーション（設定で切れる）
+        self._column_view.set_slide_animation(
+            bool(self._sm.get("column_slide_animation", True)))
         self._column_view.setModel(self._proxy)
         self._column_view.activated.connect(self._on_item_activated)
         self._column_view.clicked.connect(self._on_item_clicked)
@@ -354,6 +357,19 @@ class BrowserPanel(QWidget):
         self._flat_col.file_selected.connect(
             lambda p: self._addr_bar.setText(p) if p else None)
         self._flat_col.closed.connect(self._flat_col.hide)
+        # r120: 平坦カラムでもサムネイル表示を選べるようにする（ユーザー指示）。
+        # 平坦カラムは «フォルダ» を持たないので、記憶はフォルダ別ではなく 1 つ。
+        self._flat_col.set_thumb_mgr(self._thumb_mgr)
+        self._flat_col.set_thumb_prefetch_callback(
+            lambda files: self._thumb_mgr.prefetch(list(files or [])[:400]))
+        self._flat_col.set_item_size(
+            int(self._sm.get("column_icon_size_list", 16)), "list")
+        self._flat_col.set_item_size(
+            int(self._sm.get("column_icon_size_thumb", 96)), "thumb")
+        self._flat_col.view_mode_changed.connect(
+            lambda m: self._sm.set("flat_view_mode", m))
+        self._flat_col.set_view_mode(
+            str(self._sm.get("flat_view_mode", "list") or "list"))
         # r74: 平坦ビューからの D&D も落下先が DCC なら通常カラムと同じ通知経路へ
         # r90: mime も同じもの（DCC への落下は Manager が引き受ける）を使う
         self._flat_col._view._mime_factory = self._column_view.make_drag_mime
@@ -498,17 +514,19 @@ class BrowserPanel(QWidget):
         - .lnk/.url ショートカット: 呼び出し元(_maybe_follow_shortcut)が既に
           参照先(実体パス)へ解決済みのため、ここで再解決する必要はない。
         以前ここに realpath を入れていたためシンボリックリンクが実体へ遷移していた（回帰）。"""
+        # r120: 「"C:\\...\\x.ma"」のように «パスのコピー» で付く引用符は外す。
+        # Explorer のアドレス欄と同じく、貼り付けただけで通るようにする。
+        path = (path or "").strip()
+        if len(path) >= 2 and path[0] == '"' and path[-1] == '"':
+            path = path[1:-1].strip()
+        if not path:
+            return
         path = os.path.normpath(path)
-        # ナビゲーションは標準挙動どおり複数選択をリセットする
-        # （ブックマーク・履歴・▲・ショートカット追従すべて共通）
-        try:
-            self._column_view._clear_multi_state()
-            if self._flat_col.isVisible():
-                self._on_flat_request([])
-            if self._archive_col.isVisible():
-                self._on_archive_request("")        # r97
-        except Exception as _e:
-            _swallow(_e, "ui/browser_panel.py:511 _navigate")
+        # r120: **副作用はここでは起こさない。** 入力が «ファイル» だった場合は
+        # 関連付けられたプログラムで開くだけで、カラムは一切動かさない
+        # （ユーザー指示 2026-10-04）。選択の解除や平坦カラムを閉じる処理を
+        # ここで先にやってしまうと、ファイルを開いただけで画面が動く。
+        # 到達確認（_prober）の後、_navigate_now の先頭でまとめて行う。
         self._pending_nav = (path, add_to_history)
         self.status_message.emit(tr("確認中: %s", "Checking: %s") % path)
         self._prober.probe(path)
@@ -522,7 +540,38 @@ class BrowserPanel(QWidget):
             self.status_message.emit(
                 f"パスに到達できません（不存在または応答なし）: {path}")
             return
+        # r120: フルパスでファイルを指定したら «関連付けられたプログラムで開く»
+        # （Explorer のアドレス欄と同じ挙動。ユーザー指示 2026-10-04）。
+        # 移動は行わず、アドレス欄も直前のパスへ戻すので、カラムは動かない。
+        # isfile はここで初めて呼ぶ。到達確認が済んでいるので、切断ドライブで
+        # 20 秒級にブロックする心配がない（path_guard の原則）。
+        try:
+            is_file = os.path.isfile(path)
+        except OSError:
+            is_file = False
+        if is_file:
+            self._open_path_externally(path)
+            return
         self._navigate_now(path, add_to_history)
+
+    def _open_path_externally(self, path: str):
+        """アドレス欄に入れられたファイルを関連付けで開き、表示は元に戻す。"""
+        name = os.path.basename(path)
+        try:
+            open_with_default_app(path)
+        except Exception as e:
+            _mfm_log("addr-bar open failed: %r %r" % (path, e))
+            self.status_message.emit(
+                tr("開けませんでした: %s（%s）", "Could not open %s (%s)")
+                % (name, e))
+        else:
+            self.status_message.emit(
+                tr("開きました: %s", "Opened: %s") % name)
+        # アドレス欄は «直前に入っていたパス» へ戻す（表示は動かさない）
+        try:
+            self._addr_bar.setText(self._current_path or "")
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _open_path_externally")
 
     def _set_current_path(self, path: str, add_to_history: bool = True):
         """ビューのルートを変えずに現在地の状態だけ更新する（カラム展開用）。"""
@@ -540,6 +589,18 @@ class BrowserPanel(QWidget):
 
     def _navigate_now(self, path: str, add_to_history: bool = True):
         _mfm_timeline("navigate_now: %r" % path)
+        # ナビゲーションは標準挙動どおり複数選択をリセットする
+        # （ブックマーク・履歴・▲・ショートカット追従すべて共通）
+        # r120: «実際に移動すると決まってから» 行う。_navigate の時点でやると、
+        # アドレス欄にファイルを入れただけで平坦カラムが閉じてしまう。
+        try:
+            self._column_view._clear_multi_state()
+            if self._flat_col.isVisible():
+                self._on_flat_request([])
+            if self._archive_col.isVisible():
+                self._on_archive_request("")        # r97
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:511 _navigate")
         # r83: 新しい移動なので «選択維持ガード» を解除し、自己修復を許可する
         try:
             self._column_view._mfm_user_selected = False
@@ -1428,13 +1489,12 @@ class BrowserPanel(QWidget):
 
         スライダーは «全体的な表示サイズ» を変えるもの、というユーザー指示（r102）。"""
         px = max(8, int(px))
-        if mode in (None, "list"):
-            # 平坦カラムは常にリスト表示なので «リストの寸法» だけを反映する
-            try:
-                self._flat_col._view.setIconSize(QSize(px, px))
-                self._flat_col._view.viewport().update()
-            except Exception as _e:
-                _swallow(_e, "ui/browser_panel.py:1431 _apply_item_size_to_views")
+        # r120: 平坦カラムもリスト／サムネイルを持つので、同じモードの分だけ渡す
+        try:
+            for m in (("list", "thumb") if mode is None else (mode,)):
+                self._flat_col.set_item_size(px, m)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:1431 _apply_item_size_to_views")
         if mode not in (None, "thumb"):
             return
         try:
@@ -3118,6 +3178,10 @@ class BrowserPanel(QWidget):
                     v.viewport().update()
         except Exception as _e:
             _swallow(_e, "ui/browser_panel.py:3035 _on_thumbnail_ready")
+        try:
+            self._flat_col.refresh_thumbs()      # r120
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _on_thumbnail_ready(flat)")
 
     # ------------------------------------------------------------------
     # Helpers
@@ -3199,6 +3263,12 @@ class BrowserPanel(QWidget):
         全カラム再構築がクリック毎に走り「カラムが1本だけになる／半端な位置で
         切れる」原因になった（r54 で確定）。値は保存するが動作には反映しない。"""
         self._sm.set("column_max_depth", depth)
+
+    def set_slide_animation(self, on: bool):
+        """カラムのスライドアニメーションの入切（r120）。
+        切ると «クリックした瞬間に出る»（滑らかさと引き換えに描画が不要）。"""
+        self._column_view.set_slide_animation(bool(on))
+        self._sm.set("column_slide_animation", bool(on))
 
     def set_thumb_size(self, size: int):
         self._thumb_delegate._thumb_size = size

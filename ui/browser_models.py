@@ -306,6 +306,16 @@ class FileFilterProxyModel(QSortFilterProxyModel):
     # 親カラム単位で対応表をキャッシュし、行ごとの stat を避ける。
     _alias_cache = {}          # 親の internalId -> (dir, {実体名: 表示名} or None)
 
+    def resort_columns(self):
+        """並びだけ作り直す（r120: 表示名を変えた時）。
+        invalidate() は QFileSystemModel の非同期 populate と競合し得るので、
+        set_column_sort と同じ «sort(-1) → sort(0)» の手順を使う。"""
+        try:
+            self.sort(-1)
+            self.sort(0, Qt.AscendingOrder)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_models.py resort_columns")
+
     def invalidate_display_names(self):
         self._alias_cache.clear()
         try:
@@ -330,6 +340,25 @@ class FileFilterProxyModel(QSortFilterProxyModel):
             m = display_names.alias_map(d)
         self._alias_cache[key] = (d, m)
         return m
+
+    def display_name_of(self, source_index) -> str:
+        """ソース index の «画面に出ている名前»（表示名があればそれ、無ければ
+        実体名）。r120: 表示名でのソートに使う。
+
+        lessThan に渡ってくるのは «ソース» index なので、data()（プロキシ
+        index を前提に mapToSource する）はそのままでは使えない。"""
+        sm = self.sourceModel()
+        try:
+            real = sm.fileName(source_index)
+        except Exception:
+            return ""
+        try:
+            m = self._alias_for_parent(source_index.parent())
+            if m:
+                return m.get(real) or real
+        except Exception as _e:
+            _swallow(_e, "ui/browser_models.py display_name_of")
+        return real
 
     def data(self, index, role=Qt.DisplayRole):
         # 表示名: DisplayRole だけ差し替える（実体名は EditRole 等に残る）
@@ -404,6 +433,14 @@ class FileFilterProxyModel(QSortFilterProxyModel):
                 a, b = sm.lastModified(left), sm.lastModified(right)
             elif key == "size":
                 a, b = sm.size(left), sm.size(right)
+            elif key == "alias":
+                # r120: «表示名» 順（ユーザー指示）。表示名を付けていない項目は
+                # 実体名で並ぶので、付けた項目だけが意図した位置へ動く。
+                # ここの an/bn は sourceModel().data()＝実体名なので使えない。
+                a = (self.display_name_of(left) or "").lower()
+                b = (self.display_name_of(right) or "").lower()
+                if a == b:
+                    a, b = an, bn
             else:  # name
                 a, b = an, bn
             return (a < b) if asc else (a > b)

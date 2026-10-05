@@ -230,6 +230,24 @@ def s1():
     # 右詰め: 歯車の右端がフッタ右端の近く、見出しは左端の近く
     assert ft.width() - (cfg.x() + cfg.width()) <= 8, "歯車が右詰めになっていない"
     assert lb.x() <= 8, "見出しが左詰めになっていない"
+    # r119h: 見出しは «「表示名」ボタンの直前まで» 使うこと。
+    # 以前は見出しとは別に addStretch を入れており、空きの半分を
+    # スペーサーに取られて «アニメーショ» のように切れていた。
+    gap = sw.x() - (lb.x() + lb.width())
+    assert 0 <= gap <= 10, ("見出しがボタンの手前まで伸びていない",
+                            lb.x(), lb.width(), sw.x())
+    # 長い見出しは «切り捨て» ではなく «末尾を省略» して全文をツールチップへ
+    long_title = "アニメーション用ジェネラルリグ一式（最新）"
+    dn.save(root, {"CH002_cur": "キャラA"}, title=long_title)
+    cv._refresh_display_names()
+    _settle(400)
+    v2 = [w for w in cv._live_columns()
+          if getattr(w, "_mfm_dn_title", None) is not None][0]
+    lb2 = v2._mfm_dn_title
+    assert lb2.toolTip() == long_title, "全文がツールチップに出ていない"
+    assert lb2.text() == long_title or lb2.text().endswith("…"), lb2.text()
+    sw2 = v2._mfm_dn_switch
+    assert lb2.x() + lb2.width() <= sw2.x() + 1, "見出しがボタンに重なっている"
     # 見出しが無ければラベルも作らない
     dn.save(root, {"CH002_cur": "キャラA"}, title="")
     cv._refresh_display_names()

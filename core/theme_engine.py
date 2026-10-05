@@ -34,6 +34,9 @@ _REF_RE = re.compile(r"\{([a-z_.0-9]+)\}")
 
 _cached_tokens = None
 _current_mode = "dark"       # apply_theme が最後に適用したモード（qss_vars の既定）
+# r120: qss_vars() の結果（モード別）。描画中に呼ばれるのでキャッシュする。
+# 値は {mode: (tokens_obj, vars_dict)}。tokens_obj の同一性で作り直しを判定する。
+_QSS_CACHE = {}
 
 
 # ---------------------------------------------------------------------------
@@ -95,9 +98,20 @@ def qss_vars(mode=None) -> dict:
     """ウィジェット個別の setStyleSheet 用に、色ロール＋形状・書体・密度を
     ひとまとめの dict で返す（"%(on_surface)s" 形式で差し込む）。
     アプリ全体の QSS と同じトークンを使うことで、ライト/ダークの取りこぼしを防ぐ。
-    アンダースコア始まりの注釈キーは除外する。"""
-    t = load_tokens()
+    アンダースコア始まりの注釈キーは除外する。
+
+    r120: **結果をモード別に覚える。** ここは «描画中に» 呼ばれる
+    （ThumbnailDelegate.paint / StatusBadgeDelegate.paint はセル 1 つごとに
+    呼ぶ）。中で矢印・チェックの PNG を作っているので 1 回 0.25ms ほど掛かり、
+    セル数 × フレーム数だけ積み上がってカラムのスライドがカクついていた
+    （ユーザー報告 2026-10-02）。トークンを読み直すかモードが変われば
+    作り直す（load_tokens() は同じ dict を返すので «同一性» で判定できる）。
+    """
     m = mode or _current_mode
+    t = load_tokens()
+    hit = _QSS_CACHE.get(m)
+    if hit is not None and hit[0] is t:
+        return dict(hit[1])        # 呼び出し側が書き換えても元を壊さない
     v = {k: val for k, val in t["sys"][m].items()
          if not k.startswith("_") and isinstance(val, str)}
     v.update({
@@ -127,7 +141,8 @@ def qss_vars(mode=None) -> dict:
         "check_png_dim": _check_png(v["on_surface_dim"]),
         "dash_png": _check_png(v["on_primary"], "dash"),
     })
-    return v
+    _QSS_CACHE[m] = (t, v)
+    return dict(v)
 
 
 def area_accents(mode=None):

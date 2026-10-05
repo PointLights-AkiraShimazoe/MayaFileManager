@@ -167,11 +167,11 @@ class MayaBridgeDialog(QDialog):
     def _reload_targets(self):
         """フォルダを見て «全バージョン共通＋実在するバージョン» を並べ直す。
 
-        r119c: **userSetup.py は最初に見つかった 1 つしか実行されない。**
-        バージョン別の scripts が共通より先に来るので、
-        `<appdir>/2026/scripts/userSetup.py` があるバージョンでは
-        共通側に書いても実行されない。«入っているのに効かない» を防ぐため、
-        隠している版は既定でチェックし、その旨を必ず見せる。
+        r120: 以前は「userSetup.py は最初に見つかった 1 つしか実行されない」
+        という前提で «隠している版» を警告していたが、**これは誤り**だった。
+        実機ログ（2026-10-02）で、1 回の Maya 起動に対して共通とバージョン別の
+        userSetup.py が **両方実行される** ことを確認した（スニペットが残す
+        痕跡が 2 行出た）。したがって共通に 1 つ書けば全てのバージョンに効く。
         """
         d = self.directory()
         if d and d != mb.maya_app_dir():
@@ -187,7 +187,6 @@ class MayaBridgeDialog(QDialog):
                 w.deleteLater()
         self._targets = []
         versions = mb.installed_versions()
-        shadowing = set(mb.shadowing_versions())
         rows = [(None, tr("全バージョン共通", "All versions"))]
         for v in versions:
             rows.append((v, "Maya %s" % v))
@@ -205,23 +204,14 @@ class MayaBridgeDialog(QDialog):
                 mark = "  " + tr("（古い版 — 要更新）", "(old version - update)")
             elif done:
                 mark = "  " + tr("（設定済み）", "(already set up)")
-            if ver is None and shadowing:
-                # 共通側は «隠されている版がある» ことを必ず添える
-                mark += "  " + tr("（%s では実行されません）",
-                                  "(not executed for %s)") \
-                    % "/".join(sorted(shadowing, reverse=True))
-            elif ver in shadowing and not done:
-                mark += "  " + tr("（ここに入れる必要があります）",
-                                  "(must be installed here)")
             cb = QCheckBox(label + mark, self)
-            # 既定: 古い版は直す / 共通に隠されている版は入れる /
-            #       隠されている版が無ければ共通だけで足りる
+            # 既定: 古い版はどこであれ直す / それ以外は «共通が未導入なら共通だけ»
             if stale:
                 want = True
             elif ver is None:
-                want = not done and len(shadowing) < len(versions)
+                want = not done
             else:
-                want = (ver in shadowing) and not done
+                want = False
             cb.setChecked(bool(want))
             cb.setToolTip(p)
             self._body_lay.addWidget(cb)
@@ -231,20 +221,6 @@ class MayaBridgeDialog(QDialog):
             lb.setIndent(22)
             self._body_lay.addWidget(lb)
             self._targets.append((ver, cb))
-
-        if shadowing:
-            warn = QLabel(tr(
-                "⚠ userSetup.py は «最初に見つかった 1 つ» しか実行されません。\n"
-                "　 %s は自前の userSetup.py を持っているため、\n"
-                "　 「全バージョン共通」に書いても そのバージョンでは効きません。\n"
-                "　 そのバージョンの行にチェックを入れてください。",
-                "\u26a0 Maya runs only the FIRST userSetup.py it finds.\n"
-                "　 %s already has its own, so \u201cAll versions\u201d will not "
-                "run there.\n　 Tick that version's row instead."
-            ) % "/".join(sorted(shadowing, reverse=True)), self)
-            warn.setObjectName("warn")
-            warn.setWordWrap(True)
-            self._body_lay.addWidget(warn)
 
         if not versions:
             hint = QLabel(tr(

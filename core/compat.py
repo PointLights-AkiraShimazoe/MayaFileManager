@@ -37,7 +37,7 @@ try:
         QProgressDialog, QToolButton, QCheckBox, QRadioButton,
         QSpinBox, QGroupBox, QListWidget, QListWidgetItem,
         QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
-        QStyledItemDelegate, QStyle, QStyleOption,
+        QStyledItemDelegate, QStyle, QStyleOption, QProxyStyle,
         QSizeGrip, QScrollBar, QSlider
     )
     from PySide6.QtGui import (
@@ -71,7 +71,7 @@ except ImportError:
         QProgressDialog, QToolButton, QCheckBox, QRadioButton,
         QSpinBox, QGroupBox, QListWidget, QListWidgetItem,
         QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
-        QStyledItemDelegate, QStyle, QStyleOption,
+        QStyledItemDelegate, QStyle, QStyleOption, QProxyStyle,
         QSizeGrip, QScrollBar, QSlider, QAction,
         QFileSystemModel
     )

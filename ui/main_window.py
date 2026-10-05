@@ -96,6 +96,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         self._bridge_notify = _BridgeNotifier(self)
         self._bridge_notify.done.connect(self._on_bridge_done)
         self._bridge_notify.conn_list.connect(self._on_conn_list)
+        self._bridge_notify.dcc_idle.connect(self._on_dcc_idle)   # r120
         self._conn_pids = {}   # 接続ポート → MayaのPID（識別照会で取得）
         # Blender 連携（r65）: Maya と同じプロトコル、別ポートレンジ
         self._bl_bridge = _bl.BlenderBridge(
@@ -143,6 +144,18 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             states = [None]
         for st in states:
             self._add_area(state=st, save=False)
+        # r119g: エリアの «縦の高さ» は splitter 自身が持つ値で、
+        # 各エリアの get_state() には入っていない。別に保存・復元する。
+        # （従来は保存していなかったため、再起動のたびに均等割りに戻っていた）
+        #
+        # 復元が済むまでは保存しない。splitterMoved は «ユーザーが掴んで
+        # 動かした時» だけでなく **起動直後のレイアウトでも発火** するため、
+        # 素直に繋ぐと «均等割り» で上書きしてから復元することになり、
+        # 保存値が毎回潰れる（この修正を入れた直後に実際に踏んだ）。
+        self._area_sizes_ready = False
+        self._areas_split.splitterMoved.connect(
+            lambda *_a: self._save_area_sizes())
+        QTimer.singleShot(0, self._restore_area_sizes)
         self._browser = self._areas[0].browser   # 互換エイリアス（既存機能の参照先）
         self._bookmark_panel = self._areas[0].bookmark_panel
         self._history_panel = self._areas[0].history_panel
@@ -215,11 +228,14 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         return area
 
     def _on_area_add_below(self, area):
+        # 件数が変わると保存済みの割合は当てはまらない。以後は現状を保存する。
+        self._area_sizes_ready = True
         self._add_area(after=area)
 
     def _on_area_remove(self, area):
         if len(self._areas) <= 1 or area not in self._areas:
             return
+        self._area_sizes_ready = True
         self._areas.remove(area)
         area.setParent(None)
         area.deleteLater()
@@ -252,12 +268,60 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             except Exception as _e:
                 _swallow(_e, "ui/main_window.py:491 _refresh_area_headers")
 
+    AREA_SIZES_KEY = "browser_area_sizes"
+
     def _save_areas_state(self):
         try:
             self._sm.set("browser_areas_state",
                          [a.get_state() for a in self._areas], save=False)
         except Exception as _e:
             _swallow(_e, "ui/main_window.py:498 _save_areas_state")
+        self._save_area_sizes()
+
+    def _save_area_sizes(self):
+        """エリアの縦の高さを保存する（r119g）。
+
+        QSplitter の sizes() は «ピクセル» なので、そのまま保存すると
+        ウィンドウの大きさが変わった時に比率が狂う。割合で持つ。
+
+        **復元が済むまでは書かない。** 起動直後のレイアウトでも
+        splitterMoved が飛ぶため、保存値を均等割りで潰してしまう。"""
+        if not getattr(self, "_area_sizes_ready", False):
+            return
+        try:
+            sizes = [int(x) for x in self._areas_split.sizes()]
+            total = sum(sizes)
+            if total <= 0 or len(sizes) != len(self._areas):
+                return
+            self._sm.set(self.AREA_SIZES_KEY,
+                         [round(x / float(total), 6) for x in sizes],
+                         save=False)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _save_area_sizes")
+
+    def _restore_area_sizes(self):
+        """保存した割合で高さを戻す。エリア数が変わっていたら何もしない。
+
+        終わったら «以後は保存してよい» 印を立てる。"""
+        try:
+            ratios = self._sm.get(self.AREA_SIZES_KEY, None)
+            if not isinstance(ratios, list) or len(ratios) != len(self._areas):
+                self._area_sizes_ready = True      # 戻すものが無い＝以後は保存する
+                return
+            ratios = [max(0.0, float(r)) for r in ratios]
+            total = sum(ratios)
+            if total <= 0:
+                self._area_sizes_ready = True
+                return
+            h = self._areas_split.height()
+            if h <= len(self._areas):          # まだレイアウト前。もう一度待つ
+                QTimer.singleShot(60, self._restore_area_sizes)
+                return
+            self._areas_split.setSizes(
+                [max(1, int(round(h * r / total))) for r in ratios])
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _restore_area_sizes")
+        self._area_sizes_ready = True
 
     def _install_header(self):
         """メニューバーを含む «ヘッダ行» を組み立てて setMenuWidget で置き換える。
@@ -620,6 +684,8 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             try:
                 a.browser.set_max_depth(self._sm.get("column_max_depth", 4))
                 a.browser.set_thumb_size(self._sm.get("thumbnail_size", 128))
+                a.browser.set_slide_animation(      # r120
+                    self._sm.get("column_slide_animation", True))
             except Exception as _e:
                 _swallow(_e, "ui/main_window.py:1937 _on_settings_changed")
         self._thumb_mgr.set_cache_size(self._sm.get("thumbnail_cache_size", 256))

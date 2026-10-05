@@ -357,6 +357,23 @@ class SettingsDialog(QDialog):
                                                "Fit column width to the longest name"))
         layout.addRow("", self._col_auto_width_cb)
 
+        # r120: スライドアニメーション（ユーザー指示 2026-10-02）
+        self._col_slide_cb = QCheckBox(tr(
+            "フォルダを開く時にカラムを滑らせる",
+            "Slide the columns when opening a folder"))
+        layout.addRow("", self._col_slide_cb)
+        _slide_note = QLabel(tr(
+            "切ると、クリックした位置へ «一気に» 移動します。\n"
+            "滑らかさは無くなりますが、スライド中の描画が丸ごと不要になるので\n"
+            "カラムやファイルが多い時のカクつきが出ません。",
+            "When off, the view jumps straight to the clicked column.\n"
+            "You lose the smooth slide, but nothing has to be redrawn while it\n"
+            "moves, so it never stutters with many columns or files."))
+        _slide_note.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
+        _slide_note.setWordWrap(True)
+        layout.addRow("", _slide_note)
+
         layout.addRow(_HLine())
         layout.addRow(_SectionLabel("サムネイル"))
 
@@ -541,6 +558,7 @@ class SettingsDialog(QDialog):
         # ブラウザ
         self._col_depth_spin.setValue(sm.get("column_max_depth", 4))
         self._col_auto_width_cb.setChecked(sm.get("column_auto_width", True))
+        self._col_slide_cb.setChecked(sm.get("column_slide_animation", True))
         self._thumb_size_spin.setValue(sm.get("thumbnail_size", 128))
         self._thumb_cache_spin.setValue(sm.get("thumbnail_cache_size", 256))
 
@@ -588,6 +606,7 @@ class SettingsDialog(QDialog):
         # ブラウザ
         sm.set("column_max_depth", self._col_depth_spin.value(), save=False)
         sm.set("column_auto_width", self._col_auto_width_cb.isChecked(), save=False)
+        sm.set("column_slide_animation", self._col_slide_cb.isChecked(), save=False)
         sm.set("thumbnail_size", self._thumb_size_spin.value(), save=False)
         sm.set("thumbnail_cache_size", self._thumb_cache_spin.value(), save=False)
         sm.set("file_extensions_visible", self._ext_list.get_extensions(), save=False)

@@ -298,66 +298,123 @@ print("dialog offers all-versions + each version and never pre-checks "
 
 
 # ---------------------------------------------------------------------------
-# r119c: **userSetup.py は «最初に見つかった 1 つ» しか実行されない**。
-#   userSetup.mel は全部が実行されるが、.py は Python の import で読まれる
-#   ため、sys.path で先に来たものが他を隠す。Maya はバージョン別の scripts を
-#   共通より先に置くので、<appdir>/2026/scripts/userSetup.py があると
-#   <appdir>/scripts/userSetup.py は実行されない。
-#   「全バージョン共通に入れたのに効かない」の正体（ユーザー指摘 2026-10-02）。
+# r120: **Maya は見つかった userSetup.py を «全部» 実行する**。
+#   r119c では「最初に見つかった 1 つだけ」という前提で、自前の userSetup.py を
+#   持つバージョンを «共通を隠している» と警告していたが、これは誤りだった。
+#   2026-10-02 の実機ログで、1 回の Maya 起動に対してスニペットの痕跡が
+#   2 行（共通＋バージョン別）出ることを確認している。
+#   したがって共通に 1 つ入っていれば、どのバージョンでも効く。
 # ---------------------------------------------------------------------------
 _mb._app_dir_confirmed = None
 _mb._app_dir_override = None
 os.environ.pop("MAYA_APP_DIR", None)
-sh = tempfile.mkdtemp(prefix="mfm_shadow_")
+sh = tempfile.mkdtemp(prefix="mfm_shared_")
 for v in ("2026", "2025"):
     os.makedirs(os.path.join(sh, v, "scripts"))
 os.makedirs(os.path.join(sh, "scripts"))
 _mb.set_maya_app_dir(sh, confirmed=True)
 
-# まだ誰も自前の userSetup.py を持っていない → 共通で全部に効く
-assert _mb.shadowing_versions() == []
-assert _mb.effective_target_for("2026") is None
 _mb.install_usersetup(None)
 assert _mb.bridge_effective_for("2026") and _mb.bridge_effective_for("2025")
 assert _mb.ineffective_versions() == []
-print("with no version-local userSetup.py, the shared one covers everyone: OK")
+print("the shared userSetup.py covers every version: OK")
 
-# 2026 が «自前の userSetup.py» を持つと、共通はそのバージョンで隠れる
+# 2026 が «自前の userSetup.py» を持っていても、共通は効いたまま
 other = os.path.join(sh, "2026", "scripts", "userSetup.py")
 io.open(other, "w", encoding="utf-8").write("# 既存のユーザー設定\nprint('hi')\n")
-assert _mb.shadowing_versions() == ["2026"], _mb.shadowing_versions()
-assert _mb.effective_target_for("2026") == "2026"
-assert _mb.effective_target_for("2025") is None
-# «入っている» ことは変わらないが «効かない»
-assert _mb.is_usersetup_installed(None)
-assert not _mb.bridge_effective_for("2026"), \
-    "自前の userSetup.py があるのに共通が効く判定になっている"
-assert _mb.bridge_effective_for("2025")
-assert _mb.ineffective_versions() == ["2026"], _mb.ineffective_versions()
-print("a version with its own userSetup.py shadows the shared one: OK")
-
-# そのバージョンへ入れると効くようになる（既存の中身は残る）
-_mb.install_usersetup("2026")
-assert _mb.bridge_effective_for("2026")
+assert _mb.has_own_usersetup("2026")
+assert _mb.bridge_effective_for("2026"), \
+    "自前の userSetup.py があるだけで «効かない» 判定にしてはいけない"
 assert _mb.ineffective_versions() == []
+print("a version with its own userSetup.py does NOT disable the shared one: OK")
+
+# バージョン別に入れることもできる（既存の中身は残る）
+_mb.install_usersetup("2026")
 body = io.open(other, encoding="utf-8").read()
 assert "print('hi')" in body, "既存の userSetup.py の中身を消している"
 assert _US_BEGIN in body
+assert body.index(_US_BEGIN) < body.index("print('hi')"), "先頭に入っていない"
 ast.parse(body)
-print("installing into the shadowing version fixes it and keeps its content: OK")
+print("installing into a single version keeps that file's content: OK")
 
-# ダイアログ: 隠している版が既定でチェックされ、警告が出ること
+# 共通がまだ無い時だけ «全バージョン共通» が既定でチェックされること。
+# 隠し警告（QLabel#warn）はもう出してはいけない。
 from ui.maya_bridge_dialog import MayaBridgeDialog
-io.open(other, "w", encoding="utf-8").write("# 既存\n")      # 連携を外す
+from core.compat import QLabel
+sh2 = tempfile.mkdtemp(prefix="mfm_dialog_")
+for v in ("2026", "2025"):
+    os.makedirs(os.path.join(sh2, v, "scripts"))
 _mb._app_dir_confirmed = None
-_mb.set_maya_app_dir(sh, confirmed=True)
+_mb.set_maya_app_dir(sh2, confirmed=True)
 d3 = MayaBridgeDialog()
 picked = d3.selected_targets()
-assert "2026" in picked, ("隠している版が既定で選ばれていない", picked)
-from core.compat import QLabel
+assert picked == [None], ("共通だけが既定で選ばれるべき", picked)
 warns = [w for w in d3.findChildren(QLabel) if w.objectName() == "warn"]
-assert warns and "2026" in warns[0].text(), "隠しの警告が出ていない"
+assert not warns, "誤った «隠し» 警告がまだ出ている"
 d3.deleteLater()
-print("the dialog pre-selects the shadowing version and warns about it: OK")
+
+# 共通を入れた後は、何も既定でチェックされない
+_mb.install_usersetup(None)
+d4 = MayaBridgeDialog()
+assert d4.selected_targets() == [], d4.selected_targets()
+d4.deleteLater()
+print("the dialog pre-checks only the shared target, and warns about nothing: OK")
+
+# ---------------------------------------------------------------------------
+# r120: 連携ブロックは userSetup.py の «先頭» に入ること
+#   実機障害: 全バージョンに Bridge=True が入っているのに open ports: [] で、
+#   Maya 側の userSetup 読込元も空だった。原因は «末尾追記»。userSetup.py は
+#   Python の import で読まれるので、既存の中身が途中で例外を出すと
+#   そこで打ち切られ、末尾の連携ブロックへ永久に到達しない。
+# ---------------------------------------------------------------------------
+tmp_head = tempfile.mkdtemp(prefix="mfm_headinsert_")
+_mb._app_dir_confirmed = None
+_mb._app_dir_override = None
+_mb.set_maya_app_dir(tmp_head, confirmed=True)
+hp = _mb.usersetup_path()
+os.makedirs(os.path.dirname(hp), exist_ok=True)
+
+# 1) 途中で死ぬ既存 userSetup.py でも、連携ブロックは «その前» にある
+io.open(hp, "w", encoding="utf-8").write(
+    u"# -*- coding: utf-8 -*-\n"
+    u"import maya.cmds as cmds\n"
+    u"raise RuntimeError('他人のコードが死ぬ')\n"
+    u"print('ここには来ない')\n")
+_mb.install_usersetup()
+hb = io.open(hp, encoding="utf-8").read()
+assert hb.splitlines()[0].startswith("# -*- coding"), \
+    ("coding 宣言を 1 行目から動かしてはいけない", hb.splitlines()[:3])
+assert hb.index(_US_BEGIN) < hb.index("raise RuntimeError"), \
+    "連携ブロックが既存コードより後ろにある（末尾追記のまま）"
+assert "print('ここには来ない')" in hb, "既存の中身を消している"
+ast.parse(hb)
+print("the bridge block is inserted ahead of existing code: OK")
+
+# 2) 末尾に «旧位置» のブロックが残っているファイルを入れ直すと先頭へ移る
+io.open(hp, "w", encoding="utf-8").write(
+    u"print('existing')\n\n" + _US_SNIPPET)
+_mb.install_usersetup()
+hb2 = io.open(hp, encoding="utf-8").read()
+assert hb2.count(_US_BEGIN) == 1, "ブロックが増えた"
+assert hb2.index(_US_BEGIN) < hb2.index("print('existing')"), \
+    "旧位置（末尾）のブロックが先頭へ移動していない"
+ast.parse(hb2)
+print("an old tail-placed block is moved to the top: OK")
+
+# 3) shebang + coding の両方を持つファイルでも順序を壊さない
+io.open(hp, "w", encoding="utf-8").write(
+    u"#!/usr/bin/env python\n# -*- coding: utf-8 -*-\nprint('x')\n")
+_mb.install_usersetup()
+hl = io.open(hp, encoding="utf-8").read().splitlines()
+assert hl[0].startswith("#!") and hl[1].startswith("# -*- coding"), hl[:3]
+assert hl[2].startswith(_US_BEGIN), hl[:4]
+print("shebang and coding lines stay first, block comes right after: OK")
+
+# 4) スニペットが «実行された» 痕跡を残すこと（切り分け不能だったのを解消）
+assert "_mfm_trace" in _US_SNIPPET
+assert "mfm_maya.log" in _US_SNIPPET, "Maya 側から記録する先が無い"
+assert _mb.SNIPPET_VERSION >= 4, "挙動を変えたのに版を上げていない"
+print("the snippet records that it ran: OK")
+
 
 finish()

@@ -75,11 +75,17 @@ class ThumbnailDelegate(QStyledItemDelegate):
     """
 
     def __init__(self, thumb_mgr: ThumbnailManager, thumb_size: int = 64, parent=None,
-                 is_expanded_index=None):
+                 is_expanded_index=None, path_of_index=None):
         super().__init__(parent)
         self._mgr = thumb_mgr
         self._thumb_size = thumb_size
         self._is_expanded_index = is_expanded_index   # r81: 展開中フォルダの目印
+        # r120: パスの取り出し方を差し替えられるようにする。
+        # 既定は QFileSystemModel.filePath() を辿るが、平坦カラムは
+        # QStandardItemModel + 独自ロールなので filePath() を持たない。
+        # ここに «ビュー側の index からパスを返す» 関数を渡せば、
+        # 同じデリゲートをそのまま使える。
+        self._path_of_index = path_of_index
 
     _PAD = 4
     _TEXT_H = 26        # アイコン表示時に名前へ割く高さ（2行分）
@@ -181,24 +187,36 @@ class ThumbnailDelegate(QStyledItemDelegate):
             text_flags = Qt.AlignVCenter | Qt.AlignLeft
             elide = Qt.ElideMiddle
 
-        model = index.model()
-        source_model = model
-        source_index = index
-        # Unwrap proxy
-        while hasattr(source_model, "sourceModel"):
-            source_index = source_model.mapToSource(source_index)
-            source_model = source_model.sourceModel()
-
-        file_path = _safe_file_path(source_model, source_index) if hasattr(source_model, "filePath") else ""
-
-        # フォルダはサムネイル生成の対象外（"?" の汎用チップになってしまう）。
-        # モデルのフォルダアイコンをそのまま使う（r84）。
         is_dir = False
-        try:
-            if hasattr(source_model, "isDir"):
-                is_dir = bool(source_model.isDir(source_index))
-        except Exception:
-            is_dir = False
+        if self._path_of_index is not None:
+            # r120: 平坦カラム等、filePath() を持たないモデル向け
+            try:
+                file_path = self._path_of_index(index) or ""
+            except Exception as _e:
+                _swallow(_e, "ui/browser_delegates.py paint(path_of_index)")
+                file_path = ""
+            try:
+                is_dir = bool(file_path) and os.path.isdir(file_path)
+            except OSError:
+                is_dir = False
+        else:
+            source_model = index.model()
+            source_index = index
+            # Unwrap proxy
+            while hasattr(source_model, "sourceModel"):
+                source_index = source_model.mapToSource(source_index)
+                source_model = source_model.sourceModel()
+
+            file_path = _safe_file_path(source_model, source_index) \
+                if hasattr(source_model, "filePath") else ""
+
+            # フォルダはサムネイル生成の対象外（"?" の汎用チップになってしまう）。
+            # モデルのフォルダアイコンをそのまま使う（r84）。
+            try:
+                if hasattr(source_model, "isDir"):
+                    is_dir = bool(source_model.isDir(source_index))
+            except Exception:
+                is_dir = False
 
         # 1) 生成済みサムネイル → 2) 種別アイコン（必ずどちらかは出す）
         pm = self._mgr.get(file_path) if (file_path and not is_dir) else None
@@ -418,7 +436,12 @@ class StatusBadgeDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         # r81: 通常描画の前に「展開中フォルダ」の淡い下地を敷く（選択中は描かない）
-        self.initStyleOption(option, index)
+        # r120: **initStyleOption をここで呼ばない。** 直後の
+        # QStyledItemDelegate.paint() が内部で同じことをするので «二度手間» に
+        # なっていた。下地の判定に使う State_Selected はビュー側が
+        # paint 前に入れているので、これ無しでも正しい。
+        # 1 セルあたり約 0.06ms、スライド中は «セル数 × フレーム数» 積み上がる
+        # （実測で描画時間の 1/6）。カラムのスライドがカクつく一因だった。
         _paint_expanded_mark(painter, option, index, self._is_expanded_index)
         super().paint(painter, option, index)
         mgr = self._mgr

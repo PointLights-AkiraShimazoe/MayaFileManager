@@ -310,6 +310,7 @@ class _BridgeNotifier(QObject):
     """ワーカースレッドの送信結果をUIスレッドへqueued接続で運ぶ。"""
     done = Signal(bool, str, object)   # (ok, label, reply)
     conn_list = Signal(list, str)      # ([(port, label, ok, pid, dcc), ...], dcc) 接続候補スキャン結果
+    dcc_idle = Signal(int, bool)       # (port, idle) r120: «前の操作が終わったか» の見張り
 
 
 # ---------------------------------------------------------------------------

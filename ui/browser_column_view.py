@@ -14,7 +14,7 @@ from core.compat import (
     QLabel, QComboBox, QLineEdit, QToolButton,
     QColumnView, QListView,
     QFrame, QAbstractItemView, QSlider, QSizePolicy,
-    QMenu, QInputDialog, QStyle, QModelIndex, QSize, QRect, QPixmap, QPainter, QColor, QFileInfo, QUrl, QMimeData, QPoint,
+    QMenu, QInputDialog, QStyle, QProxyStyle, QModelIndex, QSize, QRect, QPixmap, QPainter, QColor, QFileInfo, QUrl, QMimeData, QPoint,
     QFontMetrics, QTimer, QDrag, QCursor,
 )
 from core.compat import QtCore as _QtCore
@@ -266,6 +266,35 @@ class _SizeButtonHover(QObject):
         return False
 
 
+# r120: アニメーション時間のスタイルヒント。PySide6 では enum が入れ子
+# （QStyle.StyleHint.SH_...）になっていることがあるので両方の綴りを見る。
+# 見つからなければ None にして «切れません» と分かるようにする（黙って
+# 効かないのが一番たちが悪い）。
+def _anim_duration_hint():
+    for owner in (getattr(QStyle, "StyleHint", None), QStyle):
+        h = getattr(owner, "SH_Widget_Animation_Duration", None) \
+            if owner is not None else None
+        if h is not None:
+            return h
+    return None
+
+
+SH_ANIMATION_DURATION = _anim_duration_hint()
+
+
+class _NoAnimationStyle(QProxyStyle):
+    """カラムのスライドアニメーションを切るためだけのスタイル（r120）。
+
+    Qt 6 の QColumnView::scrollTo は SH_Widget_Animation_Duration が 0 なら
+    水平スクロールを «アニメーションせずに» 終点へ入れる。ここで 0 を返す。
+    他のヒントは元のスタイルへそのまま委ねるので、見た目は変わらない。"""
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if SH_ANIMATION_DURATION is not None and hint == SH_ANIMATION_DURATION:
+            return 0
+        return super().styleHint(hint, option, widget, returnData)
+
+
 class _ColumnResizeHandle(QWidget):
     """カラム境界の縦ハンドル。ドラッグで幅変更、ダブルクリックで内容に合わせる。
 
@@ -468,6 +497,81 @@ class CappedColumnView(QColumnView):
         except Exception as _e:
             _swallow(_e, "ui/browser_column_view.py:477 scrollTo")
         super().scrollTo(index, hint)
+        # r120: アニメーションを切っている時は、Qt がアニメーションの
+        # «終了» を合図に行う後片付け（_q_changeCurrentColumn）が走らない。
+        # そのままだと新しいカラムが作られても «表示されない» ままになる
+        # （実機報告 2026-10-03）。同じことを自前の再配置で済ませる。
+        if not self.slide_animation():
+            self._show_current_column()
+            self._relayout_columns()
+
+    def _show_current_column(self):
+        """«現在のフォルダの中身を出すカラム» を表示する（r120）。
+
+        Qt は新しいカラムを作った後、**アニメーションの終了を合図に**
+        後片付け（そのカラムの show）を行う。アニメーションを切ると
+        その合図が来ないので、作られたのに表示されないままになる
+        （実機報告 2026-10-03「Off にすると次のカラムが表示されない」）。
+        ここで同じことをする。対象は «現在の index をルートに持つカラム»
+        だけに限る（Qt が使い回し用に隠しているカラムを出さないため）。"""
+        try:
+            cur = self.currentIndex()
+            if not cur.isValid():
+                return
+            for c in self.findChildren(QListView):
+                if getattr(c, "_mfm_header", None) is None:
+                    continue
+                try:
+                    if c.isVisible():
+                        continue
+                    if c.rootIndex() == cur:
+                        c.show()
+                except RuntimeError:
+                    continue
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py _show_current_column")
+
+    # ── r120: カラムのスライドアニメーション（設定で切れる）──────────
+    #
+    # 【重要・実機で踏んだ】**scrollTo を横取りして早期 return してはいけない。**
+    # QColumnView::scrollTo は «スクロール» だけでなく、その index を表示する
+    # ために必要なカラムを «作る»（内部の closeColumns(index, build=true)）。
+    # 自前のスクロールで済ませて super() を呼ばずに返したところ、
+    # 次のカラムが一切出なくなった（ユーザー報告 2026-10-03）。
+    #
+    # 正しい切り方は Qt が公開しているスタイルヒント。Qt 6 の
+    # QColumnView::scrollTo は
+    #     if (int d = style()->styleHint(SH_Widget_Animation_Duration, ...))
+    #         アニメーションで動かす
+    #     else
+    #         horizontalScrollBar()->setValue(終点)      ← 一気に動く
+    # となっているので、このビューにだけ «0 を返すスタイル» をかぶせれば、
+    # カラム生成はそのままに移動だけが即座になる。
+    def set_slide_animation(self, on: bool):
+        on = bool(on)
+        if on == getattr(self, "_slide_anim", True) and \
+                hasattr(self, "_slide_anim"):
+            return
+        self._slide_anim = on
+        try:
+            if on:
+                self.setStyle(None)            # アプリ既定のスタイルへ戻す
+                self._noanim_style = None
+            else:
+                # 【重要】**引数を渡さないこと。** QProxyStyle(style) は
+                # 渡したスタイルの «所有権を奪う»。QApplication.style() を
+                # 渡したところ、アプリ既定のスタイルが proxy の持ち物になり、
+                # ビューが丸ごと壊れた（カラムに項目が出なくなった）。
+                # 引数なしなら «その時のアプリのスタイル» を所有せずに包む。
+                st = _NoAnimationStyle()
+                st.setParent(self)             # 参照を保って GC を防ぐ
+                self._noanim_style = st
+                self.setStyle(st)
+        except Exception as e:
+            _mfm_warn("set_slide_animation(%s) failed: %r" % (on, e))
+
+    def slide_animation(self) -> bool:
+        return bool(getattr(self, "_slide_anim", True))
 
     # ── ゆっくり2回クリックで名前変更（r67、Explorer 準拠） ──────────────
     def _schedule_reclick_rename(self, path: str):
@@ -584,6 +688,7 @@ class CappedColumnView(QColumnView):
         """生成されたカラムを覚え、破棄時に外す。右隣のカラムが出来た/消えた
         タイミングで各カラムを再描画し、目印の出入りを即反映する。"""
         self._mfm_columns.append(view)
+        self._invalidate_expanded_cache()
         try:
             view.destroyed.connect(lambda *_: self._on_column_destroyed())
         except Exception as _e:
@@ -592,6 +697,7 @@ class CappedColumnView(QColumnView):
 
     def _on_column_destroyed(self):
         self._live_columns()
+        self._invalidate_expanded_cache()
         self._repaint_columns()
 
     def _live_columns(self):
@@ -606,24 +712,48 @@ class CappedColumnView(QColumnView):
         return alive
 
     def _repaint_columns(self):
+        self._invalidate_expanded_cache()
         for c in self._live_columns():
             try:
                 c.viewport().update()
             except Exception as _e:
                 _swallow(_e, "ui/browser_column_view.py:621 _repaint_columns")
 
+    # r120: 展開中フォルダの判定は «セルごと・フレームごと» に呼ばれる。
+    # 従来は呼ばれる度に生存カラムを数え直して rootIndex を全部引いていた
+    # （カラム 5 本 × 可視 125 セル × 60fps ＝ 毎秒 37,500 回）。
+    # 結果を覚えておき、カラムの増減時と、保険として短い時間で作り直す。
+    _EXPANDED_TTL = 0.1          # 秒。これだけ遅れても «下地の色» なので支障なし
+    _expanded_ids = None
+    _expanded_ids_t = 0.0
+
+    def _invalidate_expanded_cache(self):
+        self._expanded_ids = None
+
+    def _expanded_id_set(self):
+        ids = getattr(self, "_expanded_ids", None)
+        if ids is not None and \
+                (_time_mod.monotonic() - self._expanded_ids_t) < self._EXPANDED_TTL:
+            return ids
+        ids = set()
+        for c in self._live_columns():
+            try:
+                r = c.rootIndex()
+                if r.isValid():
+                    ids.add((r.internalId(), r.row(), r.column()))
+            except Exception:
+                continue
+        self._expanded_ids = ids
+        self._expanded_ids_t = _time_mod.monotonic()
+        return ids
+
     def _is_expanded_index(self, index) -> bool:
         """index のフォルダの中身を表示しているカラムが存在するか
         （＝そのフォルダが「展開中」か）。"""
         if not index.isValid():
             return False
-        for c in self._live_columns():
-            try:
-                if c.rootIndex() == index:
-                    return True
-            except Exception:
-                continue
-        return False
+        return (index.internalId(), index.row(), index.column()) \
+            in self._expanded_id_set()
 
     def createColumn(self, index):
         """各カラム生成時のセットアップ（D&D設定・ヘッダ・スピナー）。
@@ -811,7 +941,11 @@ class CappedColumnView(QColumnView):
 
     @property
     def _SORT_KEYS(self):
-        return [("name", tr("名前", "Name")), ("type", tr("種類", "Type")),
+        # r120: «表示名» 順（ユーザー指示 2026-10-02）。表示名を付けていない
+        # 項目は実体名で並ぶので、付けた項目だけが意図した位置へ動く。
+        return [("name", tr("名前", "Name")),
+                ("alias", tr("表示名", "Display name")),
+                ("type", tr("種類", "Type")),
                 ("date", tr("日付", "Date")), ("size", tr("サイズ", "Size"))]
 
     def set_thumb_mgr(self, mgr):
@@ -1037,6 +1171,7 @@ class CappedColumnView(QColumnView):
             _swallow(_e, "ui/browser_column_view.py:993 _build_column_header")
         hdr = QWidget(view)
         hdr.setObjectName("mfmColHeader")
+        view._mfm_hdr_geo = None          # r120: 作り直したら前回値を捨てる
         # 注意: グローバルQSSの min-height(26px) がヘッダ内の固定20px指定を
         # 上書きし、2行合計がヘッダ予約高(_COL_HEADER_H)を超えて先頭項目に
         # 被った実例あり。ヘッダ内では min-height を必ず明示して打ち消す。
@@ -1172,9 +1307,14 @@ class CappedColumnView(QColumnView):
         if not folder_path or not display_names.has_file(folder_path):
             view._mfm_dn_footer = None
             view._mfm_dn_switch = None
+            view._mfm_ft_geo = None       # r120
             return
         ft = QWidget(view)
         ft.setObjectName("mfmDnFooter")
+        # r120: 位置の «前回値» は作り直したら捨てる。ウィジェットが別物に
+        # なっているので、同じ寸法でも配置と見出しの省略をやり直す必要がある
+        # （見出しだけ変えた時に反映されなくなっていた）。
+        view._mfm_ft_geo = None
         from core.theme_engine import qss_vars
         tv = qss_vars()
         ft.setStyleSheet(
@@ -1192,18 +1332,25 @@ class CappedColumnView(QColumnView):
         row.setContentsMargins(6, 2, 4, 2)
         row.setSpacing(4)
         # r119: 見出しは «左詰め»、操作ボタンは «右詰め»。
+        # r119h: 見出しとは別に addStretch を入れていたため、空きの半分を
+        # スペーサーに取られて見出しが «アニメーショ» のように切れていた
+        # （ユーザー報告 2026-10-02）。見出しがある時は見出し自身に空きを
+        # 全部渡す（＝「表示名」ボタンの直前まで使う）。
         ttl = display_names.title(folder_path)
         if ttl:
             lb = QLabel(ttl, ft)
             lb.setObjectName("mfmColTitle")
             lb.setToolTip(ttl)
-            # 幅が足りない時は見出しが縮む（ボタンは縮ませない）
+            # 入り切らない時だけ末尾を省略する（ボタンは縮ませない）
             lb.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            lb.setMinimumWidth(0)
+            lb.setTextFormat(Qt.PlainText)
+            lb._mfm_full_title = ttl
             row.addWidget(lb, 1)
             view._mfm_dn_title = lb
         else:
             view._mfm_dn_title = None
-        row.addStretch(1)
+            row.addStretch(1)      # 見出しが無い時だけボタンを右へ押す
         sw = QToolButton(ft)
         sw.setCheckable(True)
         sw.setChecked(display_names.is_enabled(folder_path))
@@ -1224,6 +1371,25 @@ class CappedColumnView(QColumnView):
         view._mfm_dn_switch = sw
         ft.show()
         ft.raise_()
+        self._elide_column_title(view)
+
+    def _elide_column_title(self, view):
+        """見出しを «使える幅いっぱい» で表示し、足りない分だけ末尾を省略する。
+
+        QLabel は自前で省略してくれないので、幅が変わるたびにここで作る。
+        幅は «ボタンの手前まで» 全部使う（r119h）。"""
+        lb = getattr(view, "_mfm_dn_title", None)
+        if lb is None:
+            return
+        try:
+            full = getattr(lb, "_mfm_full_title", "") or lb.text()
+            avail = max(0, lb.width())
+            fm = lb.fontMetrics()
+            lb.setText(full if fm.horizontalAdvance(full) <= avail
+                       else fm.elidedText(full, Qt.ElideRight, avail))
+            lb.setToolTip(full)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py _elide_column_title")
 
     def _on_display_names_toggled(self, folder_path, on):
         """有効／無効スイッチ。
@@ -1282,6 +1448,9 @@ class CappedColumnView(QColumnView):
         m = self.model()
         if hasattr(m, "invalidate_display_names"):
             m.invalidate_display_names()
+        # r120: «表示名» 順で並べているカラムは、名前を変えたら並びも変わる
+        if hasattr(m, "resort_columns"):
+            m.resort_columns()
         for v in self._live_columns():
             try:
                 if rebuild_footers:
@@ -1648,7 +1817,14 @@ class CappedColumnView(QColumnView):
 
         r105: 掴む位置をスクロールバーの左に固定するために使う。可視状態で
         計算すると «スクロールバーが出た瞬間にハンドルがずれる» ので、
-        常に確保幅で計算する。"""
+        常に確保幅で計算する。
+
+        r120: 値はテーマ/スタイルで決まり、ビューごとには変わらない。
+        スライド中に «カラム数 × 毎フレーム» 呼ばれる場所なので一度で覚える
+        （sizeHint はスタイルへ問い合わせるので、ただではない）。"""
+        cached = getattr(CappedColumnView, "_sb_extent_cache", None)
+        if cached:
+            return cached
         try:
             sb = view.verticalScrollBar()
             w = sb.sizeHint().width() if sb is not None else 0
@@ -1661,9 +1837,59 @@ class CappedColumnView(QColumnView):
                 w = QApplication.style().pixelMetric(QStyle.PM_ScrollBarExtent)
             except Exception:
                 w = 16
-        return max(0, int(w))
+        w = max(0, int(w))
+        if w > 0:
+            CappedColumnView._sb_extent_cache = w
+        return w
+
+    def _reposition_column_handle(self, view):
+        """リサイズハンドルだけを追従させる（r120）。
+
+        **カラムが «動く» だけで位置が変わるのはハンドルだけ。** ハンドルは
+        ColumnView のビューポートの子なので、カラムが動けば付いていく必要が
+        ある。ヘッダとフッタは «カラム自身の子» なので、カラムが動いても
+        カラム内での座標は変わらない。
+
+        QColumnView のスライドはカラムを 1 フレームごとに move する。
+        従来はその度にヘッダ・フッタ・ハンドルを全部置き直し、さらに
+        raise_() と見出しの省略計算まで走らせていた。カラム 5 本 × 60fps で
+        毎秒数百回になり、これがスライドのカクつきの正体だった
+        （ユーザー報告 2026-10-02）。
+        """
+        handle = getattr(view, "_mfm_resize_handle", None)
+        if handle is None:
+            return
+        try:
+            # r105: **必ず縦スクロールバーより左** に置く。
+            # 従来はカラム右辺を «またぐ» 帯だったため、右端のカラムでは
+            # 掴む場所が縦スクロールバーと重なり、掴み損ねてスクロールバーを
+            # 動かす／誤って幅を変えて戻せない、という事故になっていた
+            # （ユーザー報告 2026-09-30）。
+            # 幅はスクロールバーの «表示有無によらず» 確保している分で計算し、
+            # 出たり消えたりしても掴む位置が動かないようにする。
+            hw = _ColumnResizeHandle.WIDTH
+            sb_w = self._scrollbar_extent(view)
+            x = view.x() + view.width() - sb_w - hw
+            x = max(view.x(), x)          # 極端に細い時でもカラム内に収める
+            geo = (x, view.y() + self._COL_HEADER_H, hw,
+                   max(1, view.height() - self._COL_HEADER_H))
+            vis = view.isVisible()
+            if getattr(view, "_mfm_handle_geo", None) == (geo, vis):
+                return                    # 変わっていないなら何もしない
+            view._mfm_handle_geo = (geo, vis)
+            handle.setGeometry(*geo)
+            handle.setVisible(vis)
+            handle.raise_()
+        except RuntimeError:
+            pass
 
     def _reposition_column_header(self, view):
+        """ヘッダ・フッタ・ハンドルを配置し直す。
+
+        r120: **同じ位置・同じ大きさなら何もしない。** setGeometry /
+        raise_ / setVisible はどれも «呼べば仕事をする» ので、同じ値で
+        呼び続けるとレイアウトと再スタックが毎回走る。
+        """
         hdr = getattr(view, "_mfm_header", None)
         if hdr is None:
             return
@@ -1675,41 +1901,31 @@ class CappedColumnView(QColumnView):
             w = vp.width()
         except Exception:
             x, w = 0, view.width()
-        hdr.setGeometry(x, 0, max(40, w), self._COL_HEADER_H)
-        hdr.raise_()
+        hdr_geo = (x, 0, max(40, w), self._COL_HEADER_H)
+        if getattr(view, "_mfm_hdr_geo", None) != hdr_geo:
+            view._mfm_hdr_geo = hdr_geo
+            hdr.setGeometry(*hdr_geo)
+            hdr.raise_()
         # r115: 表示名フッタはカラムの最下部に貼り付ける
         ft = getattr(view, "_mfm_dn_footer", None)
         if ft is not None:
             try:
-                ft.setGeometry(x, max(0, view.height() - self._COL_FOOTER_H),
-                               max(40, w), self._COL_FOOTER_H)
-                ft.setVisible(view.isVisible())
-                ft.raise_()
+                ft_geo = (x, max(0, view.height() - self._COL_FOOTER_H),
+                          max(40, w), self._COL_FOOTER_H)
+                vis = view.isVisible()
+                prev = getattr(view, "_mfm_ft_geo", None)
+                if prev != (ft_geo, vis):
+                    view._mfm_ft_geo = (ft_geo, vis)
+                    ft.setGeometry(*ft_geo)
+                    ft.setVisible(vis)
+                    ft.raise_()
+                    # 幅が変わった時だけ見出しの省略を作り直す（r119h / r120）。
+                    # 文字幅の計算は安くないので、毎フレーム走らせない。
+                    if prev is None or prev[0][2] != ft_geo[2]:
+                        self._elide_column_title(view)
             except RuntimeError:
                 pass
-        # 右端のリサイズハンドル（ヘッダの下からカラム下端まで）
-        handle = getattr(view, "_mfm_resize_handle", None)
-        if handle is not None:
-            # r105: **必ず縦スクロールバーより左** に置く。
-            # 従来はカラム右辺を «またぐ» 帯だったため、右端のカラムでは
-            # 掴む場所が縦スクロールバーと重なり、掴み損ねてスクロールバーを
-            # 動かす／誤って幅を変えて戻せない、という事故になっていた
-            # （ユーザー報告 2026-09-30）。
-            # 幅はスクロールバーの «表示有無によらず» 確保している分で計算し、
-            # 出たり消えたりしても掴む位置が動かないようにする。
-            hw = _ColumnResizeHandle.WIDTH
-            try:
-                sb_w = self._scrollbar_extent(view)
-                x = view.x() + view.width() - sb_w - hw
-                # カラムが極端に細い時でも最低限カラム内に収める
-                x = max(view.x(), x)
-                handle.setGeometry(x,
-                                   view.y() + self._COL_HEADER_H, hw,
-                                   max(1, view.height() - self._COL_HEADER_H))
-                handle.setVisible(view.isVisible())
-                handle.raise_()
-            except RuntimeError:
-                pass
+        self._reposition_column_handle(view)
 
     # ------------------------------------------------------------------
     # カラム幅（ユーザー変更・保存・自動調整）
@@ -1902,7 +2118,13 @@ class CappedColumnView(QColumnView):
             view = obj if getattr(obj, "_mfm_header", None) is not None \
                 else obj.parent()
             if view is not None and getattr(view, "_mfm_header", None) is not None:
-                self._reposition_column_header(view)
+                # r120: スライド中は Move が毎フレーム飛んでくる。その時に
+                # 位置が変わるのは «ハンドルだけ»（ヘッダ・フッタはカラム
+                # 自身の子なので動かない）。全部置き直すとカクつく。
+                if et == _QtCore.QEvent.Move:
+                    self._reposition_column_handle(view)
+                else:
+                    self._reposition_column_header(view)
         elif et == _QtCore.QEvent.Wheel and (event.modifiers() & Qt.ShiftModifier):
             # Shift+ホイールでブラウジングエリアを横スクロール（カラム間移動）
             hbar = self.horizontalScrollBar()

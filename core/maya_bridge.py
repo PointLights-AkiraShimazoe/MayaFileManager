@@ -123,6 +123,26 @@ _US_END = "# <<< MayaFileManager bridge <<<"
 # 2 台目以降の Maya が «接続リストに出ない» 原因になっていた（r119 で修復）。
 # except は素の `pass` のままにすること。noqa: PLS-NO-SWALLOW
 PORT_SNIPPET_BODY = """
+def _mfm_trace(_msg):
+    # r120: «userSetup が実行されたか» を後から切り分けられるようにする。
+    # Manager 側のログ（~/.maya_file_manager/logs/mfm_maya.log）に相乗りする。
+    try:
+        import os as _os, datetime as _dt
+        _d = _os.path.join(_os.path.expanduser("~"), ".maya_file_manager", "logs")
+        try:
+            _os.makedirs(_d)
+        except Exception:
+            pass
+        _f = open(_os.path.join(_d, "mfm_maya.log"), "a")
+        try:
+            _f.write("[%%s] maya: %%s\\n"
+                     %% (_dt.datetime.now().strftime("%%H:%%M:%%S"), _msg))
+        finally:
+            _f.close()
+    except Exception:
+        pass
+
+
 def _mfm_open_bridge_port():
     import maya.cmds as _cmds
     _ports = range(%d, %d)
@@ -134,6 +154,7 @@ def _mfm_open_bridge_port():
     for _p in _ports:
         try:
             if _cmds.commandPort(":%%d" %% _p, q=True):
+                _mfm_trace("already open port %%d" %% _p)
                 return _p
         except Exception:
             pass
@@ -142,21 +163,24 @@ def _mfm_open_bridge_port():
     for _p in _ports:
         try:
             _cmds.commandPort(name=":%%d" %% _p, sourceType="python")
+            _mfm_trace("opened port %%d" %% _p)
             return _p
         except Exception:
             pass
+    _mfm_trace("no free port in range")
     return None
 """ % (PORT_RANGE[0], PORT_RANGE[-1] + 1)
 
 # スニペットの版。中身を変えたら **必ず上げる**。
 # 古い版が入ったままだと «入れたのに効かない» が起きるので、Manager が
 # 検出して更新を促せるようにする（r119b）。
-SNIPPET_VERSION = 3
+SNIPPET_VERSION = 4
 
 _US_SNIPPET = _US_BEGIN + """
 # MayaFileManager: 起動時に連携用commandPortを自動で開く（レンジ内の空きを使用）
 # mfm-snippet-version: %d
 """ % SNIPPET_VERSION + PORT_SNIPPET_BODY + """
+_mfm_trace("userSetup bridge block reached")
 try:
     import maya.utils as _mu
     _mu.executeDeferred(_mfm_open_bridge_port)
@@ -337,16 +361,14 @@ def usersetup_path(version=None):
     version="2026" … そのバージョン専用
       （`<maya app dir>/2026/scripts/userSetup.py`）
 
-    【重要・r119c】**userSetup.py は «最初に見つかった 1 つ» しか実行されない。**
-    userSetup.mel は見つかった全部が実行されるが、userSetup.py は Python の
-    import で読まれるため、sys.path 上で先に見つかったものが «他を隠す»。
-    Maya はバージョン別の scripts を共通の scripts より先に置くので、
-    `<appdir>/2026/scripts/userSetup.py` があると
-    `<appdir>/scripts/userSetup.py` は **実行されない**。
-
-    つまり «全バージョン共通に入れたのに効かない» が起きる。
-    どこに入れるべきかは shadowing_versions() / effective_target_for() で
-    判断すること（2026-10-02 実機で発覚。ユーザー指摘）。"""
+    【r120・検証済み】**Maya は見つかった userSetup.py を «全部» 実行する。**
+    r119c では「最初に見つかった 1 つだけ」という前提でバージョン別への
+    退避を促していたが、これは誤りだった。2026-10-02 の実機ログで、1 回の
+    Maya 起動に対してスニペットの痕跡が 2 行（共通＋バージョン別）出ることを
+    確認している。したがって **共通に 1 つ書けば全バージョンに効く**。
+    バージョン別は «そのバージョンだけに効かせたい» 時の選択肢にすぎない。
+    なお 2 回実行されてもポートは重複しない（スニペット側で
+    「この Maya が既に開いていれば何もしない」を見ている）。"""
     import os
     base = maya_app_dir()
     if version:
@@ -421,37 +443,22 @@ def outdated_targets():
 def has_own_usersetup(version) -> bool:
     """そのバージョンが «自前の userSetup.py» を持っているか（中身は問わない）。
 
-    持っていると、共通の userSetup.py はそのバージョンでは実行されない。"""
+    r120: これがあっても共通側は «隠されない»（Maya は両方実行する）。
+    表示用の情報として残してあるだけで、有効/無効の判定には使わない。"""
     import os
     return os.path.isfile(usersetup_path(version))
 
 
-def shadowing_versions():
-    """共通の userSetup.py を «隠している» バージョンの一覧（r119c）。
-
-    ここに挙がったバージョンでは、共通側に何を書いても実行されない。
-    そのバージョンの userSetup.py に直接入れる必要がある。"""
-    return [v for v in installed_versions() if has_own_usersetup(v)]
-
-
-def effective_target_for(version):
-    """そのバージョンで «実際に実行される» userSetup.py の場所を返す。
-
-    バージョン専用があればそれ、無ければ共通。
-    """
-    return version if has_own_usersetup(version) else None
-
-
 def bridge_effective_for(version) -> bool:
-    """そのバージョンの Maya で連携が «実際に効く» か（r119c）。
+    """そのバージョンの Maya で連携が効くか。
 
-    共通側に入っていても、そのバージョンが自前の userSetup.py を持って
-    いれば効かない。«入っている» ではなく «効く» を判定する。"""
-    return is_usersetup_installed(effective_target_for(version))
+    r120: 共通（全バージョン）に入っていれば効く。そのバージョン専用に
+    入っていても効く。どちらかにあれば良い。"""
+    return is_usersetup_installed(None) or is_usersetup_installed(version)
 
 
 def ineffective_versions():
-    """連携が効かないバージョンの一覧（＝入れるべき場所に入っていない）。"""
+    """連携が効かないバージョンの一覧（共通にもバージョン別にも無い）。"""
     return [v for v in installed_versions() if not bridge_effective_for(v)]
 
 
@@ -466,9 +473,36 @@ def installed_targets():
     return out
 
 
+def _split_usersetup_header(text: str):
+    """shebang / エンコーディング宣言だけを «先頭に残す» ために切り出す。
+    PEP 263 の coding 宣言はファイルの 1〜2 行目にしか効かないので、
+    連携ブロックはその «直後» に入れなければならない。"""
+    lines = (text or "").split("\n")
+    head = []
+    for i, ln in enumerate(lines[:2]):
+        s = ln.strip()
+        if i == 0 and s.startswith("#!"):
+            head.append(ln)
+            continue
+        if s.startswith("#") and "coding" in s:
+            head.append(ln)
+            continue
+        break
+    rest = "\n".join(lines[len(head):])
+    return (("\n".join(head) + "\n") if head else ""), rest
+
+
 def install_usersetup(version=None) -> str:
-    """連携スニペットを userSetup.py へ追記（既存ブロックは置換）。
-    書き込んだファイルのパスを返す。version=None で全バージョン共通。"""
+    """連携スニペットを userSetup.py の «先頭» へ挿入（既存ブロックは置換）。
+    書き込んだファイルのパスを返す。version=None で全バージョン共通。
+
+    r120: 以前は «末尾へ追記» していた。userSetup.py は Python の import で
+    読まれるので、既存の中身が途中で例外を出すと «そこで打ち切られ»、
+    末尾の連携ブロックは永久に実行されない。実機で全バージョンに
+    Bridge=True が入っているのにポートが 1 つも開かない（open ports: []）
+    状態になったのがこれ。先頭に置けば、他人のコードが何をしようと
+    連携だけは生き残る。
+    """
     import os
     p = usersetup_path(version)
     os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -476,18 +510,22 @@ def install_usersetup(version=None) -> str:
     if os.path.isfile(p):
         with open(p, "r", encoding="utf-8", errors="replace") as f:
             text = f.read()
+    # 既存ブロック（旧版・旧位置＝末尾にあるものを含む）をいったん取り除く
     if _US_BEGIN in text and _US_END in text:
-        # 既存ブロックを最新版に置換
         head = text.split(_US_BEGIN)[0]
         tail = text.split(_US_END, 1)[1]
-        text = head + _US_SNIPPET.rstrip("\n") + tail
-    else:
-        if text and not text.endswith("\n"):
+        text = head.rstrip("\n")
+        if text:
             text += "\n"
-        text += "\n" + _US_SNIPPET
+        text += tail.lstrip("\n")
+    header, body = _split_usersetup_header(text)
+    text = header + _US_SNIPPET
+    if body.strip():
+        text += "\n" + body.lstrip("\n")
     with open(p, "w", encoding="utf-8") as f:
         f.write(text)
-    bridge_log("install_usersetup: wrote %r" % p)
+    bridge_log("install_usersetup: wrote %r (head-insert, snippet v%d)"
+               % (p, SNIPPET_VERSION))
     return p
 
 

@@ -33,6 +33,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     # --- File Browser ---
     "column_max_depth": 4,                 # Max columns in column view
     "column_auto_width": True,             # Auto-fit column width to content
+    # r120: カラムのスライドアニメーション。切ると «クリックした瞬間に出る»。
+    # 滑らかさと引き換えに、スライド中の再描画コストがまるごと無くなる。
+    "column_slide_animation": True,
     "single_click_action": "preview",      # "preview" | "open" | "import" | "reference"
     "double_click_action": "open",
     "show_hidden_files": False,

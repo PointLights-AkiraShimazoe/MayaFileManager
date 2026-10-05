@@ -72,7 +72,9 @@ from ui.reference_editor import ReferenceEditor
 # クラス属性ではなくモジュール定数にしてあるのは、Mixin を «部分的に»
 # 真似た呼び出し元（テストの軽量スタブ等）でも必ず効かせるため。
 DESTRUCTIVE_KINDS = ("open", "run_script")
-DESTRUCTIVE_HOLD_SEC = 120.0      # 応答が来ない時の最後の砦
+# 応答が来ないまま固まった時の最後の砦。シーンの読み込みは数分かかる
+# ことがあるので長めに取る（短いと «まだ開いている最中» に次を送れてしまう）。
+DESTRUCTIVE_HOLD_SEC = 600.0
 
 
 class MainWindowDccMixin:
@@ -524,9 +526,9 @@ class MainWindowDccMixin:
                                           ineffective_versions,
                                           installed_versions)
             stale = outdated_targets()
-            # r119c: «入っているか» ではなく «効くか» で判断する。
-            # userSetup.py は最初に見つかった 1 つしか実行されないので、
-            # 共通側に入れても自前の userSetup.py を持つ版では効かない。
+            # r120: «効くか» で判断する。Maya は共通とバージョン別の
+            # userSetup.py を «両方» 実行するので、どちらかに入っていれば
+            # 効く（r119c の「最初の 1 つだけ」は誤りだった）。
             dead = ineffective_versions() if installed_versions() else []
             if not stale and not dead:
                 return
@@ -778,6 +780,11 @@ class MainWindowDccMixin:
         if arm:
             self._dcc_pending = (arm[0], _t.monotonic())
             self._dcc_arm = None
+            # r120: «どのポートへ送ったか» を覚えて、終わったかを見張る。
+            # 応答待ちだけに頼ると、応答が返らない «開く» の後に印が
+            # 残り続け、以後 Maya へ何も送れなくなっていた（実機 2026-10-02）。
+            self._dcc_pending_port = getattr(bridge, "port", None)
+            self._start_dcc_watch()
 
         def _run():
             ok, reply = bridge.send_python(code, timeout=timeout)
@@ -787,8 +794,15 @@ class MainWindowDccMixin:
                          name="mfm-dcc-send").start()
 
     def _on_bridge_done(self, ok: bool, label: str, reply):
-        # r119e: 応答が返った＝前の操作は片付いた。«実行中» の印を落とす。
-        self._clear_dcc_pending()
+        # r119e/r119i: «実行中» の印を落とすのは **応答が返った時だけ**。
+        # reply is None は «送れたが応答が無い»＝DCC がまだ処理中
+        # （シーン読込中・確認ダイアログ待ち）であって «終わった» ではない。
+        # ここで落とすと、ダイアログを出している最中に次の «開く» を送れて
+        # しまい、confirmDialog の入れ子イベントループの中でシーンの
+        # 読み込みが走って Maya ごと固まる（実機 2026-10-02）。
+        # 送れなかった時は実行されていないので落とす。
+        if (not ok) or reply is not None:
+            self._clear_dcc_pending()
         if ok:
             msg = tr("送信: %s", "Sent: %s") % label
             if reply is None:
@@ -1024,9 +1038,15 @@ class MainWindowDccMixin:
                          "pending=%r path=%r"
                          % (kind, app, now - pend_t, pend_key, path))
                 self.statusBar().showMessage(
-                    tr("前の「%s」がまだ終わっていないため送りませんでした",
-                       "Not sent: the previous \u201c%s\u201d has not finished")
-                    % Path(pend_key[1]).name, 8000)
+                    tr("前の「%s」がまだ終わっていないため送りませんでした"
+                       "（Maya 側の確認ダイアログを確認してください）",
+                       "Not sent: the previous \u201c%s\u201d has not finished "
+                       "(check for a confirmation dialog in Maya)")
+                    % Path(pend_key[1]).name, 10000)
+                # r120: 抑止したら «本当にまだ終わっていないのか» をその場で
+                # 確かめる。終わっていれば印が落ち、次の操作はすぐ通る。
+                self._start_dcc_watch()
+                QTimer.singleShot(0, self._poll_dcc_idle)
                 return False
             # ここでは «予約» するだけ。実際に DCC へ送る瞬間
             # （_bridge_send_async）で «実行中» に昇格させる。
@@ -1046,11 +1066,99 @@ class MainWindowDccMixin:
         self._last_dcc_send = (key, now)
         return True
 
+    # ── r120: «前の操作が終わったか» の見張り ───────────────────────────
+    # 「開く」は応答を待たない（読み込みに数十秒かかる）。そのため
+    # «実行中» の印を落とす機会が無く、一度 Maya で開くと以後ずっと
+    # 「前の〜がまだ終わっていない」で送れなくなっていた。
+    # DCC が «また応答するようになった» ＝ 前の操作は終わっている、を
+    # 軽い問い合わせで確かめて落とす。
+    DCC_WATCH_MS = 1500
+
+    def _start_dcc_watch(self):
+        try:
+            t = getattr(self, "_dcc_watch_timer", None)
+            if t is None:
+                t = QTimer(self)
+                t.setInterval(self.DCC_WATCH_MS)
+                t.timeout.connect(self._poll_dcc_idle)
+                self._dcc_watch_timer = t
+            self._dcc_watch_busy = False
+            t.start()
+        except Exception as _e:
+            # 見張りは «あれば助かる» もの。作れなくても本筋は止めない。
+            _swallow(_e, "ui/main_window_dcc.py _start_dcc_watch")
+
+    def _stop_dcc_watch(self):
+        t = getattr(self, "_dcc_watch_timer", None)
+        if t is not None:
+            t.stop()
+
+    def _poll_dcc_idle(self):
+        import threading
+        import time as _t
+        pend_key, pend_t = getattr(self, "_dcc_pending", (None, 0.0))
+        if pend_key is None:
+            self._stop_dcc_watch()
+            return
+        if (_t.monotonic() - pend_t) >= DESTRUCTIVE_HOLD_SEC:
+            # 最後の歯止め。ここまで応答が無いなら印は害でしかない。
+            self._clear_dcc_pending()
+            return
+        if getattr(self, "_dcc_watch_busy", False):
+            return
+        port = getattr(self, "_dcc_pending_port", None)
+        if not port:
+            self._clear_dcc_pending()
+            return
+        self._dcc_watch_busy = True
+        app = (pend_key[2] or "maya") if len(pend_key) > 2 else "maya"
+
+        def _run(p=port, a=app):
+            idle = False
+            try:
+                if a == "blender":
+                    br, code = _bl.BlenderBridge(p), _bl.IDENTIFY_CODE
+                else:
+                    br, code = MayaBridge(p), IDENTIFY_CODE
+                ok, reply = br.send_python(code, timeout=1.0)
+                idle = bool(ok and parse_identify(reply))
+            except Exception:
+                idle = False
+            self._bridge_notify.dcc_idle.emit(int(p), idle)
+
+        threading.Thread(target=_run, daemon=True,
+                         name="mfm-dcc-idle-watch").start()
+
+    def _on_dcc_idle(self, port: int, idle: bool):
+        """見張りの結果（UIスレッド）。応答があれば «実行中» を解除する。"""
+        self._dcc_watch_busy = False
+        if not idle:
+            return
+        if int(port) != int(getattr(self, "_dcc_pending_port", 0) or 0):
+            return
+        pend_key, _t0 = getattr(self, "_dcc_pending", (None, 0.0))
+        if pend_key is None:
+            self._stop_dcc_watch()
+            return
+        self._clear_dcc_pending()
+        try:
+            from ui.browser_panel import _mfm_log
+            _mfm_log("dcc-send: 実行中の印を解除（DCC が応答した） port=%s pending=%r"
+                     % (port, pend_key))
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _on_dcc_idle(log)")
+        self.statusBar().showMessage(
+            tr("「%s」が終わりました。次の操作を送れます。",
+               "\u201c%s\u201d finished. You can send the next action.")
+            % Path(pend_key[1]).name, 4000)
+
     def _clear_dcc_pending(self, kind=None):
         """«実行中» の印を落とす。応答が返った時／送信できなかった時に呼ぶ。"""
         if kind is None or kind in DESTRUCTIVE_KINDS:
             self._dcc_pending = (None, 0.0)
             self._dcc_arm = None
+            self._dcc_pending_port = None
+            self._stop_dcc_watch()
 
     def _dcc_accepts(self, command: str, path: str, app: str) -> bool:
         """«そのコマンドの対象か» の関所（r91、ユーザー指示: 対象外には絶対に
