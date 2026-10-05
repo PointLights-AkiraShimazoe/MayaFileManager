@@ -22,18 +22,9 @@
   ],
   "nodes": [
     {
-      "id": "u_pick",
-      "lane": "user",
-      "col": 0,
-      "type": "frontend",
-      "label": "送り先を選ぶ",
-      "sublabel": "ヘッダで Maya / Blender",
-      "width": 120
-    },
-    {
       "id": "u_click",
       "lane": "user",
-      "col": 1,
+      "col": 0,
       "type": "frontend",
       "label": "クリック / D&D",
       "sublabel": "右クリックのメニューも",
@@ -42,7 +33,7 @@
     {
       "id": "t_route",
       "lane": "tool",
-      "col": 2,
+      "col": 1,
       "type": "backend",
       "label": "送り先を決める",
       "sublabel": ".ma/.mb→Maya .blend→Blender",
@@ -51,10 +42,19 @@
     {
       "id": "t_check",
       "lane": "tool",
-      "col": 3,
+      "col": 2,
       "type": "backend",
       "label": "接続を確認",
       "sublabel": "未接続なら起動を提案",
+      "width": 120
+    },
+    {
+      "id": "t_guard",
+      "lane": "tool",
+      "col": 3,
+      "type": "backend",
+      "label": "前の操作の完了待ち",
+      "sublabel": "開くは前が片付くまで送らない",
       "width": 120
     },
     {
@@ -87,10 +87,6 @@
   ],
   "edges": [
     {
-      "from": "u_pick",
-      "to": "u_click"
-    },
-    {
       "from": "u_click",
       "to": "t_route",
       "label": "動作: 開く / インポート / 参照"
@@ -101,8 +97,12 @@
     },
     {
       "from": "t_check",
-      "to": "t_send",
+      "to": "t_guard",
       "label": "接続中の DCC へ"
+    },
+    {
+      "from": "t_guard",
+      "to": "t_send"
     },
     {
       "from": "t_send",
@@ -141,7 +141,8 @@
       "items": [
         "「起動」から起動した DCC か、ツールメニューで連携をインストールした DCC だけ接続できる",
         "接続一覧（⟳）で接続先を選び直せる",
-        "エラーは Maya / Blender 側のダイアログにも出る"
+        "エラーは Maya / Blender 側のダイアログにも出る",
+        "「前の○○がまだ終わっていない」が出たら、DCC 側で読み込み中か確認ダイアログ待ち。終われば自動で解除される"
       ]
     }
   ]

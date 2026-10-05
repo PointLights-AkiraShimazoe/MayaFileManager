@@ -5030,15 +5030,15 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
         <!-- Edge paths -->
         <path data-edge-from="d_run" data-edge-to="t_result" data-edge-label="応答（成功 / エラー）" data-edge-key="0" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="862,341;862,269" d="M 862 341 L 862 269" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="t_check" data-edge-to="t_send" data-edge-label="接続中の DCC へ" data-edge-key="1" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="584,243;674,243" d="M 584 243 L 674 243" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="t_route" data-edge-to="t_check" data-edge-key="2" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="436,243;464,243" d="M 436 243 L 464 243" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="t_send" data-edge-to="d_run" data-edge-label="1 行の Python" data-edge-key="3" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="734,269;734,420;862,420;862,393" d="M 734 269 L 734 420 L 862 420 L 862 393" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="u_click" data-edge-to="t_route" data-edge-label="動作: 開く / インポート / 参照" data-edge-key="4" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="256,145;256,166;376,166;376,217" d="M 256 145 L 256 166 L 376 166 L 376 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="u_pick" data-edge-to="u_click" data-edge-key="5" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="168,119;196,119" d="M 168 119 L 196 119" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="t_check" data-edge-to="t_guard" data-edge-label="接続中の DCC へ" data-edge-key="1" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="436,243;526,243" d="M 436 243 L 526 243" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="t_guard" data-edge-to="t_send" data-edge-key="2" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="646,243;674,243" d="M 646 243 L 674 243" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="t_route" data-edge-to="t_check" data-edge-key="3" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="288,243;316,243" d="M 288 243 L 316 243" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="t_send" data-edge-to="d_run" data-edge-label="1 行の Python" data-edge-key="4" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="734,269;734,420;862,420;862,393" d="M 734 269 L 734 420 L 862 420 L 862 393" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="u_click" data-edge-to="t_route" data-edge-label="動作: 開く / インポート / 参照" data-edge-key="5" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="108,145;108,166;228,166;228,217" d="M 108 145 L 108 166 L 228 166 L 228 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
 
         <!-- Nodes -->
-        <g id="node-u_pick" data-node-id="u_pick" data-node-label="送り先を選ぶ" tabindex="0" role="button" aria-label="Focus 送り先を選ぶ, ヘッダで Maya / Blender, ユーザー" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="ヘッダで Maya / Blender" data-node-context="ユーザー">
-          <title>送り先を選ぶ · ヘッダで Maya / Blender · ユーザー</title>
+        <g id="node-u_click" data-node-id="u_click" data-node-label="クリック / D&amp;D" tabindex="0" role="button" aria-label="Focus クリック / D&amp;D, 右クリックのメニューも, ユーザー" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="右クリックのメニューも" data-node-context="ユーザー">
+          <title>クリック / D&amp;D · 右クリックのメニューも · ユーザー</title>
           <rect x="48" y="93" width="120" height="52" rx="6" class="c-mask"/>
           <rect x="48" y="93" width="120" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(54 99) scale(0.6875)">
@@ -5047,44 +5047,41 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="108" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">送り先を選ぶ</text>
-          <text data-detail="context" x="108" y="131" class="t-muted" font-size="8" text-anchor="middle">ヘッダで Maya / Blender</text>
-        </g>
-
-        <g id="node-u_click" data-node-id="u_click" data-node-label="クリック / D&amp;D" tabindex="0" role="button" aria-label="Focus クリック / D&amp;D, 右クリックのメニューも, ユーザー" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="右クリックのメニューも" data-node-context="ユーザー">
-          <title>クリック / D&amp;D · 右クリックのメニューも · ユーザー</title>
-          <rect x="196" y="93" width="120" height="52" rx="6" class="c-mask"/>
-          <rect x="196" y="93" width="120" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(202 99) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="261.2" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">クリック / D&amp;D</text>
-          <text data-detail="context" x="256" y="131" class="t-muted" font-size="8" text-anchor="middle">右クリックのメニューも</text>
+          <text data-node-label="" data-detail-anchor="" x="113.2" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">クリック / D&amp;D</text>
+          <text data-detail="context" x="108" y="131" class="t-muted" font-size="8" text-anchor="middle">右クリックのメニューも</text>
         </g>
 
         <g id="node-t_route" data-node-id="t_route" data-node-label="送り先を決める" tabindex="0" role="button" aria-label="Focus 送り先を決める, .ma/.mb→Maya .blend→Blender, MayaFileManager" aria-pressed="false" data-node-kind="backend" data-node-sublabel=".ma/.mb→Maya .blend→Blender" data-node-context="MayaFileManager">
           <title>送り先を決める · .ma/.mb→Maya .blend→Blender · MayaFileManager</title>
+          <rect x="168" y="217" width="120" height="52" rx="6" class="c-mask"/>
+          <rect x="168" y="217" width="120" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(174 223) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="233.2" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">送り先を決める</text>
+          <text data-detail="context" x="228" y="255" class="t-muted" font-size="6.9" text-anchor="middle">.ma/.mb→Maya .blend→Blender</text>
+        </g>
+
+        <g id="node-t_check" data-node-id="t_check" data-node-label="接続を確認" tabindex="0" role="button" aria-label="Focus 接続を確認, 未接続なら起動を提案, MayaFileManager" aria-pressed="false" data-node-kind="backend" data-node-sublabel="未接続なら起動を提案" data-node-context="MayaFileManager">
+          <title>接続を確認 · 未接続なら起動を提案 · MayaFileManager</title>
           <rect x="316" y="217" width="120" height="52" rx="6" class="c-mask"/>
           <rect x="316" y="217" width="120" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(322 223) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="381.2" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">送り先を決める</text>
-          <text data-detail="context" x="376" y="255" class="t-muted" font-size="6.9" text-anchor="middle">.ma/.mb→Maya .blend→Blender</text>
+          <text data-node-label="" data-detail-anchor="" x="376" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">接続を確認</text>
+          <text data-detail="context" x="376" y="255" class="t-muted" font-size="8" text-anchor="middle">未接続なら起動を提案</text>
         </g>
 
-        <g id="node-t_check" data-node-id="t_check" data-node-label="接続を確認" tabindex="0" role="button" aria-label="Focus 接続を確認, 未接続なら起動を提案, MayaFileManager" aria-pressed="false" data-node-kind="backend" data-node-sublabel="未接続なら起動を提案" data-node-context="MayaFileManager">
-          <title>接続を確認 · 未接続なら起動を提案 · MayaFileManager</title>
-          <rect x="464" y="217" width="120" height="52" rx="6" class="c-mask"/>
-          <rect x="464" y="217" width="120" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(470 223) scale(0.6875)">
+        <g id="node-t_guard" data-node-id="t_guard" data-node-label="前の操作の完了待ち" tabindex="0" role="button" aria-label="Focus 前の操作の完了待ち, 開くは前が片付くまで送らない, MayaFileManager" aria-pressed="false" data-node-kind="backend" data-node-sublabel="開くは前が片付くまで送らない" data-node-context="MayaFileManager">
+          <title>前の操作の完了待ち · 開くは前が片付くまで送らない · MayaFileManager</title>
+          <rect x="526" y="217" width="120" height="52" rx="6" class="c-mask"/>
+          <rect x="526" y="217" width="120" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(532 223) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="524" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">接続を確認</text>
-          <text data-detail="context" x="524" y="255" class="t-muted" font-size="8" text-anchor="middle">未接続なら起動を提案</text>
+          <text data-node-label="" data-detail-anchor="" x="586" y="248.4" class="t-primary" font-size="10.3" font-weight="600" text-anchor="middle">前の操作の完了待ち</text>
+          <text data-detail="context" x="586" y="261.5" class="t-muted" font-size="6.6" text-anchor="middle">開くは前が片付くまで送らない</text>
         </g>
 
         <g id="node-t_send" data-node-id="t_send" data-node-label="コマンドを送信" tabindex="0" role="button" aria-label="Focus コマンドを送信, UI は止まらない（裏で送信）, MayaFileManager" aria-pressed="false" data-node-kind="backend" data-node-sublabel="UI は止まらない（裏で送信）" data-node-context="MayaFileManager">
@@ -5129,20 +5126,20 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <rect x="806.6" y="295" width="110.8" height="14" rx="3" class="c-mask"/>
           <text x="862" y="305" class="t-edge-dashed" font-size="8" text-anchor="middle">応答（成功 / エラー）</text>
         </g>
-        <g data-detail="context" data-edge-from="t_check" data-edge-to="t_send" data-edge-label="接続中の DCC へ" data-edge-key="1">
-          <rect x="588" y="223" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="629" y="233" class="t-edge-default" font-size="8" text-anchor="middle">接続中の DCC へ</text>
+        <g data-detail="context" data-edge-from="t_check" data-edge-to="t_guard" data-edge-label="接続中の DCC へ" data-edge-key="1">
+          <rect x="440" y="223" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="481" y="233" class="t-edge-default" font-size="8" text-anchor="middle">接続中の DCC へ</text>
         </g>
 
-        <g data-detail="context" data-edge-from="t_send" data-edge-to="d_run" data-edge-label="1 行の Python" data-edge-key="3">
+
+        <g data-detail="context" data-edge-from="t_send" data-edge-to="d_run" data-edge-label="1 行の Python" data-edge-key="4">
           <rect x="761.8" y="400" width="72.4" height="14" rx="3" class="c-mask"/>
           <text x="798" y="410" class="t-edge-default" font-size="8" text-anchor="middle">1 行の Python</text>
         </g>
-        <g data-detail="context" data-edge-from="u_click" data-edge-to="t_route" data-edge-label="動作: 開く / インポート / 参照" data-edge-key="4">
-          <rect x="239" y="146" width="154" height="14" rx="3" class="c-mask"/>
-          <text x="316" y="156" class="t-edge-default" font-size="8" text-anchor="middle">動作: 開く / インポート / 参照</text>
+        <g data-detail="context" data-edge-from="u_click" data-edge-to="t_route" data-edge-label="動作: 開く / インポート / 参照" data-edge-key="5">
+          <rect x="91" y="146" width="154" height="14" rx="3" class="c-mask"/>
+          <text x="168" y="156" class="t-edge-default" font-size="8" text-anchor="middle">動作: 開く / インポート / 参照</text>
         </g>
-
 
         <!-- Legend -->
         <g data-legend="" data-legend-bridge="">
@@ -5369,6 +5366,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <li>「起動」から起動した DCC か、ツールメニューで連携をインストールした DCC だけ接続できる</li>
           <li>接続一覧（⟳）で接続先を選び直せる</li>
           <li>エラーは Maya / Blender 側のダイアログにも出る</li>
+          <li>「前の○○がまだ終わっていない」が出たら、DCC 側で読み込み中か確認ダイアログ待ち。終われば自動で解除される</li>
         </ul>
       </div>
     </div>
@@ -13726,6 +13724,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       }
     });
   </script>
+
 <!-- tool-diagram:paths:start -->
 <style>
 :root{--td-w:300px}
@@ -13776,7 +13775,7 @@ html.td-filter [data-node-id]:not(.td-hl){opacity:.28;transition:opacity .15s}
 </style>
 <script>
 (function(){
-  var C = {"root":"D:\\Claude\\PLs-Tools\\MayaFileManager","sep":"\\","copyMode":"full","editor":"vscode","packageName":"MayaFileManager","files":[".github/workflows/build.yml",".github/workflows/ci.yml",".github/workflows/smoke.yml","BUILD.md","BUILD_GUIDE.md","CLAUDE.md","GITHUB_SETUP.md","README.md","_pyinstaller_hooks/hook-PySide6_extra.py","build_exe.bat","build_hooks/hook-core.compat.py","build_hooks/runtime_hook.py","build_tools/hooks/hook-PySide2.py","build_tools/hooks/hook-PySide6.py","build_tools/make_icon.py","build_tools/runtime_hook.py","config/default_settings.json","config/design_tokens.json","core/__init__.py","core/archive_browse.py","core/blender_bridge.py","core/blender_version.py","core/bookmark_manager.py","core/cloud_state.py","core/compat.py","core/dcc_caps.py","core/dcc_log.py","core/dcc_save.py","core/diag.py","core/display_names.py","core/file_operations.py","core/hdr_icons.py","core/i18n.py","core/integrations/__init__.py","core/integrations/base.py","core/integrations/cloud_provider.py","core/integrations/git_provider.py","core/integrations/manager.py","core/integrations/p4_provider.py","core/integrations/svn_provider.py","core/maya_bridge.py","core/maya_project.py","core/maya_version.py","core/merge_browse.py","core/path_guard.py","core/settings_manager.py","core/theme_engine.py","core/thumbnail_generator.py","core/undo_stack.py","core/version.py","generate_icon.py","main.py","resources/blender_bridge.py","resources/icons/app_blender.png","run_dev.bat","run_in_maya.py","run_smoke.bat","run_tests.bat","ui/__init__.py","ui/archive_column.py","ui/batch_rename_dialog.py","ui/bookmark_panel.py","ui/browser_area.py","ui/browser_column_view.py","ui/browser_delegates.py","ui/browser_models.py","ui/browser_panel.py","ui/browser_util.py","ui/common_columns.py","ui/conflict_dialog.py","ui/dcc_header.py","ui/display_name_dialog.py","ui/duplicate_dialog.py","ui/duplicate_folder_panel.py","ui/flat_column.py","ui/main_window.py","ui/main_window_dcc.py","ui/merge_view.py","ui/nav_panels.py","ui/preset_editor.py","ui/quick_look.py","ui/quick_nav_editor.py","ui/reference_editor.py","ui/save_dialog.py","ui/settings_dialog.py"],"nodes":{"entry":{"rel":"main.py","line":358,"symbol":"if __name__ == '__main__' (run_in_maya.py も入口)"},"dcchdr":{"rel":"ui/dcc_header.py","line":233,"symbol":"class DccHeader"},"mainwin":{"rel":"ui/main_window.py","line":300,"symbol":"class MainWindow"},"browser":{"rel":"ui/browser_panel.py","line":2826,"symbol":"class BrowserPanel"},"savedlg":{"rel":"ui/save_dialog.py","line":29,"symbol":"class SaveDialog"},"bridges":{"rel":"core/maya_bridge.py","line":199,"symbol":"class MayaBridge（core/blender_bridge.py: class BlenderBridge）"},"settings":{"rel":"core/settings_manager.py","line":90,"symbol":"class SettingsManager"},"fileops":{"rel":"core/file_operations.py","line":28,"symbol":"def copy_items() ほか（core/undo_stack.py: class UndoStack）"},"integ":{"rel":"core/integrations/manager.py","line":41,"symbol":"class IntegrationManager"},"dccsave":{"rel":"core/dcc_save.py","line":116,"symbol":"def maya_code() / blender_code()"},"maya":{"external":true,"symbol":"外部 (Maya commandPort)"},"blender":{"rel":"resources/blender_bridge.py","line":229,"symbol":"def _pump()（Blender 内で動くブリッジ）"},"u_pick":{"rel":"ui/dcc_header.py","line":233,"symbol":"ユーザー操作: DccHeader のスイッチ"},"u_click":{"rel":"ui/browser_panel.py","line":2157,"symbol":"ユーザー操作 → CappedColumnView.eventFilter()"},"t_route":{"rel":"core/file_operations.py","line":543,"symbol":"def dcc_for_path()"},"t_check":{"rel":"ui/main_window.py","line":1347,"symbol":"def _maya_send_or_prompt() / _blender_send_or_prompt()"},"t_send":{"rel":"ui/main_window.py","line":1180,"symbol":"def _bridge_send_async() → MayaBridge.send_python()"},"d_run":{"rel":"resources/blender_bridge.py","line":229,"symbol":"外部 (Maya commandPort / Blender _pump)"},"t_result":{"rel":"ui/main_window.py","line":1195,"symbol":"def _on_bridge_done()"},"u_start":{"rel":"main.py","line":358,"symbol":"ユーザー操作: 起動（main.py / run_in_maya.py）"},"t_restore":{"rel":"ui/main_window.py","line":302,"symbol":"def MainWindow.__init__() / _restore_geometry()"},"u_go":{"rel":"ui/browser_panel.py","line":3698,"symbol":"ユーザー操作 → navigate_to()"},"t_probe":{"rel":"core/path_guard.py","line":85,"symbol":"def PathProber.probe()"},"x_list":{"external":true,"symbol":"外部 (QFileSystemModel の列挙 / directoryLoaded)"},"t_columns":{"rel":"ui/browser_panel.py","line":1286,"symbol":"def CappedColumnView.createColumn()"},"t_badge":{"rel":"ui/browser_panel.py","line":851,"symbol":"class StatusBadgeDelegate"},"u_select":{"rel":"ui/browser_panel.py","line":2157,"symbol":"ユーザー操作 → eventFilter（選択）"},"u_key":{"rel":"ui/browser_panel.py","line":4939,"symbol":"ユーザー操作 → _install_clipboard_actions()"},"t_targets":{"rel":"ui/browser_panel.py","line":5130,"symbol":"def _operation_targets() / _deep_view_targets()"},"t_confirm":{"rel":"ui/browser_panel.py","line":4865,"symbol":"def _delete_confirm()"},"x_exec":{"rel":"ui/browser_panel.py","line":4981,"symbol":"def _run_file_op() → core/file_operations, undo_stack"},"t_refresh":{"rel":"ui/browser_panel.py","line":5053,"symbol":"def _refresh_flat_view() / _open_inline_editor()"},"u_undo":{"rel":"ui/browser_panel.py","line":5067,"symbol":"ユーザー操作 → _undo_op()"},"t_show":{"rel":"ui/browser_panel.py","line":1286,"symbol":"def createColumn() → request_status()"},"x_status":{"rel":"core/integrations/manager.py","line":112,"symbol":"def _do_status() → Provider.fetch_status()"},"t_badge2":{"rel":"ui/browser_panel.py","line":851,"symbol":"class StatusBadgeDelegate"},"u_rclick":{"rel":"core/integrations/manager.py","line":210,"symbol":"ユーザー操作 → actions_for()"},"t_precheck":{"rel":"core/integrations/p4_provider.py","line":273,"symbol":"def _checkout_precheck()"},"x_cmd":{"rel":"core/integrations/base.py","line":189,"symbol":"def Provider.run_cli_async()"},"t_notify":{"rel":"ui/browser_panel.py","line":813,"symbol":"def _on_integration_action_finished()"}}};
+  var C = {"root":"D:\\Claude\\PLs-Tools\\MayaFileManager","sep":"\\","copyMode":"full","editor":"vscode","packageName":"MayaFileManager","files":[".github/workflows/build.yml",".github/workflows/ci.yml",".github/workflows/smoke.yml","BUILD.md","BUILD_GUIDE.md","CLAUDE.md","GITHUB_SETUP.md","README.md","_pyinstaller_hooks/hook-PySide6_extra.py","build_exe.bat","build_hooks/hook-core.compat.py","build_hooks/runtime_hook.py","build_tools/hooks/hook-PySide2.py","build_tools/hooks/hook-PySide6.py","build_tools/make_icon.py","build_tools/runtime_hook.py","config/default_settings.json","config/design_tokens.json","core/__init__.py","core/archive_browse.py","core/blender_bridge.py","core/blender_version.py","core/bookmark_manager.py","core/cloud_state.py","core/compat.py","core/dcc_caps.py","core/dcc_log.py","core/dcc_save.py","core/diag.py","core/display_names.py","core/file_operations.py","core/hdr_icons.py","core/i18n.py","core/integrations/__init__.py","core/integrations/base.py","core/integrations/cloud_provider.py","core/integrations/git_provider.py","core/integrations/manager.py","core/integrations/p4_provider.py","core/integrations/svn_provider.py","core/maya_bridge.py","core/maya_project.py","core/maya_version.py","core/merge_browse.py","core/path_guard.py","core/settings_manager.py","core/theme_engine.py","core/thumbnail_generator.py","core/undo_stack.py","core/version.py","generate_icon.py","main.py","resources/blender_bridge.py","resources/icons/app_blender.png","run_dev.bat","run_in_maya.py","run_smoke.bat","run_tests.bat","ui/__init__.py","ui/archive_column.py","ui/batch_rename_dialog.py","ui/bookmark_panel.py","ui/browser_area.py","ui/browser_column_view.py","ui/browser_delegates.py","ui/browser_models.py","ui/browser_panel.py","ui/browser_util.py","ui/common_columns.py","ui/conflict_dialog.py","ui/dcc_header.py","ui/dialog_util.py","ui/display_name_dialog.py","ui/duplicate_dialog.py","ui/duplicate_folder_panel.py","ui/flat_column.py","ui/main_window.py","ui/main_window_dcc.py","ui/maya_bridge_dialog.py","ui/maya_launch_dialog.py","ui/merge_view.py","ui/nav_panels.py","ui/preset_editor.py","ui/quick_look.py","ui/quick_nav_editor.py","ui/reference_editor.py","ui/save_dialog.py","ui/settings_dialog.py"],"nodes":{"entry":{"rel":"main.py","line":350,"symbol":"if __name__ == '__main__' (run_in_maya.py も入口)"},"dcchdr":{"rel":"ui/dcc_header.py","line":249,"symbol":"class DccHeader"},"mainwin":{"rel":"ui/main_window.py","line":71,"symbol":"class MainWindow"},"browser":{"rel":"ui/browser_panel.py","line":73,"symbol":"class BrowserPanel"},"savedlg":{"rel":"ui/save_dialog.py","line":29,"symbol":"class SaveDialog"},"bridges":{"rel":"core/maya_bridge.py","line":537,"symbol":"class MayaBridge（core/blender_bridge.py: class BlenderBridge）"},"settings":{"rel":"core/settings_manager.py","line":100,"symbol":"class SettingsManager"},"fileops":{"rel":"core/file_operations.py","line":29,"symbol":"def copy_items() ほか（core/undo_stack.py: class UndoStack）"},"integ":{"rel":"core/integrations/manager.py","line":42,"symbol":"class IntegrationManager"},"dccsave":{"rel":"core/dcc_save.py","line":116,"symbol":"def maya_code() / blender_code()"},"maya":{"external":true,"symbol":"外部 (Maya commandPort)"},"blender":{"rel":"resources/blender_bridge.py","line":287,"symbol":"def _pump()（Blender 内で動くブリッジ）"},"u_click":{"rel":"ui/browser_column_view.py","line":2114,"symbol":"ユーザー操作 → CappedColumnView.eventFilter()"},"t_route":{"rel":"core/file_operations.py","line":684,"symbol":"def dcc_for_path()"},"t_check":{"rel":"ui/main_window_dcc.py","line":1214,"symbol":"def _maya_send_or_prompt() / _blender_send_or_prompt()"},"t_send":{"rel":"ui/main_window_dcc.py","line":770,"symbol":"def _bridge_send_async() → MayaBridge.send_python()"},"d_run":{"rel":"resources/blender_bridge.py","line":229,"symbol":"外部 (Maya commandPort / Blender _pump)"},"t_result":{"rel":"ui/main_window_dcc.py","line":796,"symbol":"def _on_bridge_done()"},"u_start":{"rel":"main.py","line":350,"symbol":"ユーザー操作: 起動（main.py / run_in_maya.py）"},"t_restore":{"rel":"ui/main_window.py","line":73,"symbol":"def MainWindow.__init__() / _restore_geometry()"},"u_go":{"rel":"ui/browser_panel.py","line":1089,"symbol":"ユーザー操作 → navigate_to()"},"t_probe":{"rel":"core/path_guard.py","line":85,"symbol":"def PathProber.probe()"},"x_list":{"external":true,"symbol":"外部 (QFileSystemModel の列挙 / directoryLoaded)"},"t_columns":{"rel":"ui/browser_column_view.py","line":758,"symbol":"def CappedColumnView.createColumn()"},"t_badge":{"rel":"ui/browser_delegates.py","line":409,"symbol":"class StatusBadgeDelegate"},"u_select":{"rel":"ui/browser_column_view.py","line":2114,"symbol":"ユーザー操作 → eventFilter（選択）"},"u_key":{"rel":"ui/browser_panel.py","line":2735,"symbol":"ユーザー操作 → _install_clipboard_actions()"},"t_targets":{"rel":"ui/browser_panel.py","line":3037,"symbol":"def _operation_targets() / _deep_view_targets()"},"t_confirm":{"rel":"ui/browser_panel.py","line":2656,"symbol":"def _delete_confirm()"},"x_exec":{"rel":"ui/browser_panel.py","line":2777,"symbol":"def _run_file_op() → core/file_operations, undo_stack"},"t_refresh":{"rel":"ui/browser_panel.py","line":2849,"symbol":"def _refresh_flat_view() / _open_inline_editor()"},"u_undo":{"rel":"ui/browser_panel.py","line":2863,"symbol":"ユーザー操作 → _undo_op()"},"t_show":{"rel":"ui/browser_column_view.py","line":758,"symbol":"def createColumn() → request_status()"},"x_status":{"rel":"core/integrations/manager.py","line":113,"symbol":"def _do_status() → Provider.fetch_status()"},"t_badge2":{"rel":"ui/browser_delegates.py","line":409,"symbol":"class StatusBadgeDelegate"},"u_rclick":{"rel":"core/integrations/manager.py","line":211,"symbol":"ユーザー操作 → actions_for()"},"t_precheck":{"rel":"core/integrations/p4_provider.py","line":274,"symbol":"def _checkout_precheck()"},"x_cmd":{"rel":"core/integrations/base.py","line":190,"symbol":"def Provider.run_cli_async()"},"t_notify":{"rel":"ui/browser_delegates.py","line":365,"symbol":"def _on_integration_action_finished()"},"t_guard":{"rel":"ui/main_window_dcc.py","line":1014,"symbol":"def _dcc_once() / _poll_dcc_idle()"}}};
   var SEP=C.sep, ROOT=C.root;
   function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function full(rel){ return ROOT ? ROOT+SEP+rel.split('/').join(SEP) : rel.split('/').join(SEP); }
