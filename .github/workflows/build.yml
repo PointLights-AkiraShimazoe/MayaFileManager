@@ -195,6 +195,28 @@ jobs:
           retention-days: 30
 
       # --------------------------------------------------------
+      # 8.5 SHA256 を出す（r126）
+      #     コード署名をしていないので、Windows は «不明な発行元» として
+      #     SmartScreen の警告を出す。署名の代わりに «配っているものと
+      #     手元のものが同一か» を確かめられるようにしておく。
+      # --------------------------------------------------------
+      - name: Compute SHA256
+        shell: pwsh
+        run: |
+          $out = "SHA256SUMS.txt"
+          $lines = @()
+          foreach ($f in @($env:ZIP_NAME, $env:SETUP_PATH)) {
+            if ($f -and (Test-Path $f)) {
+              $h = (Get-FileHash -Algorithm SHA256 -Path $f).Hash.ToLower()
+              $n = Split-Path $f -Leaf
+              $lines += "$h  $n"
+            }
+          }
+          $lines | Set-Content -Path $out -Encoding ascii
+          Get-Content $out
+          echo "SHA256_PATH=$((Get-Item $out).FullName)" >> $env:GITHUB_ENV
+
+      # --------------------------------------------------------
       # 9. GitHub Release を作成してEXEを添付
       #    （タグ push 時のみ）
       # --------------------------------------------------------
@@ -209,12 +231,34 @@ jobs:
           files: |
             ${{ env.ZIP_NAME }}
             ${{ env.SETUP_PATH }}
+            ${{ env.SHA256_PATH }}
           body: |
             ## Maya File Manager ${{ github.ref_name }}
 
             ### ダウンロード（推奨: インストーラー）
             - **MayaFileManager_vX.X.X_Setup.exe** … 実行するだけでインストール完了（推奨）
             - MayaFileManager_${{ github.ref_name }}_windows.zip … EXE単体（ポータブル利用向け）
+            - SHA256SUMS.txt … 下の «ファイルの確認» で使います
+
+            ### ⚠ 「Windows によって PC が保護されました」が出ます
+
+            コード署名証明書を使っていないため、Windows は発行元を
+            「不明な発行元」として扱い、SmartScreen が起動を止めます。
+            **ウイルスや不具合を意味するものではありません。**
+
+            実行するには、警告画面の **「詳細情報」** をクリックしてから
+            **「実行」** を押してください。一度通せば、その PC では次回から
+            出ません。
+
+            ### ファイルの確認（任意）
+
+            署名の代わりに、配布しているファイルのハッシュを添付しています。
+            PowerShell で次を実行し、`SHA256SUMS.txt` の値と一致することを
+            確かめられます。
+
+            ```powershell
+            Get-FileHash -Algorithm SHA256 .\MayaFileManager_${{ github.ref_name }}_Setup.exe
+            ```
 
             ### 動作要件
             - Windows 10 / 11 (64bit)

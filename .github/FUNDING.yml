@@ -1,0 +1,4 @@
+# リポジトリに Sponsor ボタンを出す（r126）。
+# アカウント側の GitHub Sponsors は有効になっているが、このファイルが
+# 無かったのでリポジトリのページにはボタンが出ていなかった。
+github: PointLights-AkiraShimazoe

@@ -18,7 +18,35 @@ PySide2（Maya 2023/2024）/ PySide6（Maya 2025〜2027）両対応。
 ## インストール
 
 [Releases](https://github.com/PointLights-AkiraShimazoe/MayaFileManager/releases)
-から Windows 用インストーラー（`MayaFileManager_Setup_*.exe`）を取得してください。
+から Windows 用インストーラー（`MayaFileManager_vX.X.X_Setup.exe`）を取得してください。
+
+### ⚠ 「Windows によって PC が保護されました」が出ます
+
+実行すると Microsoft Defender SmartScreen が止めます。これは
+**コード署名証明書を使っていないため**で、ウイルスや不具合を意味する
+ものではありません。Windows は署名の無いアプリを一律に「不明な発行元」
+として扱います。
+
+実行するには:
+
+1. 警告画面の **「詳細情報」** をクリック
+2. 現れた **「実行」** を押す
+
+一度通せば、その PC では次回から出ません。
+
+> **自己署名の証明書では解消しません。** SmartScreen は証明書を信頼
+> ストアに入れたかどうかではなく、発行元の «実績（レピュテーション）» で
+> 判断するためです。解消するには公的に信頼される証明書で継続的に署名して
+> 実績を積む必要があり、現状はそこに費用をかけていません。
+
+### ファイルの確認（任意）
+
+署名の代わりに、各リリースへ `SHA256SUMS.txt` を添付しています。
+ダウンロードしたファイルが配布物と同一かを確かめられます。
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\MayaFileManager_vX.X.X_Setup.exe
+```
 
 | Mayaバージョン | Python | Qtバインディング | 対応状況 |
 |---|---|---|---|
