@@ -465,7 +465,21 @@ class QuickNavPresetEditor(QDialog):
         self._load_naming_for(name)
 
     def _apply_rename(self):
-        """名前欄の内容を現在のプリセット名に反映する（辞書とリスト項目の両方）。"""
+        """名前欄の内容を現在のプリセット名に反映する（辞書とリスト項目の両方）。
+
+        r124: 再入禁止。QLineEdit は Enter で returnPressed と editingFinished を
+        «両方» 出し、さらに重複名の警告（モーダル）を出すとフォーカスが外れて
+        editingFinished が «警告を出している最中に» 飛ぶ。素のままだと警告が
+        二重に出る／同じ改名が二度走る。"""
+        if getattr(self, "_renaming", False):
+            return
+        self._renaming = True
+        try:
+            self._apply_rename_now()
+        finally:
+            self._renaming = False
+
+    def _apply_rename_now(self):
         new_name = self._name_edit.text().strip()
         cur = self._current_preset
         if not cur or not new_name or new_name == cur:

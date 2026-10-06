@@ -71,6 +71,12 @@ from ui.reference_editor import ReferenceEditor
 # → この種別は «前の送信が片付くまで» 一切受け付けない（r119e）。
 # クラス属性ではなくモジュール定数にしてあるのは、Mixin を «部分的に»
 # 真似た呼び出し元（テストの軽量スタブ等）でも必ず効かせるため。
+# r123: 同じコードを同じ DCC へ送るのを抑止する時間（秒）。
+# «まったく同じ 1 行の Python» を 2 秒以内に二度送るのは、どう考えても
+# 二重発火であって意図した操作ではない。意図的な繰り返し（同じファイルを
+# もう一度リファレンスする等）は、ダイアログ操作を挟むので必ずこれより長い。
+SEND_DEDUP_SEC = 2.0
+
 DESTRUCTIVE_KINDS = ("open", "run_script")
 # 応答が来ないまま固まった時の最後の砦。シーンの読み込みは数分かかる
 # ことがあるので長めに取る（短いと «まだ開いている最中» に次を送れてしまう）。
@@ -163,6 +169,26 @@ class MainWindowDccMixin:
         self.statusBar().showMessage(
             tr("操作対象を %s に切り替えました", "Target DCC: %s") % self._dcc_label())
 
+    # r124: «起動» の二重実行を止める。Maya/Blender は起動に数十秒かかるため、
+    # 反応が無いと見たユーザーがもう一度押し、2 本立ち上がる（実機で起こる）。
+    # ポート割り当ても別になるので «どちらに繋がっているか分からない» 状態に
+    # なり、たちが悪い。同じ DCC の起動は一定時間 1 回だけ通す。
+    LAUNCH_COOLDOWN_SEC = 25.0
+
+    def _launch_allowed(self, which: str) -> bool:
+        import time as _t
+        prev = (getattr(self, "_last_launch", None) or (None, 0.0))
+        if prev[0] == which and (_t.monotonic() - prev[1]) < self.LAUNCH_COOLDOWN_SEC:
+            from ui.browser_panel import _mfm_log
+            _mfm_log("launch: %s は起動処理中のため二重起動を抑止" % which)
+            self.statusBar().showMessage(
+                tr("%s は起動処理中です。立ち上がるまでお待ちください。",
+                   "%s is still starting up. Please wait.") % which.capitalize(),
+                6000)
+            return False
+        self._last_launch = (which, _t.monotonic())
+        return True
+
     def _launch_dcc(self):
         if self._dcc == "blender":
             self._launch_blender()
@@ -170,6 +196,8 @@ class MainWindowDccMixin:
             self._launch_maya()
 
     def _launch_blender(self):
+        if not self._launch_allowed("blender"):
+            return
         inst = self._blender_inst
         if not inst:
             QMessageBox.warning(self, "Blender",
@@ -775,6 +803,26 @@ class MainWindowDccMixin:
         import threading
         import time as _t
         bridge = bridge or self._bridge
+        # r123: **最後の砦。** 経路を問わず «まったく同じコードを同じ DCC へ»
+        # 短時間に二度送ることは無い。上流のどこかで二重に呼ばれても、
+        # 実際に送る直前のここで必ず止まる。
+        # 2026-10-06 実機: リファレンスが 2 回実行された。Namespace の
+        # モーダルダイアログが 1.2 秒窓を跨いでしまい、上流のガードを
+        # すり抜けていた。個別の穴を塞ぐだけでは «次の穴» が必ず出るので、
+        # 送信そのものに重複排除を置く。
+        _port = getattr(bridge, "port", None)
+        _sig = (_port, code)
+        _prev_sig, _prev_t = getattr(self, "_last_sent_sig", (None, 0.0))
+        if _sig == _prev_sig and (_t.monotonic() - _prev_t) < SEND_DEDUP_SEC:
+            try:
+                from ui.browser_panel import _mfm_log
+                _mfm_log("dcc-send: 同一コードの二重送信を抑止 port=%s label=%r "
+                         "dt=%.3f" % (_port, label, _t.monotonic() - _prev_t))
+            except Exception as _e:
+                _swallow(_e, "ui/main_window_dcc.py _bridge_send_async(dedup log)")
+            self._dcc_arm = None
+            return
+        self._last_sent_sig = (_sig, _t.monotonic())
         # r119e: «実際に DCC へ渡る» のはここだけ。予約を «実行中» に昇格させる。
         arm = getattr(self, "_dcc_arm", None)
         if arm:
@@ -979,10 +1027,12 @@ class MainWindowDccMixin:
         呼ぶ）を使い、無い版では同等の処理をする。.mel は source。
         インストーラがダイアログを出しても Manager は待たない（非同期送信）。
         ダイアログが裏に隠れないよう、送信後に Maya を前面に出す。"""
-        if not self._dcc_accepts("run_script", path, "maya"):
+        # r123: 共通ガードへ寄せる（進行中は受けない／完了後に窓を押し直す）
+        if not self._dcc_guarded("run_script", path, "maya",
+                                 lambda: self._maya_run_script_now(path)):
             return
-        if not self._dcc_once("run_script", path, "maya"):
-            return
+
+    def _maya_run_script_now(self, path: str):
         p = escape_path(path)
         if os.path.splitext(path)[1].lower() == ".mel":
             inner = ("import maya.mel as _mel\n"
@@ -1053,6 +1103,19 @@ class MainWindowDccMixin:
             # こうしないと、Maya 内実行や途中で止めた経路で印が残り続け、
             # 以後 2 分間 «開く» が効かなくなる。
             self._dcc_arm = (key, kind)
+
+        # r123: **ダイアログを出している最中は新しい操作を一切受け付けない。**
+        # 時間窓だけでは守れない: リファレンスは Namespace の «モーダル»
+        # ダイアログを出すので、ユーザーが入力している間に 1.2 秒窓が
+        # 過ぎてしまう。その後に «溜まっていた 2 回目» が配送されると
+        # 窓をすり抜けて 2 回実行される（実機 2026-10-06）。
+        # 種別を問わず «操作が 1 つ進行中なら次は受けない» にする。
+        busy = getattr(self, "_dcc_in_progress", None)
+        if busy is not None:
+            _mfm_log("dcc-send: 進行中のため抑止 kind=%s path=%r busy=%r"
+                     % (kind, path, busy))
+            self._dcc_arm = None
+            return False
 
         last_key, last_t = getattr(self, "_last_dcc_send", (None, 0.0))
         if key == last_key and (now - last_t) < 1.2:
@@ -1178,38 +1241,49 @@ class MainWindowDccMixin:
             _swallow(_e, "ui/main_window.py:1478 _dcc_accepts")
         return False
 
+    # ── r123: DCC へ送る操作は «すべて» ここを通す ─────────────────────
+    # 入口ごとにガードを書くと必ず書き忘れが出る（実際、シーン保存／選択の
+    # 書き出しにはガードが無かった）。1 本の関数に集約し、
+    #   * 進行中は次を受けない（ダイアログ表示中を含む）
+    #   * 完了«後»に時刻を押し直す（ダイアログで窓が流れるのを防ぐ）
+    # を必ず通す。
+    def _dcc_guarded(self, kind: str, path: str, app: str, fn):
+        import time as _time_mod
+        if not self._dcc_accepts(kind, path, app):
+            return False
+        if not self._dcc_once(kind, path, app):
+            return False
+        try:
+            key = (kind, os.path.normcase(os.path.abspath(path)), app or "")
+        except Exception:
+            key = (kind, path, app or "")
+        self._dcc_in_progress = key
+        try:
+            fn()
+        finally:
+            self._dcc_in_progress = None
+            # 「いつ始めたか」ではなく「いつ終わったか」から数える。
+            # ダイアログに何秒かけても、その直後に届いた二重発火は止まる。
+            self._last_dcc_send = (key, _time_mod.monotonic())
+        return True
+
     def _dcc_open(self, path: str, app: str = None):
         target = app or dcc_for_path(path, self._dcc)
-        if not self._dcc_accepts("open", path, target):
-            return
-        if not self._dcc_once("open", path, target):
-            return
-        if target == "blender":
-            self._blender_open(path)
-        else:
-            self._maya_open(path)
+        self._dcc_guarded("open", path, target, lambda: (
+            self._blender_open(path) if target == "blender"
+            else self._maya_open(path)))
 
     def _dcc_import(self, path: str, app: str = None):
         target = app or dcc_for_path(path, self._dcc)
-        if not self._dcc_accepts("import", path, target):
-            return
-        if not self._dcc_once("import", path, target):
-            return
-        if target == "blender":
-            self._blender_import(path)
-        else:
-            self._maya_import(path)
+        self._dcc_guarded("import", path, target, lambda: (
+            self._blender_import(path) if target == "blender"
+            else self._maya_import(path)))
 
     def _dcc_reference(self, path: str, app: str = None, ask_ns: bool = True):
         target = app or dcc_for_path(path, self._dcc)
-        if not self._dcc_accepts("reference", path, target):
-            return
-        if not self._dcc_once("reference", path, target):
-            return
-        if target == "blender":
-            self._blender_link(path)
-        else:
-            self._maya_reference(path, ask_ns=ask_ns)
+        self._dcc_guarded("reference", path, target, lambda: (
+            self._blender_link(path) if target == "blender"
+            else self._maya_reference(path, ask_ns=ask_ns)))
 
     def _maya_send_or_prompt(self, code: str, label: str, log=None,
                              guard: bool = False) -> bool:
@@ -1462,6 +1536,22 @@ class MainWindowDccMixin:
                  else tr("シーンを保存 %s", "Save Scene %s")) % Path(path).name
         act = (tr("選択を書き出し", "Export Selection") if mode == "export"
                else tr("シーンを保存", "Save Scene"))
+        # r123: ここにはガードが無かった。ダイアログの OK が二重に届けば
+        # 二度保存／二度書き出しになる（上書きなので実害は小さいが、
+        # «1 操作 = 1 回» の原則からは外れている）。共通ガードを通す。
+        kind = "export" if mode == "export" else "save"
+        if not self._dcc_once(kind, path, dcc):
+            return
+        self._dcc_in_progress = (kind, path, dcc)
+        try:
+            self._dcc_save_send(dcc, code, label, act, path)
+        finally:
+            import time as _t2
+            self._dcc_in_progress = None
+            self._last_dcc_send = ((kind, os.path.normcase(os.path.abspath(path)),
+                                    dcc), _t2.monotonic())
+
+    def _dcc_save_send(self, dcc, code, label, act, path):
         if dcc == "blender":
             self._blender_send_or_prompt(code, label, log=(act, path))
         elif self._inside_maya:
@@ -1610,6 +1700,8 @@ class MainWindowDccMixin:
         show_tool_window(self, "_maya_launch_dlg", _make)
 
     def _launch_maya(self):
+        if not self._launch_allowed("maya"):
+            return
         inst = self._maya_inst
         if not inst:
             QMessageBox.warning(self, tr("エラー", "Error"),

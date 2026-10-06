@@ -24,6 +24,7 @@ class _W:
     _dcc_import = _M._dcc_import
     _dcc_reference = _M._dcc_reference
     _dcc_once = _M._dcc_once
+    _dcc_guarded = _M._dcc_guarded          # r123: 共通の関所
     _on_maya_drop = _M._on_maya_drop
 
     def __init__(self):

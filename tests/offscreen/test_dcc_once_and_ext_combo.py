@@ -19,6 +19,7 @@ class _FakeWin:
     """MainWindow を丸ごと作らずに _dcc_once / _dcc_reference だけ検証する。"""
     from ui.main_window import MainWindow
     _dcc_once = MainWindow._dcc_once
+    _dcc_guarded = MainWindow._dcc_guarded      # r123: 共通の関所
     _dcc_accepts = MainWindow._dcc_accepts
     _dcc_reference = MainWindow._dcc_reference
     _dcc_import = MainWindow._dcc_import

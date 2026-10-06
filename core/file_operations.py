@@ -845,3 +845,37 @@ def rename_path(src: str, dst: str, release_cb=None, attempts: int = 4,
     if _shell_rename(src, dst):
         return True, None
     return False, last
+
+
+# ---------------------------------------------------------------------------
+# 読み取り専用属性（r124）
+# ---------------------------------------------------------------------------
+# Windows では os.chmod が «読み取り専用属性» だけを変える（他のモードビットは
+# 無視される）。POSIX では所有者の書き込みビットを落とす／立てる。
+# Perforce 同期のファイルは読み取り専用で降りてくるため、プロパティ窓から
+# «その場で» 外せるようにする（ユーザー指示 2026-10-06）。
+def is_read_only(path: str) -> bool:
+    """path が読み取り専用か。判定できない時は False。"""
+    import stat as _stat
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return False
+    return not bool(mode & _stat.S_IWRITE)
+
+
+def set_read_only(path: str, on: bool) -> Tuple[bool, Optional[Exception]]:
+    """読み取り専用属性を付ける/外す。戻り値 (成功, 例外)。"""
+    import stat as _stat
+    try:
+        mode = os.stat(path).st_mode
+    except OSError as e:
+        return False, e
+    try:
+        if on:
+            os.chmod(path, mode & ~(_stat.S_IWRITE | _stat.S_IWGRP | _stat.S_IWOTH))
+        else:
+            os.chmod(path, mode | _stat.S_IWRITE)
+    except OSError as e:
+        return False, e
+    return True, None

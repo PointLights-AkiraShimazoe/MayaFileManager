@@ -364,6 +364,7 @@ class DuplicateFolderPanel(QWidget):
         move_act.triggered.connect(lambda: self._move_paths(paths))
 
         menu.exec_(self._tree.viewport().mapToGlobal(pos))
+        menu.deleteLater()      # r124: 右クリックの回数だけ溜めない
 
     def _copy_paths(self, paths: List[str]):
         dst = QFileDialog.getExistingDirectory(self, tr("コピー先を選択", "Select Copy Destination"))

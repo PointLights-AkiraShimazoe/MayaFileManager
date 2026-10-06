@@ -47,6 +47,8 @@ class _W:
     _maya_run_script = _M._maya_run_script
     _dcc_once = _M._dcc_once
     _dcc_accepts = _M._dcc_accepts
+    _dcc_guarded = _M._dcc_guarded          # r123: 共通の関所
+    _maya_run_script_now = _M._maya_run_script_now
 
     def __init__(self, connected=True, action="open"):
         self._inside_maya = False

@@ -708,6 +708,20 @@ class ReferencePresetEditor(QDialog):
         commandPort で送れているのに、プリセットだけ経路が無く、
         «どこから実行するのか分からない» 状態だった（ユーザー指摘）。
         接続中の Maya があればそこへ送る。"""
+        # r124: 再入禁止。送信は同期（最大 20 秒）で、その間にボタンを
+        # もう一度押されると «同じプリセットが二度適用» される
+        # （リファレンスが二重に入る）。
+        if getattr(self, "_applying", False):
+            self.status_message.emit(tr("適用中です。しばらくお待ちください。",
+                                        "Applying. Please wait."))
+            return
+        self._applying = True
+        try:
+            self._apply_preset_now()
+        finally:
+            self._applying = False
+
+    def _apply_preset_now(self):
         preset = self._collect_preset()
         preset["name"] = self._name_edit.text()
         if is_running_inside_maya():

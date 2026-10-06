@@ -39,6 +39,7 @@ from core.file_operations import (
     open_with_default_app, reveal_in_explorer,
     copy_items, move_items, get_file_type_category, format_size,
     resolve_windows_shortcut,
+    is_read_only, set_read_only,
     MAYA_EXTENSIONS
 )
 from core.thumbnail_generator import ThumbnailManager
@@ -1272,6 +1273,13 @@ class BrowserPanel(QWidget):
         if action == "preview":
             action = "open"   # 「プレビュー」は「開く」へ統合（旧設定の移行）
         self._dispatch_action(action, path)
+        # r124: ダブルクリックは «1回目の押下で clicked / 2回目で activated» を
+        # 両方出す（Qt の仕様）。シングルクリック動作が «開く/インポート/
+        # リファレンス» の時、続く activated の «関連付けで開く» まで走ると
+        # 1 回のダブルクリックで 2 つの動作が起きる（実機で «2 度実行される»
+        # の正体の一つ）。何をいつ実行したかを覚えておき、activated 側で弾く。
+        if action != "none":
+            self._note_click_action(path)
         self._sync_quick_look(path)
         self.selection_changed.emit([path])
 
@@ -1299,7 +1307,13 @@ class BrowserPanel(QWidget):
             else:
                 self._navigate(path)  # 別ブランチへのジャンプはトップから全カラム再構築
             return
-        # ダブルクリックは関連付けアプリ（OS既定）で開く
+        # ダブルクリックは関連付けアプリ（OS既定）で開く。
+        # r124: 直前の clicked で «この同じファイルに» 動作を実行していたら
+        # 何もしない（1 ジェスチャー = 1 動作）。
+        if self._click_action_just_ran(path):
+            _mfm_log("dblclick: 直前のクリック動作と同一対象のため関連付け起動を抑止 %r"
+                     % (path,))
+            return
         open_with_default_app(path)
 
     def _is_native_expandable(self, proxy_index, path: str) -> bool:
@@ -1345,6 +1359,35 @@ class BrowserPanel(QWidget):
                 tr("ショートカット参照先が見つかりません: %s",
                    "Shortcut target not found: %s") % target)
         return False
+
+    # r124: 1 ジェスチャー = 1 動作。clicked と activated が両方飛ぶ経路で
+    # «同じ対象に 2 つの動作» が走るのを止めるための覚え書き。
+    _CLICK_ACTION_GRACE_MS = 900
+
+    def _note_click_action(self, path: str):
+        import time as _t
+        try:
+            key = os.path.normcase(os.path.abspath(path))
+        except Exception:
+            key = path
+        self._last_click_action = (key, _t.monotonic())
+
+    def _click_action_just_ran(self, path: str) -> bool:
+        import time as _t
+        prev = getattr(self, "_last_click_action", None)
+        if not prev:
+            return False
+        try:
+            key = os.path.normcase(os.path.abspath(path))
+        except Exception:
+            key = path
+        try:
+            from core.compat import QApplication as _QA
+            span = max(self._CLICK_ACTION_GRACE_MS,
+                       _QA.doubleClickInterval() + 200) / 1000.0
+        except Exception:
+            span = self._CLICK_ACTION_GRACE_MS / 1000.0
+        return prev[0] == key and (_t.monotonic() - prev[1]) < span
 
     def _dispatch_action(self, action: str, path: str):
         if action == "none":
@@ -1843,6 +1886,15 @@ class BrowserPanel(QWidget):
             menu.exec_(global_pos)
         except AttributeError:
             menu.exec(global_pos)
+        finally:
+            # r124: メニューは «self の子» なので、捨てないと右クリックの回数だけ
+            # 溜まる。溜まった分の QAction が持つショートカット（Delete など）が
+            # 多重登録になり、Qt が «あいまい» として弾く／別の項目に当たるため、
+            # キー操作が «効かない／二度目で効く» 壊れ方になっていた。
+            try:
+                menu.deleteLater()
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py menu.deleteLater")
 
     def _clipboard_paste_into(self, folder: str):
         """右クリックしたカラムのフォルダへ貼り付け（_clipboard_paste の貼り付け先を差し替え）。"""
@@ -2101,19 +2153,32 @@ class BrowserPanel(QWidget):
 
         del_act = menu.addAction(tr("🗑  削除", "🗑  Delete"))
         del_act.triggered.connect(lambda: self._delete_confirm(paths))
-        del_act.setShortcut("Delete")
+        # r124: setShortcut は «本物のショートカット登録» なので使わない
+        # （メニューを開くたびに Delete が増え、本体の Delete と衝突した）。
+        # 他の項目と同じく表示だけにする。
+        del_act.setText(del_act.text() + "\tDelete")
 
         menu.addSeparator()
 
         # ── Properties ───────────────────────────────────────────────
-        if is_single:
-            prop_act = menu.addAction(tr("ℹ  プロパティ", "ℹ  Properties"))
-            prop_act.triggered.connect(lambda: self._show_properties(paths[0]))
+        # r124: 複数選択でも出す（読み取り専用の変更だけは複数でも行える）。
+        prop_act = menu.addAction(tr("ℹ  プロパティ" + cnt, "ℹ  Properties" + cnt_en))
+        prop_act.triggered.connect(lambda _c=False, ps=list(paths):
+                                   self._show_properties(ps))
 
         try:
             menu.exec_(global_pos)
         except AttributeError:
             menu.exec(global_pos)
+        finally:
+            # r124: メニューは «self の子» なので、捨てないと右クリックの回数だけ
+            # 溜まる。溜まった分の QAction が持つショートカット（Delete など）が
+            # 多重登録になり、Qt が «あいまい» として弾く／別の項目に当たるため、
+            # キー操作が «効かない／二度目で効く» 壊れ方になっていた。
+            try:
+                menu.deleteLater()
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py menu.deleteLater")
 
     # ------------------------------------------------------------------
     # File operations (UI wrappers)
@@ -2715,18 +2780,186 @@ class BrowserPanel(QWidget):
                     % (len(paths), hint))
         self._run_file_op("削除", work, done, total=len(paths))
 
-    def _show_properties(self, path: str):
-        info = Path(path)
-        stat = info.stat()
+    # ------------------------------------------------------------------
+    # プロパティ（r124）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _readonly_targets(paths, recursive: bool):
+        """読み取り専用を付け外しする実体の一覧。
+
+        フォルダ自身には «付けない»（Windows は無視する）。recursive=True の時は
+        選択フォルダ配下のファイルを全部対象にする（ユーザー指示 2026-10-06）。"""
+        out, seen = [], set()
+        def _add(p):
+            k = os.path.normcase(os.path.abspath(p))
+            if k not in seen:
+                seen.add(k)
+                out.append(p)
+        for p in paths:
+            try:
+                is_dir = os.path.isdir(p)
+            except OSError:
+                continue
+            if not is_dir:
+                _add(p)
+                continue
+            if not recursive:
+                continue
+            for root, _dirs, files in os.walk(p):
+                for f in files:
+                    _add(os.path.join(root, f))
+        return out
+
+    def _show_properties(self, paths):
+        """プロパティ（r124: 読み取り専用スイッチだけはその場で変更できる）。
+
+        - Perforce 同期のファイルは読み取り専用で降りてくるため、«外す» を
+          エクスプローラーまで出て行わずに済むようにする。
+        - 複数選択でも読み取り専用の変更だけは行える。
+        - フォルダを選んだ時は «下層フォルダまで含める» を選べる。
+        他の属性は表示のみ＝誤操作の余地を作らない（ユーザー指示 2026-10-06）。"""
+        from core.compat import QCheckBox, QFormLayout, QLabel, QPushButton
+        if isinstance(paths, str):
+            paths = [paths]
+        paths = [p for p in (paths or []) if p]
+        if not paths:
+            return
         import datetime
-        msg = (
-            f"名前: {info.name}\n"
-            f"パス: {path}\n"
-            f"サイズ: {format_size(stat.st_size)}\n"
-            f"更新日時: {datetime.datetime.fromtimestamp(stat.st_mtime)}\n"
-            f"種類: {get_file_type_category(path)}"
-        )
-        QMessageBox.information(self, tr("プロパティ", "Properties"), msg)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("プロパティ", "Properties"))
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout()
+        has_dir = any(os.path.isdir(p) for p in paths)
+        if len(paths) == 1:
+            path = paths[0]
+            info = Path(path)
+            try:
+                st = info.stat()
+            except OSError as e:
+                QMessageBox.warning(self, tr("プロパティ", "Properties"), str(e))
+                return
+            form.addRow(tr("名前:", "Name:"), QLabel(info.name))
+            pl = QLabel(path)
+            pl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            form.addRow(tr("パス:", "Path:"), pl)
+            if not os.path.isdir(path):
+                form.addRow(tr("サイズ:", "Size:"), QLabel(format_size(st.st_size)))
+            form.addRow(tr("更新日時:", "Modified:"),
+                        QLabel(str(datetime.datetime.fromtimestamp(st.st_mtime))))
+            form.addRow(tr("種類:", "Type:"), QLabel(get_file_type_category(path)))
+        else:
+            n_dir = sum(1 for p in paths if os.path.isdir(p))
+            n_file = len(paths) - n_dir
+            form.addRow(tr("対象:", "Items:"),
+                        QLabel(tr("%d 件（フォルダ %d / ファイル %d）",
+                                  "%d item(s) (%d folder(s) / %d file(s))")
+                               % (len(paths), n_dir, n_file)))
+            total = 0
+            for p in paths:
+                try:
+                    if not os.path.isdir(p):
+                        total += os.path.getsize(p)
+                except OSError:
+                    pass
+            if n_file:
+                form.addRow(tr("サイズ（ファイル分）:", "Size (files only):"),
+                            QLabel(format_size(total)))
+            names = ", ".join(os.path.basename(p.rstrip("/\\")) for p in paths[:8])
+            if len(paths) > 8:
+                names += " …"
+            nl = QLabel(names)
+            nl.setWordWrap(True)
+            form.addRow(tr("内訳:", "Selection:"), nl)
+        lay.addLayout(form)
+
+        rec_cb = QCheckBox(tr("下層フォルダまで含める", "Include subfolders"), dlg)
+        if not has_dir:
+            rec_cb.setVisible(False)
+
+        cb = QCheckBox(tr("読み取り専用", "Read-only"), dlg)
+        state_lb = QLabel("", dlg)
+        state_lb.setWordWrap(True)
+
+        def _targets():
+            return self._readonly_targets(paths, rec_cb.isChecked())
+
+        def _refresh_state():
+            tg = _targets()
+            ro = [p for p in tg if is_read_only(p)]
+            cb.blockSignals(True)
+            cb.setEnabled(bool(tg))
+            cb.setChecked(bool(tg) and len(ro) == len(tg))
+            cb.blockSignals(False)
+            if not tg:
+                state_lb.setText(tr("対象のファイルがありません"
+                                    "（フォルダの読み取り専用属性は OS が無視します）。",
+                                    "No files to change (Windows ignores the "
+                                    "read-only attribute on folders)."))
+            elif len(ro) in (0, len(tg)):
+                state_lb.setText(tr("対象ファイル %d 件。", "%d file(s) affected.")
+                                 % len(tg))
+            else:
+                state_lb.setText(tr("対象ファイル %d 件（うち読み取り専用 %d 件）。",
+                                    "%d file(s) affected (%d currently read-only).")
+                                 % (len(tg), len(ro)))
+
+        def _apply(on):
+            tg = _targets()
+            if not tg:
+                _refresh_state()
+                return
+            if len(tg) > 200:
+                ret = QMessageBox.question(
+                    dlg, tr("読み取り専用", "Read-only"),
+                    tr("%d 件のファイルの読み取り専用属性を変更します。よろしいですか？",
+                       "Change the read-only attribute of %d file(s)?") % len(tg),
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if ret != QMessageBox.Yes:
+                    _refresh_state()
+                    return
+            done, fails = 0, []
+            for p in tg:
+                ok, err = set_read_only(p, bool(on))
+                if ok:
+                    done += 1
+                else:
+                    fails.append((os.path.basename(p), err))
+            if fails:
+                detail = "\n".join("  %s — %s" % x for x in fails[:8])
+                QMessageBox.warning(
+                    dlg, tr("読み取り専用", "Read-only"),
+                    tr("%d 件は変更できませんでした:\n%s",
+                       "Could not change %d file(s):\n%s") % (len(fails), detail))
+            self.status_message.emit(
+                (tr("読み取り専用にしました: %d 件", "Set read-only: %d file(s)") if on
+                 else tr("読み取り専用を外しました: %d 件",
+                         "Cleared read-only: %d file(s)")) % done)
+            _refresh_state()
+            try:
+                self._column_view.viewport().update()
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py _show_properties")
+
+        cb.toggled.connect(_apply)
+        rec_cb.toggled.connect(lambda _on: _refresh_state())
+        lay.addWidget(cb)
+        if has_dir:
+            lay.addWidget(rec_cb)
+        lay.addWidget(state_lb)
+        _refresh_state()
+
+        row = QHBoxLayout()
+        row.addStretch()
+        close_btn = QPushButton(tr("閉じる", "Close"), dlg)
+        close_btn.setAutoDefault(False)
+        close_btn.clicked.connect(dlg.accept)
+        row.addWidget(close_btn)
+        lay.addLayout(row)
+        # r124: 非モーダル（原則どおり Manager を止めない）。属性を見ながら
+        # カラムを触れた方が都合が良い。対象は «開いた時の選択» なので
+        # reuse=False で毎回作り直す。
+        from ui.dialog_util import show_tool_window
+        show_tool_window(self, "_props_dlg", lambda: dlg, reuse=False)
 
     # ------------------------------------------------------------------
     # Drag & Drop / Clipboard （Explorer 互換）

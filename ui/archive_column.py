@@ -282,6 +282,7 @@ class ArchiveColumn(QWidget):
         note.setEnabled(False)
         gp = self._view.viewport().mapToGlobal(pos) if self._view.viewport() else pos
         menu.exec(gp) if hasattr(menu, "exec") else menu.exec_(gp)
+        menu.deleteLater()      # r124: 右クリックの回数だけ溜めない
 
     def _is_dir_name(self, inner):
         for e in self._entries:

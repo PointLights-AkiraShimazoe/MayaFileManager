@@ -480,6 +480,7 @@ class BookmarkPanel(QWidget):
         add_folder_act.triggered.connect(self._add_folder)
 
         menu.exec_(self._tree.viewport().mapToGlobal(pos))
+        menu.deleteLater()      # r124: 右クリックの回数だけ溜めない
 
     # ------------------------------------------------------------------
     # Actions
@@ -543,12 +544,14 @@ class BookmarkPanel(QWidget):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
+        # r124: ツリー側（BookmarkTree.dropEvent → external_paths_dropped）と
+        # «同じ経路» に揃える。以前はここだけ重複チェックが無く、同じフォルダを
+        # 2 回ドロップすると同じブックマークが 2 つ並んだ。
         urls = event.mimeData().urls()
         if urls:
-            import os
-            for url in urls:
-                p = url.toLocalFile()
-                if os.path.isdir(p):
-                    self._bm.add_directory(p)
-                elif os.path.isfile(p):
-                    self._bm.add_file(p)
+            paths = [u.toLocalFile() for u in urls if u.toLocalFile()]
+            if paths:
+                self._on_external_paths(paths)
+                event.acceptProposedAction()
+                return
+        event.ignore()
