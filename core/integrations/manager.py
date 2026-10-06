@@ -200,6 +200,16 @@ class IntegrationManager(QObject):
     def refresh(self, directory: str):
         """手動更新: プロバイダ側のキャッシュも破棄して再取得。"""
         key = norm(directory)
+        # r125: 連続失敗で休んでいるプロバイダは «手動更新» で即座に復帰させる。
+        # ユーザーが「🔄 連携状態を更新」を押すのは «今もう一度試して» の意思表示。
+        # 休みが明けるまで何も起きないのでは、押した意味が無い。
+        for p in self.providers:
+            cc = getattr(p, "clear_cooldown", None)
+            if callable(cc):
+                try:
+                    cc()
+                except Exception as _e:
+                    _swallow(_e, "core/integrations/manager.py refresh(clear_cooldown)")
         with self._lock:
             self._dir_ts.pop(key, None)
             provs = list(self._dir_providers.get(key, []))

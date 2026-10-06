@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
+import time as _time   # r125: available プロパティから使う（別名で明示）
 
 # ── 状態コード（アイコン描画・ツールチップで使う共通語彙） ─────────────
 ST_CLEAN = "clean"          # 追跡済み・最新
@@ -174,15 +175,26 @@ class Provider:
 
     key = "base"
     label = "Base"
-    # 連続失敗でこの回数に達したら自動無効化
+    # 連続失敗でこの回数に達したら «一時的に» 休む
     MAX_FAILURES = 5
+    # r125: 休む時間。**以前はここで永久に無効化していた。**
+    # 連続失敗に達すると available=False のまま二度と戻らず、再度有効に
+    # なるのはアプリを再起動して detect() が走る時だけだった。そのため
+    # ネットワークの瞬断やクライアントビュー外のフォルダを数回開いただけで
+    # 「Perforce の連携状態が途中で切れる」が起きていた
+    # （ユーザー報告 2026-10-06）。休ませて、時間が経ったらまた試す。
+    FAILURE_COOLDOWN_SEC = 60.0
 
     def __init__(self):
+        self._failures = 0
+        self._installed = False
+        self._disabled_until = 0.0
         self.available = False
         self.info = {}
-        self._failures = 0
         self._lock = threading.Lock()
         self._root_cache = {}      # norm(dir) -> root or ""（"" = 非ワークスペース）
+        # 判定経緯の記録先（manager が _ilog へ差し替える）。既定は捨てる。
+        self.log = lambda *_a, **_k: None
         # 操作結果の通知先（manager が差し替える）: report(ok: bool, message: str)
         # ワーカースレッドから呼ばれる。UI への橋渡しは manager の Signal が行う。
         self.report = lambda ok, msg: None
@@ -266,11 +278,56 @@ class Provider:
         return []
 
     # --- 失敗管理 ----------------------------------------------------------
+    #
+    # r125: «使えない» は 2 種類ある。混ぜると戻ってこられない。
+    #   1) そもそも入っていない（p4.exe が無い）… _installed=False。恒久的。
+    #   2) 今は応答しない（瞬断・サーバー混雑）… _disabled_until。時限。
+    # available は両方を見た «今この瞬間に使えるか» を返す。
+    @property
+    def available(self) -> bool:
+        if not self._installed:
+            return False
+        until = self._disabled_until
+        if until:
+            if _time.monotonic() < until:
+                return False
+            # 休み明け: 何事も無かったことにして、もう一度試させる
+            self._disabled_until = 0.0
+            self._failures = 0
+            self.info.pop("disabled_reason", None)
+        return True
+
+    @available.setter
+    def available(self, value):
+        self._installed = bool(value)
+        if value:
+            self._disabled_until = 0.0
+            self._failures = 0
+            self.info.pop("disabled_reason", None)
+
     def note_failure(self, why=""):
         self._failures += 1
         if self._failures >= self.MAX_FAILURES:
-            self.available = False
+            self._disabled_until = _time.monotonic() + self.FAILURE_COOLDOWN_SEC
             self.info["disabled_reason"] = why or "連続失敗"
+            # 黙って消えるのが一番たちが悪い（バッジが出なくなった理由が
+            # 分からない）。必ずログに残す。
+            try:
+                self.log("%s: %d 回続けて失敗したので %.0f 秒休みます（%s）"
+                         % (self.label, self._failures,
+                            self.FAILURE_COOLDOWN_SEC,
+                            (why or "").strip().splitlines()[0][:120]
+                            if why else "理由不明"))
+            except Exception as _e:
+                _swallow(_e, "core/integrations/base.py note_failure(log)")
+
+    def clear_cooldown(self):
+        """手動更新で «今すぐもう一度試す»（r125）。"""
+        self._failures = 0
+        self._disabled_until = 0.0
+        self.info.pop("disabled_reason", None)
 
     def note_success(self):
         self._failures = 0
+        self._disabled_until = 0.0
+        self.info.pop("disabled_reason", None)

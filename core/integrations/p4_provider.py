@@ -266,6 +266,25 @@ class P4Provider(Provider):
                 return directory
         return None
 
+    # r125: «サーバーに繋がらない／認証が切れた» だけを失敗に数える。
+    # それ以外（ビュー外・未マップ・権限なし・ファイルが無い）は、
+    # そのフォルダに P4 の情報が無いというだけで、連携の不調ではない。
+    _CONN_ERRORS = (
+        "perforce client error",            # 接続・認証はこの見出しで出る
+        "connect to server failed",
+        "tcp connect to",
+        "session has expired",
+        "your session was logged out",
+        "password (p4passwd) invalid or unset",
+        "operation took too long",
+        "timed out",
+    )
+
+    @classmethod
+    def _is_connection_error(cls, text: str) -> bool:
+        t = (text or "").lower()
+        return any(m in t for m in cls._CONN_ERRORS)
+
     def fetch_status(self, root: str, directory: str):
         # fstat はワイルドカード指定。表示中フォルダ直下のみ。
         pattern = os.path.join(directory, "*")
@@ -274,8 +293,21 @@ class P4Provider(Provider):
                             "clientFile,headRev,haveRev,action,otherOpen,otherLock,"
                             "ourLock,headAction",
                             pattern], cwd=directory, timeout=12.0)
-        if rc != 0 and "no such file" not in (err + out).lower():
-            self.note_failure(err)
+        if rc != 0:
+            text = (err + out)
+            # r125: **rc != 0 を何でも «失敗» に数えていた。**
+            # p4 fstat はクライアントビュー外・未マップ・権限なしのフォルダでも
+            # rc != 0 を返す。普通に社内のフォルダを 3 つ開いただけで
+            # MAX_FAILURES に達し、Perforce の連携が丸ごと止まっていた
+            # （ユーザー報告 2026-10-06「連携状態が途中で切れる」）。
+            # «そのフォルダに P4 の情報が無い» と «サーバーに繋がらない» は別物。
+            if self._is_connection_error(text):
+                self.note_failure(err or out)
+                self._log("fstat 接続エラー dir=%r rc=%s: %s"
+                          % (directory, rc, text.strip()[:200]))
+            else:
+                self._log("fstat 対象外 dir=%r rc=%s: %s"
+                          % (directory, rc, text.strip()[:200]))
             return {}
         self.note_success()
         states = {}
