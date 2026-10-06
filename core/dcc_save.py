@@ -121,6 +121,16 @@ def maya_code(path: str, mode: str, opts: dict) -> str:
     p = _q(path)
     sel = (mode == "export")
     body = []
+    if sel:
+        # r125: **空の選択でも «成功» していた。**
+        # FBXExport -s は何も選ばれていなくても «中身の無い FBX» を黙って書く
+        # （Maya 側はエラーにしない）。そのため「書き出しました」と出るのに
+        # 中身が空、になっていた（ユーザー報告 2026-10-06「fbx の書き出しが
+        # 正常にできていない」）。.abc にだけ入れていたガードを全形式へ。
+        body.append("    _sel = cmds.ls(selection=True) or []")
+        body.append("    if not _sel:")
+        body.append("        raise RuntimeError('Maya で何も選択されていません。"
+                    "書き出す対象を選んでから実行してください。')")
     if ext in (".ma", ".mb"):
         typ = "mayaAscii" if ext == ".ma" else "mayaBinary"
         if sel:
@@ -141,8 +151,14 @@ def maya_code(path: str, mode: str, opts: dict) -> str:
         body.append("    mel.eval('FBXExportEmbeddedTextures -v %s')" % ("true" if opts.get("embed_media") else "false"))
         body.append("    mel.eval('FBXExportUpAxis %s')" % opts.get("up_axis", "y"))
         if not opts.get("animation", True):
+            # r125: ここで FBXExportSkins -v false も落としていたが、Skins は
+            # «スキン（バインド）を書き出すか» であってアニメーションではない。
+            # 「アニメーションを含める」を外しただけでウェイトの無い FBX に
+            # なっていた。アニメを外す＝キーを書かない、だけにする。
             body.append("    mel.eval('FBXExportBakeComplexAnimation -v false')")
-            body.append("    mel.eval('FBXExportSkins -v false')")
+            body.append("    mel.eval('FBXExportConstraints -v false')")
+            body.append("    mel.eval('FBXExportCameras -v false')")
+            body.append("    mel.eval('FBXExportLights -v false')")
         body.append("    mel.eval('FBXExport -f \"%s\"%s')" % (p, " -s" if sel else ""))
     elif ext == ".obj":
         body.append("    cmds.loadPlugin('objExport', quiet=True)")
@@ -159,7 +175,6 @@ def maya_code(path: str, mode: str, opts: dict) -> str:
                     % bool(opts.get("frame_range")))
         body.append("    _roots = ''.join(' -root ' + r for r in (cmds.ls(sl=True, long=True) or [])) if %s else ''"
                     % sel)
-        body.append("    if %s and not _roots: raise RuntimeError('何も選択されていません')" % sel)
         body.append("    _job = _fr + ('-uvWrite ' if %s else '') + ('-worldSpace ' if %s else '') "
                     "+ ('-stripNamespaces ' if %s else '') + _roots + ' -file \"%s\"'"
                     % (bool(opts.get("uv_write", True)), bool(opts.get("world_space", True)),
@@ -177,9 +192,18 @@ def maya_code(path: str, mode: str, opts: dict) -> str:
         body.append("    cmds.mayaUSDExport(**_kw)")
     else:
         body.append("    raise RuntimeError('未対応の形式: %s')" % ext)
+    # r125: 結果に «何件を何バイトで» を載せる。ステータスバーと送信ログの
+    # 両方に出るので、«空のファイルができた» がその場で分かる（今回の
+    # 「中身が空」は、成功としか表示されないせいで気付けなかった）。
+    body.append("    import os as _os")
+    body.append("    _sz = _os.path.getsize('%s') if _os.path.isfile('%s') else -1" % (p, p))
+    if sel:
+        body.append("    _note = ' [選択 %d 件 / %d bytes]' % (len(_sel), _sz)")
+    else:
+        body.append("    _note = ' [%d bytes]' % _sz")
     inner = ("import maya.cmds as cmds\n"
              "try:\n" + "\n".join(body) + "\n"
-             "    _mfm_result = 'saved:%s'\n"
+             "    _mfm_result = 'saved:%s' + _note\n"
              "except Exception as _e:\n"
              "    cmds.confirmDialog(title='Maya File Manager', message=u'保存に失敗しました:\\n' + str(_e), button=['OK'])\n"
              "    _mfm_result = 'Error: ' + str(_e)\n" % p)
@@ -196,10 +220,15 @@ def blender_code(path: str, mode: str, opts: dict) -> str:
     p = _q(path)
     sel = (mode == "export")
     body = []
+    if sel:
+        # r125: Maya と同じ。use_selection=True は空選択でも中身の無い
+        # ファイルを書いてしまう。
+        body.append("    if not bpy.context.selected_objects:")
+        body.append("        raise RuntimeError('Blender で何も選択されていません。"
+                    "書き出す対象を選んでから実行してください。')")
     if ext == ".blend":
         if sel:
             body.append("    _objs = set(bpy.context.selected_objects)")
-            body.append("    if not _objs: raise RuntimeError('何も選択されていません')")
             body.append("    bpy.data.libraries.write('%s', _objs, fake_user=True)" % p)
         else:
             body.append("    bpy.ops.wm.save_as_mainfile(filepath='%s', copy=%s)"
@@ -254,12 +283,16 @@ def blender_code(path: str, mode: str, opts: dict) -> str:
                     % (p, sel, bool(opts.get("apply_modifiers", True))))
     else:
         body.append("    raise RuntimeError('未対応の形式: %s')" % ext)
+    # r125: Maya 側と同じく «何バイトになったか» を結果に載せる
+    # （空のファイルができても «成功» としか出ないのを防ぐ）。
     inner = ("def _mfm_do():\n" + "\n".join(body) + "\n"
+             "import os as _os\n"
              "try:\n"
              "    mfm_run(_mfm_do)\n"
-             "    _mfm_result = 'saved:%s'\n"
+             "    _mfm_sz = _os.path.getsize('%s') if _os.path.isfile('%s') else -1\n"
+             "    _mfm_result = 'saved:%s' + (' [%%d bytes]' %% _mfm_sz)\n"
              "except Exception as _e:\n"
              "    mfm_popup('保存に失敗しました:\\n' + str(_e))\n"
-             "    _mfm_result = 'Error: ' + str(_e)\n" % p)
+             "    _mfm_result = 'Error: ' + str(_e)\n" % (p, p, p))
     # ブリッジは «式» なら値を返す: exec して _mfm_result を返す複合式にする
     return "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_result', ''))[1])(dict(globals()))" % inner
