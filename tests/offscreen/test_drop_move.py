@@ -103,18 +103,28 @@ def test_drop_event_reaches_callback():
         lambda paths, dest, move: got.append((list(paths), dest, move)))
     b.navigate_to(B)
     app.processEvents()
-    QTimer.singleShot(600, lambda: _do_drop(got))
+    # r125: カラムの生成は非同期（QFileSystemModel のロード待ち）。固定待ちだと
+    # 機械が混んでいる時だけ «B のカラムが見つからない» で落ちる（実機 2026-10-06）。
+    _wait_for_view(B, lambda view: _do_drop(got, view))
 
 
-def _do_drop(got):
+def _wait_for_view(folder, then, waited=0, timeout_ms=8000):
+    """folder をルートに持つ «見えている» カラムが出るまで待って then(view)。"""
+    from core.compat import QListView
+    for v in b._column_view.findChildren(QListView):
+        if not v.isVisible():
+            continue
+        p = b._column_view._path_for_index(v.rootIndex()) or ""
+        if p and os.path.normcase(os.path.normpath(p)) == \
+                os.path.normcase(os.path.normpath(folder)):
+            then(v)
+            return
+    assert waited < timeout_ms, "カラムが出ない: %s" % folder
+    QTimer.singleShot(100, lambda: _wait_for_view(folder, then, waited + 100, timeout_ms))
+
+
+def _do_drop(got, view):
     from core.compat import Qt, QtCore, QtGui, QUrl, QMimeData, QListView
-    views = [v for v in b._column_view.findChildren(QListView) if v.isVisible()]
-    assert views, "カラムが無い"
-    view = None
-    for v in views:
-        if os.path.normcase(b._column_view._path_for_index(v.rootIndex()) or "") \
-           == os.path.normcase(B):
-            view = v
     assert view is not None, "B のカラムが見つからない"
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(os.path.join(A, "keep.ma"))])

@@ -5,7 +5,8 @@
 連続クリック／アニメ中の navigate_to／戻る／幅変更 で検証する。"""
 import os
 from _common import *  # noqa: F401,F403
-from _common import app, make_panel, columns, tmpdir, finish, run, QTimer, find_item
+from _common import (app, make_panel, columns, tmpdir, finish, run, QTimer,
+                     find_item, find_item_wait)
 from _common import QTest
 from core.compat import Qt
 
@@ -62,9 +63,34 @@ def check(tag):
 
 
 def click(name):
-    c, rect, idx = find_item(b, name)
+    # r125: 項目が出るのを «待つ»。実機（mayapy）は機械が混んでいると
+    # カラム生成が 450ms に収まらず、固定待ちだと «その時だけ» 落ちていた。
+    c, rect, idx = find_item_wait(b, name, timeout_ms=6000)
     assert c is not None, "item not visible: " + name
     QTest.mouseClick(c.viewport(), Qt.LeftButton, Qt.NoModifier, rect.center())
+
+
+def settle(then, tries=40):
+    """カラムのレイアウトが «落ち着く» まで待ってから then() を呼ぶ。
+
+    スライドアニメーションとカラム生成が終わるまで hbar.maximum は動く。
+    固定待ちで測ると、遅いマシンでは «途中の値» を見て落ちる（実機 2026-10-06:
+    hmax=1310 exp=1010）。2 回続けて同じ値になったら完了とみなす。"""
+    state = {"prev": None, "same": 0, "n": 0}
+
+    def tick():
+        cur = (hbar.maximum(), len(columns(b)), hbar.value())
+        if cur == state["prev"]:
+            state["same"] += 1
+        else:
+            state["same"] = 0
+        state["prev"] = cur
+        state["n"] += 1
+        if state["same"] >= 2 or state["n"] >= tries:
+            then()
+        else:
+            QTimer.singleShot(100, tick)
+    QTimer.singleShot(100, tick)
 
 
 steps = []
@@ -83,7 +109,7 @@ def s_clicks():
             QTimer.singleShot(50, s_navigate_mid_anim)
             return
         click(names[i])
-        QTimer.singleShot(450, lambda: (check("click %s" % names[i]), go(i + 1)))
+        settle(lambda: (check("click %s" % names[i]), go(i + 1)))
     go()
 
 
@@ -92,18 +118,19 @@ def s_navigate_mid_anim():
     #    直後（アニメ中）にさらに深いパスへ navigate_to して再構築を重ねる。
     b.navigate_to(other)
     QTimer.singleShot(40, lambda: b.navigate_to(chain[4]))
-    QTimer.singleShot(1500, lambda: (check("navigate mid-anim"), s_click_after()))
+    QTimer.singleShot(900, lambda: settle(lambda: (check("navigate mid-anim"),
+                                                   s_click_after())))
 
 
 def s_click_after():
     click("L6_2")
-    QTimer.singleShot(450, lambda: (check("click after rebuild"), s_back()))
+    settle(lambda: (check("click after rebuild"), s_back()))
 
 
 def s_back():
     # 3) 戻る（履歴）→ 再構築
     b.go_back() if hasattr(b, "go_back") else b.navigate_to(other)
-    QTimer.singleShot(1200, lambda: (check("back"), s_resize()))
+    QTimer.singleShot(600, lambda: settle(lambda: (check("back"), s_resize())))
 
 
 def s_resize():
@@ -114,8 +141,8 @@ def s_resize():
         if len(cols) >= 2:
             cv.set_column_width_for_view(cols[-2], 420)
             cv.set_column_width_for_view(cols[0], 160)
-        QTimer.singleShot(300, lambda: (check("after resize"), s_done()))
-    QTimer.singleShot(1200, do)
+        settle(lambda: (check("after resize"), s_done()))
+    QTimer.singleShot(600, lambda: settle(do))
 
 
 def s_done():
@@ -125,4 +152,4 @@ def s_done():
 
 
 b.navigate_to(root)
-run(s_clicks, delay=2500, timeout=60000)
+run(s_clicks, delay=2500, timeout=120000)
