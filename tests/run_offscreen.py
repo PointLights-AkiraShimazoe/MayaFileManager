@@ -12,6 +12,10 @@ ROOT = os.path.dirname(HERE)
 LOG = os.path.join(ROOT, "mfm_tests.log")
 tests = sorted(glob.glob(os.path.join(HERE, "offscreen", "test_*.py")))
 env = dict(os.environ); env.setdefault("QT_QPA_PLATFORM", "offscreen")
+# r124: mayapy は起動時に «ユーザーの» userSetup.py を全部実行する。第三者ツール
+# （Bonjolt 等）がそこで例外を出すと、その Traceback がテストの出力に混ざって
+# «合格なのに FAIL» になる（実機 2026-10-06）。テストには要らないので止める。
+env.setdefault("MAYA_SKIP_USERSETUP_PY", "1")
 lines = []
 
 
@@ -40,7 +44,11 @@ for t in tests:
         out = p.stdout.decode("utf-8", "replace") + p.stderr.decode("utf-8", "replace")
     except subprocess.TimeoutExpired:
         out = "TIMEOUT"
-    ok = "ALL OK" in out and "FAILED" not in out and "Traceback" not in out
+    # r124: 判定は «テスト本体が ALL OK を出すまで» の範囲で行う。
+    # ALL OK の後ろに出る第三者 userSetup の Traceback 等は無関係なので数えない。
+    head = out.split("ALL OK")[0] if "ALL OK" in out else out
+    ok = ("ALL OK" in out and "FAILED" not in out
+          and "TIMEOUT" not in out and "Traceback" not in head)
     bad += 0 if ok else 1
     say("%-40s %s (%.1fs)" % (os.path.basename(t), "PASS" if ok else "FAIL", time.time() - t0))
     if not ok:

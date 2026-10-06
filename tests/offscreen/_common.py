@@ -33,63 +33,113 @@ from ui.browser_panel import BrowserPanel, _safe_file_path  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------
-# QTest 互換シム（r62）: Maya 同梱の PySide6 には QtTest モジュールが無い
-# （mayapy で ModuleNotFoundError）。本物があればそれを使い、無ければ
-# QMouseEvent/QKeyEvent を直接送る最小実装で代替する。
+# QTest 互換シム（r62 / r124 で «部分的にしか無い» 場合にも対応）
+#
+# - Maya 同梱の PySide6 には QtTest モジュールが «無い» ことがある（r62）。
+# - Maya 2027（PySide6 6.8.3）は QtTest を持っているが、**QTest.qWait が無い**。
+#   実機の回帰スイートが全部 TIMEOUT になっていた原因
+#   （AttributeError: type object 'QTest' has no attribute 'qWait'、2026-10-06）。
+#
+# そこで «本物があれば本物、無い分だけ自前» という組み方にする。
+# 丸ごと有る／無いの二択にすると、今回のような «一部だけ欠けている» 環境で
+# また同じ止まり方をする。
 # ---------------------------------------------------------------------------
+from core.compat import QtCore as _QtCore, QtGui as _QtGui  # noqa: E402
+import time as _time_mod  # noqa: E402
+
 try:
-    from PySide6.QtTest import QTest  # noqa: F401
+    from PySide6.QtTest import QTest as _QTestReal
 except Exception:
-    from core.compat import QtCore as _QtCore, QtGui as _QtGui
+    try:
+        from PySide2.QtTest import QTest as _QTestReal   # noqa: F401
+    except Exception:
+        _QTestReal = None
 
-    class QTest:  # noqa: N801
-        @staticmethod
-        def _mouse(widget, etype, button, modifiers, pos):
-            if pos is None:
-                pos = widget.rect().center()
-            gpos = widget.mapToGlobal(pos)
-            buttons = button if etype != _QtCore.QEvent.MouseButtonRelease else _QtCore.Qt.NoButton
-            try:
-                ev = _QtGui.QMouseEvent(etype, _QtCore.QPointF(pos), _QtCore.QPointF(gpos),
-                                        button, buttons, modifiers)
-            except TypeError:  # Qt5 系
-                ev = _QtGui.QMouseEvent(etype, pos, gpos, button, buttons, modifiers)
-            QApplication.sendEvent(widget, ev)
+
+class _QTestFallback:
+    """本物に無いものだけを補う最小実装。"""
+
+    @staticmethod
+    def qWait(ms):
+        """ms ミリ秒、イベントを回しながら待つ（タイマーも進む）。"""
+        end = _time_mod.monotonic() + (ms / 1000.0)
+        while _time_mod.monotonic() < end:
             QApplication.processEvents()
+            _time_mod.sleep(0.005)
+        QApplication.processEvents()
 
-        @staticmethod
-        def mousePress(widget, button, modifiers=_QtCore.Qt.NoModifier, pos=None, delay=-1):
-            QTest._mouse(widget, _QtCore.QEvent.MouseButtonPress, button, modifiers, pos)
+    @staticmethod
+    def _mouse(widget, etype, button, modifiers, pos):
+        if pos is None:
+            pos = widget.rect().center()
+        gpos = widget.mapToGlobal(pos)
+        buttons = button if etype != _QtCore.QEvent.MouseButtonRelease else _QtCore.Qt.NoButton
+        try:
+            ev = _QtGui.QMouseEvent(etype, _QtCore.QPointF(pos), _QtCore.QPointF(gpos),
+                                    button, buttons, modifiers)
+        except TypeError:  # Qt5 系
+            ev = _QtGui.QMouseEvent(etype, pos, gpos, button, buttons, modifiers)
+        QApplication.sendEvent(widget, ev)
+        QApplication.processEvents()
 
-        @staticmethod
-        def mouseRelease(widget, button, modifiers=_QtCore.Qt.NoModifier, pos=None, delay=-1):
-            QTest._mouse(widget, _QtCore.QEvent.MouseButtonRelease, button, modifiers, pos)
+    @staticmethod
+    def mousePress(widget, button, modifiers=_QtCore.Qt.NoModifier, pos=None, delay=-1):
+        QTest._mouse(widget, _QtCore.QEvent.MouseButtonPress, button, modifiers, pos)
 
-        @staticmethod
-        def mouseClick(widget, button, modifiers=_QtCore.Qt.NoModifier, pos=None, delay=-1):
-            QTest.mousePress(widget, button, modifiers, pos)
-            QTest.mouseRelease(widget, button, modifiers, pos)
+    @staticmethod
+    def mouseRelease(widget, button, modifiers=_QtCore.Qt.NoModifier, pos=None, delay=-1):
+        QTest._mouse(widget, _QtCore.QEvent.MouseButtonRelease, button, modifiers, pos)
 
-        @staticmethod
-        def mouseDClick(widget, button, modifiers=_QtCore.Qt.NoModifier, pos=None, delay=-1):
-            # 実機と同じ順: press, release, dblclick, release
-            QTest.mousePress(widget, button, modifiers, pos)
-            QTest.mouseRelease(widget, button, modifiers, pos)
-            QTest._mouse(widget, _QtCore.QEvent.MouseButtonDblClick, button, modifiers, pos)
-            QTest.mouseRelease(widget, button, modifiers, pos)
+    @staticmethod
+    def mouseMove(widget, pos=None, delay=-1):
+        QTest._mouse(widget, _QtCore.QEvent.MouseMove, _QtCore.Qt.NoButton,
+                     _QtCore.Qt.NoModifier, pos)
 
-        @staticmethod
-        def keyClick(widget, key, modifiers=_QtCore.Qt.NoModifier, delay=-1):
-            text = key if isinstance(key, str) else ""
-            k = ord(key.upper()) if isinstance(key, str) else key
-            for et in (_QtCore.QEvent.KeyPress, _QtCore.QEvent.KeyRelease):
-                QApplication.sendEvent(widget, _QtGui.QKeyEvent(et, k, modifiers, text))
-            QApplication.processEvents()
+    @staticmethod
+    def mouseClick(widget, button, modifiers=_QtCore.Qt.NoModifier, pos=None, delay=-1):
+        QTest.mousePress(widget, button, modifiers, pos)
+        QTest.mouseRelease(widget, button, modifiers, pos)
 
-        @staticmethod
-        def keyClicks(widget, text, modifiers=_QtCore.Qt.NoModifier, delay=-1):
-            for ch in text:
-                QTest.keyClick(widget, ch, modifiers)
+    @staticmethod
+    def mouseDClick(widget, button, modifiers=_QtCore.Qt.NoModifier, pos=None, delay=-1):
+        # 実機と同じ順: press, release, dblclick, release
+        QTest.mousePress(widget, button, modifiers, pos)
+        QTest.mouseRelease(widget, button, modifiers, pos)
+        QTest._mouse(widget, _QtCore.QEvent.MouseButtonDblClick, button, modifiers, pos)
+        QTest.mouseRelease(widget, button, modifiers, pos)
+
+    @staticmethod
+    def keyClick(widget, key, modifiers=_QtCore.Qt.NoModifier, delay=-1):
+        text = key if isinstance(key, str) else ""
+        k = ord(key.upper()) if isinstance(key, str) else key
+        for et in (_QtCore.QEvent.KeyPress, _QtCore.QEvent.KeyRelease):
+            QApplication.sendEvent(widget, _QtGui.QKeyEvent(et, k, modifiers, text))
+        QApplication.processEvents()
+
+    @staticmethod
+    def keyClicks(widget, text, modifiers=_QtCore.Qt.NoModifier, delay=-1):
+        for ch in text:
+            QTest.keyClick(widget, ch, modifiers)
+
+
+def _qtest_pick(name):
+    """本物にそのメソッドがあれば本物、無ければ自前。"""
+    fn = getattr(_QTestReal, name, None) if _QTestReal is not None else None
+    if fn is None:
+        fn = getattr(_QTestFallback, name)
+    return staticmethod(fn)
+
+
+class QTest:   # noqa: N801
+    qWait = _qtest_pick("qWait")
+    _mouse = staticmethod(_QTestFallback._mouse)   # 自前専用（本物には無い）
+    mousePress = _qtest_pick("mousePress")
+    mouseRelease = _qtest_pick("mouseRelease")
+    mouseMove = _qtest_pick("mouseMove")
+    mouseClick = _qtest_pick("mouseClick")
+    mouseDClick = _qtest_pick("mouseDClick")
+    keyClick = _qtest_pick("keyClick")
+    keyClicks = _qtest_pick("keyClicks")
 
 
 def make_panel(w=1200, h=700):
