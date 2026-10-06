@@ -96,7 +96,7 @@
   "nodes": {
     "entry": {
       "file": "main.py",
-      "line": 350,
+      "line": 468,
       "symbol": "if __name__ == '__main__' (run_in_maya.py も入口)"
     },
     "dcchdr": {
@@ -111,7 +111,7 @@
     },
     "browser": {
       "file": "ui/browser_panel.py",
-      "line": 73,
+      "line": 74,
       "symbol": "class BrowserPanel"
     },
     "savedlg": {
@@ -136,7 +136,7 @@
     },
     "integ": {
       "file": "core/integrations/manager.py",
-      "line": 42,
+      "line": 56,
       "symbol": "class IntegrationManager"
     },
     "dccsave": {
@@ -165,12 +165,12 @@
     },
     "t_check": {
       "file": "ui/main_window_dcc.py",
-      "line": 1214,
+      "line": 1288,
       "symbol": "def _maya_send_or_prompt() / _blender_send_or_prompt()"
     },
     "t_send": {
       "file": "ui/main_window_dcc.py",
-      "line": 770,
+      "line": 798,
       "symbol": "def _bridge_send_async() → MayaBridge.send_python()"
     },
     "d_run": {
@@ -180,7 +180,7 @@
     },
     "t_result": {
       "file": "ui/main_window_dcc.py",
-      "line": 796,
+      "line": 844,
       "symbol": "def _on_bridge_done()"
     },
     "u_start": {
@@ -195,7 +195,7 @@
     },
     "u_go": {
       "file": "ui/browser_panel.py",
-      "line": 1089,
+      "line": 1107,
       "symbol": "ユーザー操作 → navigate_to()"
     },
     "t_probe": {
@@ -224,32 +224,32 @@
     },
     "u_key": {
       "file": "ui/browser_panel.py",
-      "line": 2735,
+      "line": 3071,
       "symbol": "ユーザー操作 → _install_clipboard_actions()"
     },
     "t_targets": {
       "file": "ui/browser_panel.py",
-      "line": 3037,
+      "line": 3373,
       "symbol": "def _operation_targets() / _deep_view_targets()"
     },
     "t_confirm": {
       "file": "ui/browser_panel.py",
-      "line": 2656,
+      "line": 2824,
       "symbol": "def _delete_confirm()"
     },
     "x_exec": {
       "file": "ui/browser_panel.py",
-      "line": 2777,
+      "line": 3113,
       "symbol": "def _run_file_op() → core/file_operations, undo_stack"
     },
     "t_refresh": {
       "file": "ui/browser_panel.py",
-      "line": 2849,
+      "line": 3185,
       "symbol": "def _refresh_flat_view() / _open_inline_editor()"
     },
     "u_undo": {
       "file": "ui/browser_panel.py",
-      "line": 2863,
+      "line": 3199,
       "symbol": "ユーザー操作 → _undo_op()"
     },
     "t_show": {
@@ -259,7 +259,7 @@
     },
     "x_status": {
       "file": "core/integrations/manager.py",
-      "line": 113,
+      "line": 127,
       "symbol": "def _do_status() → Provider.fetch_status()"
     },
     "t_badge2": {
@@ -269,12 +269,12 @@
     },
     "u_rclick": {
       "file": "core/integrations/manager.py",
-      "line": 211,
+      "line": 225,
       "symbol": "ユーザー操作 → actions_for()"
     },
     "t_precheck": {
       "file": "core/integrations/p4_provider.py",
-      "line": 274,
+      "line": 462,
       "symbol": "def _checkout_precheck()"
     },
     "x_cmd": {
@@ -289,8 +289,8 @@
     },
     "t_guard": {
       "file": "ui/main_window_dcc.py",
-      "line": 1014,
-      "symbol": "def _dcc_once() / _poll_dcc_idle()"
+      "line": 1250,
+      "symbol": "def _dcc_guarded()（_dcc_once / _dcc_in_progress / _poll_dcc_idle）"
     }
   }
 }

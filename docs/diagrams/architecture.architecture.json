@@ -281,7 +281,8 @@
         "BrowserArea = プリセット行＋ブックマーク/履歴＋BrowserPanel",
         "ヘッダ行は setMenuWidget（menuBar() は使わない）",
         "表示名は core/display_names.py（隠しファイルが無ければ走らない）",
-        "文言は core/i18n.tr(ja, en)／言語は設定 ui_language"
+        "文言は core/i18n.tr(ja, en)／言語は設定 ui_language",
+        "複数選択のカラム（平坦・共通フォルダ）は単独クリックで必ず畳む"
       ]
     },
     {
@@ -290,7 +291,8 @@
       "items": [
         "commandPort は単一式のみ → exec を式に包む",
         "送信・応答待ちは必ずワーカースレッド（_bridge_send_async）",
-        ".ma/.mb→Maya、.blend→Blender、共通形式→選択中 DCC"
+        ".ma/.mb→Maya、.blend→Blender、共通形式→選択中 DCC",
+        "1 操作 = 1 回: _dcc_guarded（進行中 + 完了起点の時間窓 + 送信時の重複排除）"
       ]
     },
     {
@@ -299,7 +301,8 @@
       "items": [
         "長時間処理は _run_file_op（進捗＋キャンセル）",
         "削除は作業ごみ箱 → OS ごみ箱",
-        "UI スレッドで filePath()/isdir は禁止"
+        "UI スレッドで filePath()/isdir は禁止",
+        "読み取り専用の付け外しは is_read_only / set_read_only（プロパティ窓）"
       ]
     }
   ]
