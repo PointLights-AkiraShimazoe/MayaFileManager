@@ -97,7 +97,11 @@ try:
 finally:
     bp.QMenu = _orig
 app.processEvents()
-found = any("プロパティ" in t for t in (holder[0] if holder else []))
-check(found, "複数選択でもプロパティが出る（%r）" % (holder[0] if holder else None,))
+texts = holder[0] if holder else []
+found = any("プロパティ" in t for t in texts)
+# コンソールが cp932 の実機では絵文字（📋 等）を print できずに落ちる。
+# 判定に要るのは «出たかどうか» なので、失敗時だけ ASCII に落として出す。
+detail = "" if found else "（項目: %s）" % ascii([t for t in texts if t])
+check(found, "複数選択でもプロパティが出る" + detail)
 
 finish(not fails)

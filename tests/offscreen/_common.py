@@ -61,12 +61,22 @@ class _QTestFallback:
 
     @staticmethod
     def qWait(ms):
-        """ms ミリ秒、イベントを回しながら待つ（タイマーも進む）。"""
+        """ms ミリ秒、イベントを回しながら待つ（本物の QTest::qWait と同じ作り）。
+
+        **sendPostedEvents(DeferredDelete) を忘れないこと。** processEvents だけ
+        では deleteLater で予約された破棄が «一切» 処理されない（本物の qWait は
+        毎周回でこれを流している）。忘れると、捨てたはずのウィジェットが残って
+        いるように見えて、実機だけテストが落ちる（2026-10-06）。
+        """
         end = _time_mod.monotonic() + (ms / 1000.0)
-        while _time_mod.monotonic() < end:
+        while True:
             QApplication.processEvents()
+            QApplication.sendPostedEvents(None, _QtCore.QEvent.DeferredDelete)
+            if _time_mod.monotonic() >= end:
+                break
             _time_mod.sleep(0.005)
         QApplication.processEvents()
+        QApplication.sendPostedEvents(None, _QtCore.QEvent.DeferredDelete)
 
     @staticmethod
     def _mouse(widget, etype, button, modifiers, pos):
@@ -140,6 +150,16 @@ class QTest:   # noqa: N801
     mouseDClick = _qtest_pick("mouseDClick")
     keyClick = _qtest_pick("keyClick")
     keyClicks = _qtest_pick("keyClicks")
+
+
+def flush_deleted():
+    """deleteLater で予約された破棄を «今» 片付ける（テスト用）。
+
+    本物の qWait も自前の qWait もこれを流すが、processEvents だけで済ませて
+    いる箇所から呼べるように単体でも出しておく。"""
+    QApplication.processEvents()
+    QApplication.sendPostedEvents(None, _QtCore.QEvent.DeferredDelete)
+    QApplication.processEvents()
 
 
 def make_panel(w=1200, h=700):

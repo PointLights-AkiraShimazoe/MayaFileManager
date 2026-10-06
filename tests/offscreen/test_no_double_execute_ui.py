@@ -20,7 +20,7 @@
 """
 import os
 from _common import *  # noqa: F401,F403
-from _common import tmpdir, finish, make_panel, find_item_wait
+from _common import tmpdir, finish, make_panel, find_item_wait, flush_deleted
 
 import ui.browser_panel as bp
 
@@ -102,9 +102,10 @@ try:
         b._popup_context_menu([scene], QPoint(10, 10))
 finally:
     bp.QMenu = _orig_menu_cls
-app.processEvents()
+# deleteLater の予約を «今» 片付けてから数える（実機の qWait 事情に依らない）
+flush_deleted()
 QTest.qWait(80)
-app.processEvents()
+flush_deleted()
 alive = b.findChildren(_NoExecMenu)
 check(len(_NoExecMenu.shown) == 6,
       "メニューは呼んだ回数だけ出る（%d 回）" % len(_NoExecMenu.shown))

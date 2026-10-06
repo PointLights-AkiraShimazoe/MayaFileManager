@@ -16,11 +16,22 @@ env = dict(os.environ); env.setdefault("QT_QPA_PLATFORM", "offscreen")
 # （Bonjolt 等）がそこで例外を出すと、その Traceback がテストの出力に混ざって
 # «合格なのに FAIL» になる（実機 2026-10-06）。テストには要らないので止める。
 env.setdefault("MAYA_SKIP_USERSETUP_PY", "1")
+# r124: 子プロセスの出力は必ず UTF-8 で受け取る。Windows の mayapy は
+# パイプ出力を既定で cp932 にするため、こちらが utf-8 で復号すると日本語が
+# «◆◆◆» に化け、cp932 に無い文字（絵文字）では子側が UnicodeEncodeError で
+# 落ちていた（実機 2026-10-06）。
+env.setdefault("PYTHONIOENCODING", "utf-8")
 lines = []
 
 
 def say(s=""):
-    print(s)
+    # ログ（mfm_tests.log）は UTF-8 なので全部残す。コンソールが cp932 で
+    # 出せない文字（絵文字など）は画面でだけ置き換える（print で落とさない）。
+    try:
+        print(s)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+        print(s.encode(enc, "replace").decode(enc, "replace"))
     lines.append(s)
 
 

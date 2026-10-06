@@ -44,7 +44,11 @@ def s1():
     QTest.mouseClick(cvw.viewport(), Qt.LeftButton, Qt.NoModifier, rect.center())
     _settle()
     assert ac.isVisible(), "書庫カラムが開かない"
-    assert ac.archive_path() == ZIP
+    # Windows では QFileSystemModel 由来のパスが «/» 区切りで返る
+    # （_safe_file_path）。生文字列で比べると実機だけ落ちる（2026-10-06）。
+    def _same(a, b):
+        return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+    assert _same(ac.archive_path(), ZIP), (ac.archive_path(), ZIP)
 
     # 3) 階層がある（scenes/ の下に sub/ と chr_A.ma）
     m = ac._view.model()
