@@ -101,7 +101,7 @@
     },
     "dcchdr": {
       "file": "ui/dcc_header.py",
-      "line": 249,
+      "line": 319,
       "symbol": "class DccHeader"
     },
     "mainwin": {

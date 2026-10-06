@@ -123,21 +123,27 @@ def s1():
     b._dcc_callback = lambda app_, action, paths: calls.append((app_, action, list(paths)))
     cur = {"dcc": "maya"}
     b.set_dcc_target_provider(lambda: cur["dcc"])
+    # r125: 項目名から «Maya» «Blender» を外した（アイコンで示す）ので、
+    # どの DCC 向けかは QAction.data() で見る。
+    def dccs(menu):
+        return [a.data()[0] for a in menu.actions() if isinstance(a.data(), tuple)]
     m = QMenu(); assert b._add_dcc_save_actions(m, d)
     texts = [a.text() for a in m.actions()]
-    assert len(texts) == 2 and all("Maya" in t for t in texts), texts
+    assert len(texts) == 2 and dccs(m) == ["maya", "maya"], (texts, dccs(m))
+    assert all("Maya" not in t and "Blender" not in t for t in texts), texts
+    assert all(not a.icon().isNull() for a in m.actions()), "アイコンが無い"
     m.actions()[0].trigger()
     assert calls and calls[-1] == ("maya", "save_scene", [d]), calls
     m.actions()[1].trigger()
     assert calls[-1][1] == "export_selection"
     cur["dcc"] = "blender"
     m = QMenu(); assert b._add_dcc_save_actions(m, d)
-    assert len(m.actions()) == 2 and all("Blender" in a.text() for a in m.actions())
+    assert dccs(m) == ["blender", "blender"], dccs(m)
     m.actions()[0].trigger(); assert calls[-1][0] == "blender"
     m = QMenu(); assert b._add_dcc_save_actions(m, os.path.join(d, "mesh.fbx"))
-    assert len(m.actions()) == 2 and all("Blender" in a.text() for a in m.actions())
+    assert dccs(m) == ["blender", "blender"], dccs(m)
     m = QMenu(); assert b._add_dcc_save_actions(m, os.path.join(d, "scene.mb"))
-    assert len(m.actions()) == 2 and all("Maya" in a.text() for a in m.actions()), "「.mb は常に Maya」"
+    assert dccs(m) == ["maya", "maya"], "「.mb は常に Maya」"
     m = QMenu(); assert not b._add_dcc_save_actions(m, os.path.join(d, "note.txt"))
     cur["dcc"] = "maya"
     print("DCC save/export menu entries follow selected DCC / native format: OK")

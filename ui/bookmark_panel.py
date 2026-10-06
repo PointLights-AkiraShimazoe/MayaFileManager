@@ -435,6 +435,28 @@ class BookmarkPanel(QWidget):
     # Context menu
     # ------------------------------------------------------------------
 
+    def set_dcc_target_provider(self, fn):
+        """«ヘッダで選択中の DCC» を返す関数を注入する（r125）。"""
+        self._dcc_target_provider = fn
+
+    def _dcc_icon_for(self, path: str):
+        """その項目を送る先の DCC のアイコン。拡張子で決まる分はそれを優先する。"""
+        from ui.dcc_header import dcc_app_icon
+        target = "maya"
+        try:
+            fn = self._dcc_target_provider
+            if callable(fn):
+                v = fn()
+                target = "blender" if v == "blender" else "maya"
+        except Exception:
+            target = "maya"
+        try:
+            from core.file_operations import dcc_for_path
+            target = dcc_for_path(path, target)
+        except Exception:
+            pass
+        return dcc_app_icon(target)
+
     def _show_context_menu(self, pos: QPoint):
         item = self._tree.itemAt(pos)
         menu = QMenu(self)

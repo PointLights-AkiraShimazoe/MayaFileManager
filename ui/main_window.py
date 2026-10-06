@@ -199,6 +199,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             lambda app, action, paths: self._on_maya_drop(action, paths, app))
         # r70: 保存／書き出しの「選択中 DCC」をブラウザへ教える
         area.browser.set_dcc_target_provider(lambda: self._dcc)
+        area.bookmark_panel.set_dcc_target_provider(lambda: self._dcc)   # r125
         area.bookmark_panel.open_requested.connect(self._dcc_open)
         area.bookmark_panel.import_requested.connect(self._dcc_import)
         area.bookmark_panel.reference_requested.connect(self._dcc_reference)

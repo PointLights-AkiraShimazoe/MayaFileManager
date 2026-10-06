@@ -90,24 +90,26 @@ def test_menu_follows_table():
 
     class _Menu(bp.QMenu):
         def exec_(self, *a, **k):
-            captured.append([x.text() for x in self.actions() if x.text()])
+            # r125: 項目名から «Maya» «Blender» を外したので data() で見る
+            captured.append([x.data() for x in self.actions() if x.text()])
         exec = exec_
     orig = bp.QMenu
     bp.QMenu = _Menu
     try:
-        def texts(name):
+        def cmds(name):
             captured.clear()
             b._popup_context_menu([F[name]], b.mapToGlobal(b.rect().center()))
-            return " | ".join(captured[-1])
-        t = texts("install.py")
-        assert "Maya で開く" not in t and "インポート" not in t and "リファレンス" not in t, t
-        t = texts("c.fbx")
-        assert "Maya で開く" not in t and "Maya にインポート" in t and "Maya にリファレンス" in t, t
-        t = texts("f.usd")
-        assert "Maya にインポート" in t and "Maya にリファレンス" not in t, t
+            return [d for d in captured[-1] if isinstance(d, tuple)]
+        t = cmds("install.py")
+        assert not [d for d in t if d[1] in ("open", "import", "reference")], t
+        t = cmds("c.fbx")
+        assert ("maya", "open") not in t and ("maya", "import") in t \
+            and ("maya", "reference") in t, t
+        t = cmds("f.usd")
+        assert ("maya", "import") in t and ("maya", "reference") not in t, t
         cur["dcc"] = "blender"
-        t = texts("c.fbx")
-        assert "Blender にインポート" in t and "Blender にリンク" not in t, t
+        t = cmds("c.fbx")
+        assert ("blender", "import") in t and ("blender", "reference") not in t, t
     finally:
         bp.QMenu = orig
     print("context menu shows only commands whose target the file is: OK")

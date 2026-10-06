@@ -1923,10 +1923,15 @@ class BrowserPanel(QWidget):
             app = dcc_for_path(target, app)
             if ext not in dcc_save.exts_for(app):
                 return False
-        label = "Blender" if app == "blender" else "Maya"
-        a = menu.addAction(tr("💾  %s: シーンをここに保存...", "💾  %s: Save Scene here...") % label)
+        # r125: ここもアプリ名を外し、アイコンで «どの DCC か» を示す。
+        # «...» は «ダイアログが開く» の意（Windows の作法）なので残す。
+        from ui.dcc_header import dcc_app_icon
+        ic = dcc_app_icon(app)
+        a = menu.addAction(ic, tr("シーンを保存...", "Save Scene..."))
+        a.setData((app, "save_scene"))
         a.triggered.connect(lambda _c=False, ap=app: dcc_cb(ap, "save_scene", [target]))
-        a = menu.addAction(tr("📤  %s: 選択を書き出し...", "📤  %s: Export Selection...") % label)
+        a = menu.addAction(ic, tr("選択を書き出し...", "Export Selection..."))
+        a.setData((app, "export_selection"))
         a.triggered.connect(lambda _c=False, ap=app: dcc_cb(ap, "export_selection", [target]))
         return True
 
@@ -2110,19 +2115,26 @@ class BrowserPanel(QWidget):
         # r91: 各項目は «そのコマンドの対象形式» のときだけ出す（core/dcc_caps.py）。
         # 送信側（MainWindow._dcc_accepts）と同じ表なので «見えるのに送れない» は無い。
         from core import dcc_caps
+        # r125: 項目名からアプリ名を外し、«どの DCC か» はアイコンだけで示す
+        # （ユーザー指示 2026-10-06）。同じ語が 5 行並ぶのを避け、動作だけを読む。
+        from ui.dcc_header import dcc_app_icon
         if callable(dcc_cb) and exts and show_maya:
             m_added = False
             if is_single and exts <= dcc_caps.exts("maya", "open"):
-                a = menu.addAction(tr("🗂  Maya で開く", "🗂  Open in Maya"))
+                a = menu.addAction(dcc_app_icon("maya"), tr("開く", "Open"))
+                a.setData(("maya", "open"))       # r125: 項目名から DCC が消えたので
                 a.triggered.connect(lambda _c=False: dcc_cb("maya", "open", list(paths)))
                 m_added = True
             if exts <= dcc_caps.exts("maya", "import"):
-                a = menu.addAction(tr("⬇  Maya にインポート" + cnt, "⬇  Import into Maya" + cnt_en))
+                a = menu.addAction(dcc_app_icon("maya"),
+                                   tr("インポート" + cnt, "Import" + cnt_en))
+                a.setData(("maya", "import"))
                 a.triggered.connect(lambda _c=False: dcc_cb("maya", "import", list(paths)))
                 m_added = True
             if exts <= dcc_caps.exts("maya", "reference"):
-                a = menu.addAction(tr("🔗  Maya にリファレンス" + cnt,
-                                      "🔗  Reference into Maya" + cnt_en))
+                a = menu.addAction(dcc_app_icon("maya"),
+                                   tr("リファレンス" + cnt, "Reference" + cnt_en))
+                a.setData(("maya", "reference"))
                 # 単一は Namespace を確認（従来どおり）。複数は一括（ダイアログ無し）
                 ref_action = "reference_ask" if is_single else "reference"
                 a.triggered.connect(lambda _c=False: dcc_cb("maya", ref_action, list(paths)))
@@ -2131,17 +2143,17 @@ class BrowserPanel(QWidget):
         if callable(dcc_cb) and exts and show_blender:
             b_items = []
             if is_single and exts <= dcc_caps.exts("blender", "open"):
-                b_items.append((tr("🗂  Blender で開く", "🗂  Open in Blender"), "open"))
+                b_items.append((tr("開く", "Open"), "open"))
             if exts <= dcc_caps.exts("blender", "import"):
-                b_items.append((tr("⬇  Blender にインポート（Append）" + cnt,
-                                   "⬇  Import into Blender (Append)" + cnt_en), "import"))
+                # Blender の取り込みは Append、参照は Link。アプリ側の呼び名を使う。
+                b_items.append((tr("アペンド" + cnt, "Append" + cnt_en), "import"))
             if exts <= dcc_caps.exts("blender", "reference"):
-                b_items.append((tr("🔗  Blender にリンク（Link）" + cnt,
-                                   "🔗  Link into Blender" + cnt_en), "reference"))
+                b_items.append((tr("リンク" + cnt, "Link" + cnt_en), "reference"))
             if b_items and added_dcc:
                 menu.addSeparator()
             for text, act in b_items:
-                a = menu.addAction(text)
+                a = menu.addAction(dcc_app_icon("blender"), text)
+                a.setData(("blender", act))
                 a.triggered.connect(lambda _c=False, ac=act: dcc_cb("blender", ac, list(paths)))
             added_dcc = added_dcc or bool(b_items)
         if added_dcc:

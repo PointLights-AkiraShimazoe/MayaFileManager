@@ -118,6 +118,76 @@ def app_icon_for(exe_path) -> QIcon:
         return QIcon()
 
 
+# ---------------------------------------------------------------------------
+# DCC のアプリアイコン（右クリックメニュー等から使う共有の入口）— r125
+# ---------------------------------------------------------------------------
+# 右クリックメニューは «Maya で開く» のようにアプリ名を書いていたが、5 項目とも
+# 同じ語が並んで読みにくかった（ユーザー指示 2026-10-06:「Maya という表記を
+# なくし、アイコンで示して、テキストは端的な単語に」）。アプリの区別は
+# アイコンだけが担うので、«必ず何かが出る» ことが要件になる。順に:
+#   1) インストール済み exe に埋め込まれた正式アイコン（ヘッダのバッジと同じ）
+#   2) resources/icons/app_<dcc>.png（ユーザーが置いた画像）
+#   3) 本ツールで描く文字バッジ（M / B）… ロゴの再現はしない
+_DCC_EXE = {}            # "maya" / "blender" -> exe パス
+_DCC_ICON_CACHE = {}
+
+# 3) のバッジ色。ロゴではなく «そのアプリを指す印» として使う控えめな色。
+_DCC_BADGE = {"maya": ("#1E8E8A", "M"), "blender": ("#E87D0D", "B")}
+
+
+def set_dcc_exe_paths(maya_exe=None, blender_exe=None):
+    """インストール済み DCC の exe を覚える（アイコン取得に使う）。"""
+    changed = False
+    for dcc, exe in (("maya", maya_exe), ("blender", blender_exe)):
+        if _DCC_EXE.get(dcc) != exe:
+            _DCC_EXE[dcc] = exe
+            changed = True
+    if changed:
+        _DCC_ICON_CACHE.clear()
+
+
+def _letter_badge(dcc: str) -> QIcon:
+    color, letter = _DCC_BADGE.get(dcc, ("#808080", "?"))
+    try:
+        from core.compat import QPixmap
+        pm = QPixmap(18, 18)
+        pm.fill(QColor(0, 0, 0, 0))
+        pt = QPainter(pm)
+        try:
+            pt.setRenderHint(QPainter.Antialiasing, True)
+            pt.setPen(Qt.NoPen)
+            pt.setBrush(QColor(color))
+            pt.drawRoundedRect(0, 0, 18, 18, 4, 4)
+            f = pt.font()
+            f.setBold(True)
+            f.setPixelSize(12)
+            pt.setFont(f)
+            pt.setPen(QColor("#ffffff"))
+            pt.drawText(pm.rect(), Qt.AlignCenter, letter)
+        finally:
+            pt.end()
+        return QIcon(pm)
+    except Exception:
+        return QIcon()
+
+
+def dcc_app_icon(dcc: str) -> QIcon:
+    """その DCC を表すアイコン。**必ず空でないものを返す**（上記 1→2→3）。"""
+    dcc = "blender" if dcc == "blender" else "maya"
+    ic = _DCC_ICON_CACHE.get(dcc)
+    if ic is not None:
+        return ic
+    ic = app_icon_for(_DCC_EXE.get(dcc))
+    if ic.isNull():
+        p = os.path.join(_ICON_DIR, "app_%s.png" % dcc)
+        if os.path.isfile(p):
+            ic = QIcon(p)
+    if ic.isNull():
+        ic = _letter_badge(dcc)
+    _DCC_ICON_CACHE[dcc] = ic
+    return ic
+
+
 class _HeaderRow(QWidget):
     """ヘッダ行の手動レイアウト（r69）: メニューは左端、動作ブロックは右端、
     DCC ブロックは «起動ボタンがウィンドウの中央に来る» 位置に置く。
@@ -344,6 +414,8 @@ class DccHeader(QWidget):
     def set_app_icons(self, maya_exe=None, blender_exe=None):
         """インストール済み DCC の実行ファイルから正式アイコンを取り、バッジへ。
         見つからなければ文字バッジ（M / b）のまま。"""
+        # r125: 右クリックメニューも同じアイコンを使うので、ここで共有しておく。
+        set_dcc_exe_paths(maya_exe, blender_exe)
         for btn, exe, stem in ((self.maya_badge, maya_exe, "app_maya"),
                                (self.blender_badge, blender_exe, "app_blender")):
             ic = app_icon_for(exe)
