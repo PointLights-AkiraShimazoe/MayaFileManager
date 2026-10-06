@@ -2225,6 +2225,34 @@ class CappedColumnView(QColumnView):
                 # Ctrl/Shift+クリックは「ナビゲーションせずに複数選択」を自前で処理する。
                 # QColumnView はクリックを単一ナビに横取りするため、ここで捌かないと
                 # Shift/Ctrl の複数選択が効かない（マージ用の選択ができない）。
+                # r125: **Ctrl を押したまま «既に選択済みの項目» を掴んだ時に、
+                # その場でトグルを掛けていた。** Ctrl+クリックで複数選択した
+                # 直後、指を Ctrl から離さずにドラッグを始めるのは自然な操作で
+                # （Explorer では Ctrl+ドラッグ＝コピー）、そのたびに掴んだ
+                # 項目だけが選択から外れ、ドラッグも始まらなかった
+                # （ユーザー報告 2026-10-06「D&D をすると一つ選択が外れる」）。
+                # Explorer と同じく «離した時に初めてトグル» へ変える。
+                # ドラッグに至ったらトグルしない。
+                if (idx.isValid() and (mods & Qt.ControlModifier)
+                        and not (mods & Qt.ShiftModifier)):
+                    sm = view.selectionModel()
+                    if sm is not None and sm.isSelected(idx):
+                        sel = self._same_column_selection(sm, idx)
+                        _mfm_uilog("press(ctrl, selected): %r → トグルは保留、"
+                                   "drag候補 %d件" % (idx.data(), len(sel)))
+                        self._pending_multi_drag = {
+                            "view": view,
+                            "pos": pos,
+                            "press_idx": _QtCore.QPersistentModelIndex(idx),
+                            "indexes": [_QtCore.QPersistentModelIndex(i) for i in sel],
+                            # 離した時に «初めて» トグルする印
+                            "ctrl_toggle": True,
+                            "snapshot": self._selection_snapshot(
+                                exclude_view=view,
+                                exclude_ancestors_of=self._path_for_index(
+                                    view.rootIndex())),
+                        }
+                        return True
                 if idx.isValid() and (mods & (Qt.ControlModifier | Qt.ShiftModifier)):
                     snap = self._selection_snapshot(
                         exclude_view=view,
@@ -2367,6 +2395,21 @@ class CappedColumnView(QColumnView):
             if self._pending_multi_drag:
                 pending = self._pending_multi_drag
                 self._pending_multi_drag = None
+                if pending.get("ctrl_toggle"):
+                    # r125: Ctrl+押下を保留していた分。ドラッグに至らなかったので
+                    # ここで «Ctrl+クリック» として処理する（選択のトグル）。
+                    try:
+                        view = pending.get("view")
+                        p_idx = pending.get("press_idx")
+                        if view is not None and p_idx is not None and p_idx.isValid():
+                            idx = view.model().index(p_idx.row(), 0, p_idx.parent())
+                            if idx.isValid():
+                                self._multi_select(
+                                    view, idx, Qt.ControlModifier,
+                                    preserve_snapshot=pending.get("snapshot"))
+                    except Exception as e:
+                        _mfm_log("ctrl-toggle on release error: %r" % (e,))
+                    return True
                 # ドラッグに至らなかった＝ただのシングルクリック。標準挙動どおり
                 # 複数選択を解除して単一選択に確定し、通常のナビゲーションを行う。
                 # （旧実装はここで握り潰しており「クリックしても解除されない」
