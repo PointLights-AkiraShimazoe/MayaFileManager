@@ -92,4 +92,22 @@ check(not b._flat_col.isVisible() and len(b._common_cols) == 0,
       "ファイルの単独クリックでも両方とも畳まれる（flat=%s common=%d）"
       % (b._flat_col.isVisible(), len(b._common_cols)))
 
+# ── 3) 平坦カラムの ✕ でも «一緒に出たカラム» が全部畳まれる ──────────
+# r125: ✕ は _flat_col.hide に直結しており、共通フォルダカラムが
+# 取り残されていた（ユーザー報告 2026-10-06
+# 「平坦フィルタを✕で消すと子フォルダカラムが残ります」）。
+b._on_flat_request([os.path.join(root, "A"), os.path.join(root, "Z")])
+QTest.qWait(500)
+app.processEvents()
+check(b._flat_col.isVisible() and len(b._common_cols) >= 1,
+      "前提: 平坦カラムと共通フォルダカラムが出ている（flat=%s common=%d）"
+      % (b._flat_col.isVisible(), len(b._common_cols)))
+
+b._flat_col.closed.emit()          # ✕ ボタンが出すシグナル
+QTest.qWait(400)
+app.processEvents()
+check(not b._flat_col.isVisible(), "✕ で平坦カラムが閉じる")
+check(len(b._common_cols) == 0,
+      "✕ で共通フォルダカラムも畳まれる（残り %d）" % len(b._common_cols))
+
 finish(not fails)

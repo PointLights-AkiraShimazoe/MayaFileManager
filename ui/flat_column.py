@@ -54,7 +54,7 @@ class _DragListView(QListView):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._pending = None          # (pos, index)
+        self._pending = None          # (pos, index, ctrl_only)
         self._path_role = _PATH_ROLE
 
     def _selected_paths(self):
@@ -72,9 +72,17 @@ class _DragListView(QListView):
             pos = event.pos()
         idx = self.indexAt(pos)
         sm = self.selectionModel()
+        mods = event.modifiers()
+        # r125: Ctrl（Shift 無し）も «ドラッグ候補» にする。
+        # 従来は修飾キー無しの時だけ候補にしており、Ctrl を押したまま
+        # 掴むと Qt 標準の処理に落ちて «その場でトグル»＝掴んだ項目が
+        # 選択から外れていた（ユーザー報告 2026-10-06
+        # 「複数選択をし、D&D をすると一つ選択が外れる」）。
+        # Explorer と同じく «離した時に初めてトグル» にする。
+        ctrl_only = bool(mods & Qt.ControlModifier) and not (mods & Qt.ShiftModifier)
         if (event.button() == Qt.LeftButton and idx.isValid() and sm is not None
-                and sm.isSelected(idx) and event.modifiers() == Qt.NoModifier):
-            self._pending = (pos, idx)
+                and sm.isSelected(idx) and (mods == Qt.NoModifier or ctrl_only)):
+            self._pending = (pos, idx, ctrl_only)
             self.setFocus(Qt.MouseFocusReason)
             return                      # 選択を崩さない（ドラッグ候補）
         self._pending = None
@@ -94,15 +102,19 @@ class _DragListView(QListView):
 
     def mouseReleaseEvent(self, event):
         if self._pending is not None:
-            _pos, idx = self._pending
+            _pos, idx, ctrl_only = self._pending
             self._pending = None
             sm = self.selectionModel()
             if sm is not None and idx.isValid():
                 from core.compat import QtCore as _QC
                 QISM = _QC.QItemSelectionModel
-                sm.select(idx, QISM.ClearAndSelect | QISM.Rows)
-                sm.setCurrentIndex(idx, QISM.NoUpdate)
-                self.clicked.emit(idx)
+                if ctrl_only:
+                    # r125: ドラッグに至らなかった Ctrl+クリック＝トグル解除
+                    sm.select(idx, QISM.Deselect | QISM.Rows)
+                else:
+                    sm.select(idx, QISM.ClearAndSelect | QISM.Rows)
+                    sm.setCurrentIndex(idx, QISM.NoUpdate)
+                    self.clicked.emit(idx)
             return
         super().mouseReleaseEvent(event)
 

@@ -123,4 +123,64 @@ cv.eventFilter(c.viewport(),
 app.processEvents()
 check(dragged.get("n") == 3, "通常ドラッグも 3 件すべて渡る（%r 件）" % dragged.get("n"))
 
+# ── 4) 平坦ビューでも同じこと ─────────────────────────────────────────
+# r125: 平坦カラムの _DragListView は «修飾キー無し» の時だけドラッグ候補に
+# しており、Ctrl を押したまま掴むと Qt 標準の処理に落ちて «その場でトグル»＝
+# 掴んだ項目が選択から外れていた。
+fv = b._flat_col._view
+b._on_flat_request([root])
+QTest.qWait(600)
+app.processEvents()
+
+fsm = fv.selectionModel()
+m = fv.model()
+n = m.rowCount()
+check(n >= 3, "前提: 平坦ビューに項目が出ている（%d 件）" % n)
+if n >= 3:
+    from core.compat import QtCore as _QC
+    QISM = _QC.QItemSelectionModel
+    for r in (0, 2, 4):
+        if r < n:
+            fsm.select(m.index(r, 0), QISM.Select | QISM.Rows)
+    want = sorted({i.row() for i in fsm.selectedIndexes() if i.column() == 0})
+    check(len(want) >= 3, "前提: 平坦ビューで 3 件以上選べている（%r）" % want)
+
+    target = m.index(2, 0)
+    rect = fv.visualRect(target)
+    pos = rect.center()
+
+    dragged.clear()
+    fv._start_drag = lambda: dragged.update(
+        n=len([i for i in fv.selectedIndexes() if i.column() == 0]))
+
+    fv.mousePressEvent(QtGui.QMouseEvent(
+        _QC.QEvent.MouseButtonPress, QtCore.QPointF(pos),
+        QtCore.QPointF(fv.mapToGlobal(pos)),
+        Qt.LeftButton, Qt.LeftButton, Qt.ControlModifier))
+    got = sorted({i.row() for i in fsm.selectedIndexes() if i.column() == 0})
+    check(got == want, "平坦: Ctrl+押下だけでは選択が変わらない（%r）" % got)
+
+    fv.mouseMoveEvent(QtGui.QMouseEvent(
+        _QC.QEvent.MouseMove, QtCore.QPointF(pos + QtCore.QPoint(60, 0)),
+        QtCore.QPointF(fv.mapToGlobal(pos + QtCore.QPoint(60, 0))),
+        Qt.LeftButton, Qt.LeftButton, Qt.ControlModifier))
+    app.processEvents()
+    check(dragged.get("n") == len(want),
+          "平坦: Ctrl ドラッグでも全件渡る（%r / 期待 %d）"
+          % (dragged.get("n"), len(want)))
+
+    # Ctrl+クリック（動かさず離す）は従来どおりトグル解除
+    fv.mousePressEvent(QtGui.QMouseEvent(
+        _QC.QEvent.MouseButtonPress, QtCore.QPointF(pos),
+        QtCore.QPointF(fv.mapToGlobal(pos)),
+        Qt.LeftButton, Qt.LeftButton, Qt.ControlModifier))
+    fv.mouseReleaseEvent(QtGui.QMouseEvent(
+        _QC.QEvent.MouseButtonRelease, QtCore.QPointF(pos),
+        QtCore.QPointF(fv.mapToGlobal(pos)),
+        Qt.LeftButton, Qt.NoButton, Qt.ControlModifier))
+    app.processEvents()
+    got = sorted({i.row() for i in fsm.selectedIndexes() if i.column() == 0})
+    check(2 not in got and len(got) == len(want) - 1,
+          "平坦: Ctrl+クリックは離した時にトグル解除（%r → %r）" % (want, got))
+
 finish(not fails)

@@ -357,7 +357,12 @@ class BrowserPanel(QWidget):
         # 平坦ビューで単一ファイル選択時もパス欄にファイル名まで表示
         self._flat_col.file_selected.connect(
             lambda p: self._addr_bar.setText(p) if p else None)
-        self._flat_col.closed.connect(self._flat_col.hide)
+        # r125: ✕ は «hide するだけ» だった。平坦カラムと一緒に出る
+        # 共通フォルダカラム（_common_cols）・平坦トグル・パス欄が
+        # 取り残され、「✕ で消すと子フォルダカラムが残る」になっていた
+        # （ユーザー報告 2026-10-06）。書庫カラムの ✕ と同じく、
+        # «閉じる» の後片付けを一本化した経路を通す。
+        self._flat_col.closed.connect(lambda: self._on_flat_request([]))
         # r120: 平坦カラムでもサムネイル表示を選べるようにする（ユーザー指示）。
         # 平坦カラムは «フォルダ» を持たないので、記憶はフォルダ別ではなく 1 つ。
         self._flat_col.set_thumb_mgr(self._thumb_mgr)
