@@ -1220,6 +1220,76 @@ class BrowserPanel(QWidget):
         """
         self._navigate(path)
 
+    # ------------------------------------------------------------------
+    # r124: «今いる階層より上» へ戻る／複数選択のカラムを畳む
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _norm(p: str) -> str:
+        try:
+            return os.path.normcase(os.path.normpath(p))
+        except Exception:
+            return p or ""
+
+    def _is_at_or_above_current(self, path: str) -> bool:
+        """path が «現在地そのもの» か «現在地の祖先» か。"""
+        cur = self._norm(self._current_path or "")
+        tgt = self._norm(path or "")
+        if not cur or not tgt:
+            return False
+        return cur == tgt or cur.startswith(tgt + os.sep)
+
+    def _has_multi_columns(self) -> bool:
+        """複数選択で出した «平坦カラム／共通フォルダカラム» が残っているか。"""
+        try:
+            if self._flat_col.isVisible():
+                return True
+        except Exception:
+            pass
+        return bool([c for c in (getattr(self, "_common_cols", None) or [])])
+
+    def _close_multi_columns(self):
+        """複数選択のカラムを畳む。
+
+        r124: 以前は «平坦カラムが見えている時» だけ後片付けしていたため、
+        平坦カラムだけ閉じて «共通フォルダカラム» が取り残されていた
+        （ユーザー報告 2026-10-06「複数選択をやめたのに一部残る」）。
+        どちらか一方でも残っていれば両方畳む。"""
+        if self._has_multi_columns():
+            self._on_flat_request([])
+
+    def _collapse_to(self, path: str, proxy_index=None):
+        """path の階層まで戻る（その下のカラムを閉じる）。
+
+        r124: «子フォルダに入った後、選択済みの親フォルダをもう一度クリック
+        したら親階層に戻りたい。親階層の別フォルダを選ばないと戻れないのは
+        おかしい»（ユーザー指示 2026-10-06）。
+        Qt 任せ（current の変更で closeColumns が走る）に頼らず、ここで
+        «戻る» を明示的に行う。平坦カラム・共通フォルダカラム・書庫カラムも
+        畳む（これらが残っていると «戻った感じ» がしない）。"""
+        cv = self._column_view
+        try:
+            cv._cancel_reclick_rename()     # «もう一度クリック»＝名前変更ではない
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _collapse_to(cancel rename)")
+        self._merge_panel.hide()
+        self._on_archive_request("")
+        self._close_multi_columns()
+        try:
+            idx = proxy_index
+            if idx is None or not idx.isValid():
+                idx = cv._proxy_index_for_path(path)
+            if idx is not None and idx.isValid():
+                QISM = _QtCore.QItemSelectionModel
+                sm = cv.selectionModel()
+                if sm is not None:
+                    # ClearAndSelect で current を動かす＝Qt が下のカラムを閉じる
+                    sm.setCurrentIndex(idx, QISM.ClearAndSelect | QISM.Rows)
+                cv.scrollTo(idx)
+        except Exception as e:
+            _mfm_log("collapse_to error: %r" % (e,))
+        self._set_current_path(path)
+        _mfm_log("collapse_to: %r" % (path,))
+
     def _on_item_clicked(self, proxy_index: QModelIndex):
         # 通常クリックで下階層へ進んでも、複数選択の平坦結果は維持する。
         # 下位カラムで Ctrl/Shift 選択された時だけ _multi_select から対象を絞り直す。
@@ -1235,6 +1305,20 @@ class BrowserPanel(QWidget):
         if self._maybe_follow_shortcut(path):
             return
         if os.path.isdir(path):
+            # r124: 今いる階層の «祖先（または現在地そのもの）» をクリック
+            # → そこまで戻る。従来は何も起きず、«親階層の別フォルダを選ばないと
+            # 上に戻れない» 状態だった（ユーザー報告 2026-10-06）。
+            # 平坦トグル ON のカラムは «追従して平坦表示» が仕様なので除く。
+            _flat_on = False
+            try:
+                _fv = self._column_view._flatten_view
+                _flat_on = _fv is not None and getattr(_fv, "_mfm_flatten", False)
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py _on_item_clicked(flatten)")
+            if not _flat_on and self._is_at_or_above_current(path):
+                self._collapse_to(path, proxy_index)
+                self.selection_changed.emit([path])
+                return
             if self._column_view.isVisible() and self._is_native_expandable(proxy_index, path):
                 # 通常フォルダ(クリックしたカラムの子): ネイティブ列展開に任せルート不変
                 _mfm_log("click dir: native expand path=%r" % path)
@@ -1244,17 +1328,19 @@ class BrowserPanel(QWidget):
                 _mfm_log("click dir: cross-branch -> _navigate path=%r current=%r"
                          % (path, self._current_path))
                 self._navigate(path)
-            if self._flat_col.isVisible():
-                fv = self._column_view._flatten_view
-                if fv is not None and getattr(fv, "_mfm_flatten", False):
-                    # 平坦トグルON中は閉じずに、クリックしたフォルダへ追従
-                    # （単一選択でも配下の階層を平坦で見続けたい、の仕様）
-                    self._on_flat_request([path])
-                else:
-                    # 通常クリック＝単一選択（標準挙動）。複数選択の平坦カラムは
-                    # 閉じて、通常のカラム展開に戻す。
-                    self._on_flat_request([])
+            if _flat_on and self._flat_col.isVisible():
+                # 平坦トグルON中は閉じずに、クリックしたフォルダへ追従
+                # （単一選択でも配下の階層を平坦で見続けたい、の仕様）
+                self._on_flat_request([path])
+            else:
+                # 通常クリック＝単一選択（標準挙動）。複数選択で出したカラムは
+                # «平坦カラムも共通フォルダカラムも» 畳んで通常の展開に戻す。
+                self._close_multi_columns()
             return
+        # r124: ファイルを単独でクリックした時も «複数選択をやめた» である。
+        # 従来はここで何も畳んでおらず、平坦／共通フォルダカラムが
+        # 取り残されていた（ユーザー報告 2026-10-06）。
+        self._close_multi_columns()
         # 単一ファイル選択: パス欄にファイル名まで表示する
         try:
             self._addr_bar.setText(path)
