@@ -53,6 +53,7 @@ a = Analysis(
         'PySide2.QtWidgets',
         'shiboken2',
         # アプリ内モジュール（念のため明示）
+        'core.single_instance',
         'core.compat',
         'core.maya_version',
         'core.settings_manager',

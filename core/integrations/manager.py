@@ -30,19 +30,33 @@ def _resolve_log_path():
 
 
 _LOG_PATH = _resolve_log_path()
+_LOG_MAX_BYTES = 2 * 1024 * 1024
 try:
-    with open(_LOG_PATH, "w", encoding="utf-8") as _f:
-        _f.write("=== 外部サービス連携ログ（起動ごとに上書き） ===\n")
+    # r126: **起動ごとの «上書き» をやめた。** マネージャーを 2 つ開くと、
+    # 後から起動した方が相手のログを消してしまい、調査のときに
+    # «片方の記録が丸ごと無い» 状態になっていた。追記にして、
+    # 大きくなり過ぎた時だけ 1 世代だけ退避する。
+    if os.path.exists(_LOG_PATH) and os.path.getsize(_LOG_PATH) > _LOG_MAX_BYTES:
+        try:
+            os.replace(_LOG_PATH, _LOG_PATH + ".1")
+        except OSError:
+            pass
+    with open(_LOG_PATH, "a", encoding="utf-8") as _f:
+        _f.write("=== 外部サービス連携ログ 開始 pid=%d ===\n" % os.getpid())
 except OSError:
     pass
 
 
 def _ilog(msg: str):
-    """連携の検出・判定結果をツールフォルダ直下へ記録（調査用、常時）。"""
+    """連携の検出・判定結果をツールフォルダ直下へ記録（調査用、常時）。
+
+    r126: マネージャーが複数あっても混ざらないよう pid を添える。"""
     try:
         import datetime
         with open(_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write("[%s] %s\n" % (datetime.datetime.now().strftime("%H:%M:%S"), msg))
+            f.write("[%s pid=%d] %s\n"
+                    % (datetime.datetime.now().strftime("%H:%M:%S"),
+                       os.getpid(), msg))
     except OSError:
         pass
 

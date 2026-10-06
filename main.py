@@ -213,6 +213,23 @@ def run_standalone(skip_launcher: bool = True):
     _setup_error_logging()
     _log_env("standalone")
 
+    # r126: **マネージャーは 1 つだけ。** 2 つ目は既に開いている方を前面に
+    # 出して静かに終わる。理由は core/single_instance.py の冒頭に書いた
+    # （設定の取り合い・Maya 起動時のポートの取り合い）。
+    # 環境変数 MFM_ALLOW_MULTI=1 で解除できる（調査用）。
+    _single = None
+    if not os.environ.get("MFM_ALLOW_MULTI"):
+        try:
+            from core.single_instance import SingleInstance
+            _single = SingleInstance()
+            if not _single.acquire():
+                _single.notify_existing()
+                print("[main] 既にマネージャーが開いています。そちらを前面に出しました。")
+                return
+        except Exception as _e:
+            _swallow(_e, "main.py run_standalone(single instance)")
+            _single = None
+
     from core.settings_manager import SettingsManager
     sm = SettingsManager()
 
@@ -221,10 +238,24 @@ def run_standalone(skip_launcher: bool = True):
     i18n.init(sm)
 
     try:
-        _open_main_window(sm, maya_installation=None)
+        _win = _open_main_window(sm, maya_installation=None)
     except Exception as e:
         _report_window_error(e)
         sys.exit(1)
+
+    if _single is not None:
+        # 2 つ目が起動したら、この窓を前に出す（最小化されていても戻す）
+        def _raise_existing(w=_win):
+            try:
+                from core.compat import Qt as _Qt
+                w.setWindowState((w.windowState() & ~_Qt.WindowMinimized)
+                                 | _Qt.WindowActive)
+                w.show()
+                w.raise_()
+                w.activateWindow()
+            except Exception as _e:
+                _swallow(_e, "main.py _raise_existing")
+        _single.set_second_launch_handler(_raise_existing)
 
     if created:
         from core.compat import exec_app

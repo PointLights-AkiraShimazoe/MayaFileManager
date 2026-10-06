@@ -16,7 +16,9 @@ Design goals
 from core.diag import swallow as _swallow  # r112
 
 import json
+import os
 import copy
+import copy as _copy   # r126: 保存時のスナップショット用
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -182,21 +184,57 @@ class SettingsManager:
             self._version_state = self._load_json(
                 self._version_state_path(self._maya_version), {}
             )
+        # r126: «読み込んだ時の中身» を控える（下の _save_merged で使う）。
+        self._snapshot = {
+            "settings": _copy.deepcopy(self._settings),
+            "global": _copy.deepcopy(self._global_state),
+            "version": _copy.deepcopy(self._version_state),
+        }
+
+    # ------------------------------------------------------------------
+    # r126: **保存は «自分が変えた分だけ» を書く。**
+    #
+    # 従来は起動時に読んだ内容を丸ごと上書きしていた。マネージャーを 2 つ
+    # 開く（スタンドアロン ＋ Maya 内パネル、など）と、後から保存した側が
+    # «自分の起動時のスナップショット» で相手の変更を巻き戻す。実験で確認:
+    #   A がプリセットを 2 件に増やす → B が無関係な設定を 1 つ変えて保存
+    #   → ディスク上のプリセットは 1 件に戻る
+    # 2026-09-11 に «プリセットが消えた» 事故が起きているのも同じ形。
+    # 保存のたびにディスクを読み直し、«スナップショットと違う＝自分が
+    # 変えたキー» だけを載せて書く。
+    # ------------------------------------------------------------------
+    def _save_merged(self, path, current: Dict, snap_key: str, defaults: Dict):
+        snap = (getattr(self, "_snapshot", None) or {}).get(snap_key) or {}
+        disk = self._load_json(path, defaults)
+        merged = dict(disk)
+        for k, v in current.items():
+            if k not in snap or snap[k] != v:
+                merged[k] = v            # 自分が変えたキー
+        for k in list(merged):
+            # 自分が «消した» キーも反映する（相手が足したキーは残す）
+            if k in snap and k not in current:
+                merged.pop(k, None)
+        self._save_json(path, merged)
+        current.clear()
+        current.update(merged)
+        if getattr(self, "_snapshot", None) is not None:
+            self._snapshot[snap_key] = _copy.deepcopy(merged)
 
     def save(self):
         """Persist all state to disk."""
         self._backup_daily()
-        self._save_json(self._settings_path(), self._settings)
-        self._save_json(self._global_state_path(), self._global_state)
+        self._save_merged(self._settings_path(), self._settings,
+                          "settings", DEFAULT_SETTINGS)
+        self._save_merged(self._global_state_path(), self._global_state,
+                          "global", DEFAULT_GLOBAL_STATE)
         if self._maya_version:
-            self._save_json(
-                self._version_state_path(self._maya_version),
-                self._version_state,
-            )
+            self._save_merged(self._version_state_path(self._maya_version),
+                              self._version_state, "version", {})
 
     def save_settings_only(self):
         self._backup_daily()
-        self._save_json(self._settings_path(), self._settings)
+        self._save_merged(self._settings_path(), self._settings,
+                          "settings", DEFAULT_SETTINGS)
 
     # ------------------------------------------------------------------
     # Settings (preferences)
@@ -475,11 +513,25 @@ class SettingsManager:
 
     @staticmethod
     def _save_json(path: Path, data: Dict):
+        """r126: **アトミックに置き換える。**
+
+        従来は open(path, "w") で直接書いていた。書いている最中に別の
+        マネージャーが読むと «途中まで書かれた JSON» を読み、
+        JSONDecodeError → 既定値に戻る＝設定が全部消える。
+        一時ファイルへ書き切ってから os.replace で差し替える。"""
         try:
-            with open(path, "w", encoding="utf-8") as f:
+            tmp = str(path) + ".tmp%d" % os.getpid()
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, str(path))
         except OSError as e:
             print(f"[SettingsManager] Could not save {path}: {e}")
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------
     # Debug
