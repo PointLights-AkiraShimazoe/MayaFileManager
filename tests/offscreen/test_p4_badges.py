@@ -73,7 +73,11 @@ assert states[n("c.ma")] == ST_DELETED and states[n("d.ma")] == ST_OUTDATED
 assert states[n("e.ma")] == ST_LOCKED and states[n("f.ma")] == ST_OTHER_OPEN
 assert states[n("g.ma")] == ST_CLEAN
 assert states[n("new.ma")] == ST_UNTRACKED and states[n("sub")] == ST_UNTRACKED
-assert "otherLock" in calls[0][calls[0].index("-T") + 1]
+# r122: fetch_status の前にワークスペース一覧の取得（info / clients）が
+# 入るようになったので、«最初の呼び出し» ではなく fstat の呼び出しを探す。
+_fstat = [c for c in calls if "fstat" in c]
+assert _fstat, ("fstat が呼ばれていない", calls)
+assert "otherLock" in _fstat[0][_fstat[0].index("-T") + 1]
 print("p4 fstat parse (edit/add/delete/outdated/otherLock/otherOpen/clean/untracked): OK")
 
 # 4) デリゲートが is_dir_of_index 無しでも落ちない（後方互換）

@@ -53,3 +53,8 @@ docs/diagrams/.archify-*
 
 # Archify の中間生成物（図の配信用一時ディレクトリ。成果物は docs/*.html のみ追跡する）
 docs/.archify-delivery-*/
+
+# Cowork がテスト実行用に一時的に作る梱包ファイル（コミット対象外）
+_mfm_src_for_tests.tgz
+_mfm_stage.tgz
+selfcheck.txt

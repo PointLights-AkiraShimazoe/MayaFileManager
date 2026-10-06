@@ -33,7 +33,14 @@ class P4Provider(Provider):
         self.p4v = None
         self._client_root = None
         self._info_tried = False
-        self._conn_args = []
+        self._conn_args = []          # 既定の接続（-p/-u/-c）
+        # r122: **ワークスペースは 1 つとは限らない。**
+        # [(norm(ルート), クライアント名, 元のルート表記), ...] を長い順に持ち、
+        # パスからワークスペースを引く。従来は p4 info の clientRoot ただ 1 つで
+        # 判定していたため、«今つないでいるワークスペース以外は状態が出ない»
+        # 状態だった（ユーザー報告 2026-10-06）。
+        self._clients = None          # None=未取得 / [] = 取得したが0件
+        self._client_for_dir = {}     # norm(ディレクトリ) -> クライアント名 or ""
         # norm(clientFile) -> {"state", "others": [user@ws...], "locks": [user@ws...]}
         # 直近の fstat 結果（右クリック時の事前チェック用。I/Oなしで参照）
         self._file_info = {}
@@ -48,6 +55,8 @@ class P4Provider(Provider):
                 *program_files_candidates(r"Perforce\p4v.exe"))
             self.available = bool(self.p4)
             self._conn_args = []
+            self._clients = None
+            self._client_for_dir = {}
             self.info = {"p4": self.p4, "p4vc": self.p4vc, "p4v": self.p4v}
         except Exception:
             self.available = False
@@ -87,8 +96,13 @@ class P4Provider(Provider):
                 return None
             root = None
             for line in out.splitlines():
+                # r122: ワークスペース一覧を引くのに user / host が要る
                 if line.startswith("... clientRoot "):
                     root = line[len("... clientRoot "):].strip()
+                elif line.startswith("... userName "):
+                    self.info["user"] = line[len("... userName "):].strip()
+                elif line.startswith("... clientHost "):
+                    self.info["host"] = line[len("... clientHost "):].strip()
             return root
 
         # 1) p4 の既定設定（P4PORT/P4CONFIG/レジストリ `p4 set`）
@@ -106,10 +120,98 @@ class P4Provider(Provider):
                 root = _try(args)
                 if root:
                     self._conn_args = args
+                    if user and not self.info.get("user"):
+                        self.info["user"] = user
         self._client_root = root
         self.info["client_root"] = root
         self.info["conn_args"] = list(getattr(self, "_conn_args", []))
         return self._client_root
+
+    # ── r122: このユーザーの «全ワークスペース» を引く ──────────────────
+    def _all_clients(self):
+        """[(norm(ルート), クライアント名, ルート表記), ...] を «長いルート順» で返す。
+
+        p4 info が返すのは «今つないでいる» ワークスペースただ 1 つなので、
+        それだけで判定すると他のワークスペースのフォルダが «Perforce 管理外»
+        になってしまう（ユーザー報告 2026-10-06）。`p4 clients -u <user>` で
+        このユーザーのワークスペースを全部取り、ホストが一致するものだけ残す。
+        """
+        if self._clients is not None:
+            return self._clients
+        self._clients = []
+        if not self.p4:
+            return self._clients
+        self._client_root_via_info()          # 既定接続（_conn_args）を確定させる
+        user = self.info.get("user") or ""
+        host = (self.info.get("host") or "").lower()
+        args = ["-ztag", "clients"]
+        if user:
+            args += ["-u", user]
+        rc, out, err = run([self.p4] + self._conn_args + args, timeout=10.0)
+        if rc != 0:
+            self._log("clients 取得失敗 rc=%s %s"
+                      % (rc, (err or out).strip().splitlines()[:1]))
+            return self._clients
+        cur = {}
+        rows = []
+
+        def flush():
+            name, root = cur.get("client"), cur.get("Root")
+            chost = (cur.get("Host") or "").lower()
+            # Host 指定があり、この PC と違うワークスペースは使えない
+            if name and root and (not chost or chost == host):
+                rows.append((norm(root), name, root))
+            cur.clear()
+
+        for line in out.splitlines():
+            if not line.startswith("... "):
+                if not line.strip():
+                    flush()
+                continue
+            body = line[4:]
+            k, _sp, v = body.partition(" ")
+            if k == "client" and cur.get("client"):
+                flush()
+            cur[k] = v.strip()
+        flush()
+        # 長いルートが先（入れ子のワークスペースで深い方を選ぶ）
+        rows.sort(key=lambda r: len(r[0]), reverse=True)
+        self._clients = rows
+        self.info["clients"] = [(n, r) for _k, n, r in rows]
+        self._log("ワークスペース %d 件: %s"
+                  % (len(rows), [(n, r) for _k, n, r in rows][:8]))
+        return self._clients
+
+    def client_for(self, directory: str):
+        """そのフォルダが属するワークスペース名。分からなければ ""。"""
+        key = norm(directory)
+        if key in self._client_for_dir:
+            return self._client_for_dir[key]
+        found = ""
+        for root_key, name, _root in self._all_clients():
+            if key == root_key or key.startswith(root_key + os.sep):
+                found = name
+                break
+        self._client_for_dir[key] = found
+        return found
+
+    def conn_args_for(self, directory: str):
+        """そのフォルダ用の接続引数。該当ワークスペースがあれば -c を差し替える。"""
+        base = list(self._conn_args)
+        name = self.client_for(directory) if directory else ""
+        if not name:
+            return base
+        out = []
+        skip = False
+        for a in base:
+            if skip:
+                skip = False
+                continue
+            if a == "-c":
+                skip = True
+                continue
+            out.append(a)
+        return out + ["-c", name]
 
     def _log(self, msg):
         fn = getattr(self, "log", None)
@@ -124,7 +226,8 @@ class P4Provider(Provider):
         クライアントルートの文字列一致（subst/ジャンクション/大文字小文字/
         別ドライブ表記で食い違う）に頼らない。"""
         pattern = os.path.join(directory, "...")
-        rc, out, err = run([self.p4] + self._conn_args + ["-ztag", "where", pattern],
+        rc, out, err = run([self.p4] + self.conn_args_for(directory)
+                           + ["-ztag", "where", pattern],
                            cwd=directory, timeout=8.0)
         text = (out + err).lower()
         ok = rc == 0 and "... clientfile" in text and "not in client view" not in text \
@@ -140,10 +243,17 @@ class P4Provider(Provider):
         if r:
             self._log("root via P4CONFIG: %r" % r)
             return r
+        # r122: **このユーザーの全ワークスペースから引く。**
+        # 従来は p4 info の clientRoot（＝今つないでいる 1 つ）だけを見ていたため、
+        # 他のワークスペースのフォルダが «Perforce 管理外» 扱いになっていた。
+        d = norm(directory)
+        for root_key, name, root in self._all_clients():
+            if d == root_key or d.startswith(root_key + os.sep):
+                self._log("root via clients: %r (ws=%s)" % (root, name))
+                return root
         cr = self._client_root_via_info()
         self._log("info clientRoot=%r conn_args=%r" % (cr, self._conn_args))
         if cr:
-            d = norm(directory)
             c = norm(cr)
             if d == c or d.startswith(c + os.sep):
                 return cr
@@ -159,7 +269,8 @@ class P4Provider(Provider):
     def fetch_status(self, root: str, directory: str):
         # fstat はワイルドカード指定。表示中フォルダ直下のみ。
         pattern = os.path.join(directory, "*")
-        rc, out, err = run([self.p4] + self._conn_args + ["-ztag", "fstat", "-T",
+        rc, out, err = run([self.p4] + self.conn_args_for(directory)
+                           + ["-ztag", "fstat", "-T",
                             "clientFile,headRev,haveRev,action,otherOpen,otherLock,"
                             "ourLock,headAction",
                             pattern], cwd=directory, timeout=12.0)
@@ -242,9 +353,14 @@ class P4Provider(Provider):
         return states
 
     def invalidate_status(self, root: str):
-        """手動更新時: 事前チェック用キャッシュも捨てる（manager.refresh から）。"""
+        """手動更新時: 事前チェック用キャッシュも捨てる（manager.refresh から）。
+
+        r122: ワークスペース一覧も捨てる。P4V で新しいワークスペースを
+        作った直後でも、⟳ を押せば拾えるようにするため。"""
         with self._lock:
             self._file_info.clear()
+            self._clients = None
+            self._client_for_dir = {}
 
     def file_info(self, path: str):
         with self._lock:
@@ -335,8 +451,10 @@ class P4Provider(Provider):
         return out
 
     def _cli(self, args, cwd, what):
-        """actions() 用: 実行結果を report() で UI へ返す（r58）。"""
-        return lambda: self.run_cli_async([self.p4] + self._conn_args + args, cwd, what)
+        """actions() 用: 実行結果を report() で UI へ返す（r58）。
+        r122: 接続引数は «そのフォルダのワークスペース» で組む。"""
+        conn = self.conn_args_for(cwd)
+        return lambda: self.run_cli_async([self.p4] + conn + args, cwd, what)
 
     def _vc(self, command, paths):
         return lambda: spawn([self.p4vc, command] + list(paths))
