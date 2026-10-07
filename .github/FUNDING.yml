@@ -1,4 +1,4 @@
-# リポジトリに Sponsor ボタンを出す（r126）。
-# アカウント側の GitHub Sponsors は有効になっているが、このファイルが
-# 無かったのでリポジトリのページにはボタンが出ていなかった。
+# Shows the Sponsor button on this repository.
+# (Kept ASCII-only on purpose: a BOM-less UTF-8 file with Japanese text
+#  is read as CP932 by Windows editors and turns into mojibake.)
 github: PointLights-AkiraShimazoe
