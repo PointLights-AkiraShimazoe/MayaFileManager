@@ -58,3 +58,7 @@ docs/.archify-delivery-*/
 _mfm_src_for_tests.tgz
 _mfm_stage.tgz
 selfcheck.txt
+
+# 書き戻しの経由ファイル（接続フォルダでは削除できないので無視する）
+_mfm_*.tgz
+_fbx_probe_*.fbx

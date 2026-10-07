@@ -52,6 +52,15 @@ def s1():
     QTest.mouseMove(btn, bp.QPoint(btn.width() // 2, btn.height() // 2))
     app.sendEvent(btn, bp._QtCore.QEvent(bp._QtCore.QEvent.Enter))
     _settle(200)
+    # r127: **すぐには出さない。** 通りすがりで開くのが邪魔だという指摘を受け、
+    # 一定時間乗せ続けた時だけ開くようにした（_SizeButtonHover.HOVER_DELAY_MS）。
+    # ここでは «意思を持って乗せ続けた» 側を確かめる。
+    assert not popup.isVisible(), \
+        "通りすがり（予約時間前）でサイズスライダーが出てしまっている"
+    hover = getattr(btn, "_mfm_size_hover", None)
+    assert hover is not None, "▦ のホバーフィルタが付いていない"
+    hover._open_now()                      # 乗せ続けて予約が切れた時と同じ
+    _settle(200)
     # r102: ホバーで «全体の表示サイズ» スライダーが実際に出ること
     assert popup.isVisible(), "マウスオーバーでサイズスライダーが出ない"
     assert popup._slider.maximum() > popup._slider.minimum()

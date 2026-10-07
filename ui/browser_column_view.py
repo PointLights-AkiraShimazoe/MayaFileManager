@@ -243,26 +243,57 @@ class _ColumnSizePopup(QFrame):
 
 
 class _SizeButtonHover(QObject):
-    """▦ ボタンのホバーでサイズ調整スライダーを出すフィルタ（r85）。"""
+    """▦ ボタンのホバーでサイズ調整スライダーを出すフィルタ（r85）。
+
+    r127: **すぐには出さない。** 以前は Enter で即座に出していたため、
+    ボタンの上をマウスが «少し通っただけ» でサイズ調整バーが開いて邪魔に
+    なっていた（ユーザー報告 2026-10-07）。«変えたい» という意思が
+    はっきりしている時だけ出したいので、一定時間カーソルが乗り続けた
+    場合にだけ開く。離れたら予約は取り消す。
+    """
+
+    # 乗せ続ける必要がある時間（ミリ秒）。Windows のツールチップ（約 500ms）
+    # より «意思» が要る長さにしてある。通りすがりでは出ない。
+    HOVER_DELAY_MS = 700
 
     def __init__(self, owner, view, btn):
         super().__init__(btn)
         self._owner = owner
         self._view = view
         self._btn = btn
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(self.HOVER_DELAY_MS)
+        self._timer.timeout.connect(self._open_now)
+
+    def _open_now(self):
+        # 予約が切れた時点で «まだボタンの上に居る» ことを確かめてから出す。
+        # 離れた直後にタイマーだけ生き残って開く、を防ぐ。
+        try:
+            btn = self._btn
+            if btn is None or not btn.isVisible():
+                return
+            if not btn.rect().contains(btn.mapFromGlobal(QCursor.pos())):
+                return
+            self._owner.size_popup().show_for(self._view, btn)
+        except Exception as e:
+            _mfm_log("size popup error: %r" % (e,))
 
     def eventFilter(self, obj, event):
         et = event.type()
         if et == _QtCore.QEvent.Enter:
-            try:
-                self._owner.size_popup().show_for(self._view, self._btn)
-            except Exception as e:
-                _mfm_log("size popup error: %r" % (e,))
+            self._timer.start()
         elif et == _QtCore.QEvent.Leave:
+            self._timer.stop()
             try:
                 self._owner.size_popup().request_hide()
             except Exception as _e:
                 _swallow(_e, "ui/browser_column_view.py:274 eventFilter")
+        elif et in (_QtCore.QEvent.MouseButtonPress,
+                    _QtCore.QEvent.MouseButtonDblClick):
+            # ▦ を «押した» 時は表示モードの切替が目的。
+            # バーが遅れて出てくると邪魔なので予約を捨てる。
+            self._timer.stop()
         return False
 
 
