@@ -406,6 +406,11 @@ class FileFilterProxyModel(QSortFilterProxyModel):
                 _swallow(_e, "ui/browser_models.py:335 data")
         return super().data(index, role)
 
+    # r132: フォルダを先頭に固めず、ファイルと混ぜて並べるキー。
+    # 日付は «いつ触ったか» を見るためのものなので、種別で分けると意味が消える。
+    # 名前/種類/表示名は従来通りフォルダが先（探しやすさが勝る）。
+    MIXED_SORT_KEYS = ("date",)
+
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
         """カラム別ソート。フォルダ優先＋親パス別のキー(name/type/date/size)。
         QFileInfo(stat)は再ソート中に不安定なため、モデルのキャッシュ値/DisplayRoleを使う。"""
@@ -420,9 +425,12 @@ class FileFilterProxyModel(QSortFilterProxyModel):
             key, asc = self._col_sorts.get(ppath, ("name", True))
             an = (sm.data(left) or "").lower()
             bn = (sm.data(right) or "").lower()
-            # フォルダは常に先頭（昇順/降順に関わらず）
+            # フォルダは原則 «常に先頭»（昇順/降順に関わらず）。
+            # r132: **ただし日付順だけは混ぜる**。フォルダを先に固めると
+            # 「フォルダがズラッと並んだ後にファイルの最新が来る」となり、
+            # «新しい順» という目的を果たさない（ユーザー報告 2026-10-08）。
             ld, rd = sm.isDir(left), sm.isDir(right)
-            if ld != rd:
+            if key not in self.MIXED_SORT_KEYS and ld != rd:
                 return ld
             if key == "type":
                 a = an.rsplit(".", 1)[-1] if "." in an else ""

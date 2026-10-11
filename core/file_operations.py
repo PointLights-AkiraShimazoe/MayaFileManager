@@ -485,12 +485,84 @@ def apply_auto_name(directory: str, rules: dict, desc: str = "",
 # Open with associated application
 # ---------------------------------------------------------------------------
 
+def normalize_for_shell(path: str) -> str:
+    """シェルへ渡す前のパス正規化（r143）。
+
+    ブラウザ内部のパスは `_safe_file_path` が組み立てており、
+    Windows でも **`/` 区切り** で返ってくる（I/O を避けるための自前連結）。
+    そのままシェルへ渡すと、開くことは開けるが «フォルダの文脈» を
+    誤るアプリがある。"""
+    if not path:
+        return path
+    try:
+        return os.path.normpath(os.path.abspath(path))
+    except Exception:
+        return path
+
+
+def _windows_shell_open(path: str) -> bool:
+    """Windows: シェルの既定動作を **アイテムに対して** 実行する（r143）。
+
+    os.startfile() は ShellExecuteW に «文字列のパス» を渡すだけなので、
+    受け取るアプリには «この 1 ファイル» しか渡らない。エクスプローラーは
+    アイテム ID リスト（PIDL）付きで起動するため、アプリ側が «親フォルダ» を
+    たどれる——これがフォトで左右キーの送りが効くか否かの差になる
+    （ユーザー報告 2026-10-08: manager から開くと送れない、エクスプローラーからは送れる）。
+
+    SEE_MASK_INVOKEIDLIST を付けると、ShellExecuteEx がパスから PIDL を作って
+    既定動作をアイテムに対して呼ぶ。あわせて親フォルダを lpDirectory に渡す。
+    成功したら True。失敗したら False（呼び出し元が os.startfile へ落とす）。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class SHELLEXECUTEINFOW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("fMask", ctypes.c_ulong),
+                ("hwnd", wintypes.HWND),
+                ("lpVerb", wintypes.LPCWSTR),
+                ("lpFile", wintypes.LPCWSTR),
+                ("lpParameters", wintypes.LPCWSTR),
+                ("lpDirectory", wintypes.LPCWSTR),
+                ("nShow", ctypes.c_int),
+                ("hInstApp", wintypes.HINSTANCE),
+                ("lpIDList", ctypes.c_void_p),
+                ("lpClass", wintypes.LPCWSTR),
+                ("hkeyClass", wintypes.HKEY),
+                ("dwHotKey", wintypes.DWORD),
+                ("hIconOrMonitor", wintypes.HANDLE),
+                ("hProcess", wintypes.HANDLE),
+            ]
+
+        SEE_MASK_INVOKEIDLIST = 0x0000000C
+        SEE_MASK_NOASYNC = 0x00000100
+        SW_SHOWNORMAL = 1
+
+        sei = SHELLEXECUTEINFOW()
+        sei.cbSize = ctypes.sizeof(sei)
+        sei.fMask = SEE_MASK_INVOKEIDLIST | SEE_MASK_NOASYNC
+        sei.lpVerb = None                 # 既定動作（エクスプローラーのダブルクリックと同じ）
+        sei.lpFile = path
+        sei.nShow = SW_SHOWNORMAL
+        d = os.path.dirname(path)
+        sei.lpDirectory = d if d and os.path.isdir(d) else None
+        shell32 = ctypes.windll.shell32
+        shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
+        shell32.ShellExecuteExW.restype = wintypes.BOOL
+        return bool(shell32.ShellExecuteExW(ctypes.byref(sei)))
+    except Exception:
+        return False
+
+
 def open_with_default_app(path: str):
     """Open file/folder with the OS default application."""
     system = platform.system()
+    path = normalize_for_shell(path)
     try:
         if system == "Windows":
-            os.startfile(path)
+            if not _windows_shell_open(path):
+                os.startfile(path)        # 最後の退避路
         elif system == "Darwin":
             subprocess.Popen(["open", path])
         else:

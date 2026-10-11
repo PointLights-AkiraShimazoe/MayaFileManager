@@ -93,6 +93,9 @@ class IntegrationManager(QObject):
         self._pending = set()
         self._lock = threading.Lock()
         self._worker = None
+        # r136: 自動更新の有効期限（秒）。0 なら従来どおり
+        # «表示時に 1 回だけ、あとは手動更新»。
+        self.ttl = 0.0
 
     def _on_action_report(self, ok: bool, label: str, msg: str):
         _ilog("action %s ok=%s: %s" % (label, ok, (msg or "").replace("\n", " | ")[:300]))
@@ -198,16 +201,43 @@ class IntegrationManager(QObject):
             _swallow(_e, "core/integrations/manager.py:168 _do_status")
 
     # ── UIスレッド API ─────────────────────────────────────────────────────
-    def request_status(self, directory: str, force: bool = False):
-        """表示中ディレクトリの状態取得をキューへ（重複は捨てる）。"""
+    def set_ttl(self, seconds):
+        """自動更新の有効期限を秒で設定する（r136）。0 で従来の手動更新のみ。"""
+        try:
+            self.ttl = max(0.0, float(seconds or 0))
+        except (TypeError, ValueError):
+            self.ttl = 0.0
+        return self.ttl
+
+    def is_stale(self, directory: str, max_age=None) -> bool:
+        """取得済みの状態が «古い» か（r136）。未取得は常に True。"""
+        key = norm(directory)
+        with self._lock:
+            ts = self._dir_ts.get(key)
+        if ts is None:
+            return True
+        age = self.ttl if max_age is None else max_age
+        if age <= 0:
+            return False
+        return (time.monotonic() - ts) >= age
+
+    def request_status(self, directory: str, force: bool = False,
+                       max_age=None):
+        """表示中ディレクトリの状態取得をキューへ（重複は捨てる）。
+
+        r136: 取得済みでも ttl（または max_age）を超えていたら取り直す。
+        ttl=0 の時は従来どおり «表示時に 1 回だけ»。"""
         if not self.enabled or not directory:
             return
         key = norm(directory)
         with self._lock:
             if key in self._pending:
                 return
-            if not force and key in self._dir_ts:
-                return   # 表示時＋手動更新の方針: 取得済みなら再取得しない
+            ts = self._dir_ts.get(key)
+            if not force and ts is not None:
+                age = self.ttl if max_age is None else max_age
+                if age <= 0 or (time.monotonic() - ts) < age:
+                    return
             self._pending.add(key)
         self._queue.put(("status", directory))
 
@@ -224,6 +254,16 @@ class IntegrationManager(QObject):
                     cc()
                 except Exception as _e:
                     _swallow(_e, "core/integrations/manager.py refresh(clear_cooldown)")
+        # r137: «このフォルダはどのワークスペースか» の判定結果も捨てる。
+        # これを残すと、«管理外» と認識したフォルダは後からログインしても
+        # 永遠に管理外のままになる（root_cache は否定結果も持つ）。
+        for p in self.providers:
+            inv_r = getattr(p, "invalidate_roots", None)
+            if callable(inv_r):
+                try:
+                    inv_r()
+                except Exception as _e:
+                    _swallow(_e, "core/integrations/manager.py refresh(invalidate_roots)")
         with self._lock:
             self._dir_ts.pop(key, None)
             provs = list(self._dir_providers.get(key, []))
@@ -247,7 +287,10 @@ class IntegrationManager(QObject):
             return list(self._dir_providers.get(norm(directory), []))
 
     def actions_for(self, paths):
-        """右クリック用: [(provider_label, [(label, cb), ...]), ...]"""
+        """右クリック用: [(provider_label, [(label, cb), ...], provider_key), ...]
+
+        r142: 第 3 要素にプロバイダの key を添えた（メニューのアイコン用）。
+        古い呼び出し側は 2 つだけ受け取るので壊れない。"""
         if not self.enabled or not paths:
             return []
         paths = [p for p in paths if p]
@@ -305,7 +348,7 @@ class IntegrationManager(QObject):
             if multi_root.get(p.key, 0) > 1:
                 # 同じプロバイダで別ワークスペースが混在 → root 名で区別
                 label = "%s (%s)" % (label, os.path.basename(root.rstrip("/\\")) or root)
-            out.append((label, acts))
+            out.append((label, acts, p.key))
         return out
 
     def summary(self):

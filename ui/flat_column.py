@@ -52,10 +52,53 @@ class _DragListView(QListView):
 
     drag_finished = Signal(list)
 
+    # r144: ホイール 1 ノッチで送る行数（ユーザー指摘 2026-10-08
+    # 「平坦ビューで多くのファイルが縦に並んだ際、リスト表示と違って
+    #   スクロール速度が遅すぎる」）。
+    # 平坦ビューは «フォルダを跨いで» 全部並ぶため、カラムと同じ 3 行/ノッチだと
+    # 件数に比例してホイールが終わらない。端まで WHEEL_TARGET_NOTCHES 回程度で
+    # 行けるように 1 ノッチの行数を増やし、行き過ぎは上限で止める。
+    WHEEL_TARGET_NOTCHES = 100
+    WHEEL_MAX_ROWS = 32
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pending = None          # (pos, index, ctrl_only)
         self._path_role = _PATH_ROLE
+
+    def wheel_rows(self) -> int:
+        """このホイールノッチで送る行数。件数が少ない時は OS 設定のまま。"""
+        try:
+            base = max(1, int(QApplication.wheelScrollLines()))
+        except Exception:
+            base = 3
+        try:
+            n = self.model().rowCount() if self.model() is not None else 0
+        except Exception:
+            n = 0
+        want = n // max(1, self.WHEEL_TARGET_NOTCHES)
+        return max(base, min(want, self.WHEEL_MAX_ROWS))
+
+    def wheelEvent(self, e):
+        # 行送り（リスト表示）だけを対象にする。サムネイル表示や修飾キー付き
+        # （Ctrl＝サイズ変更など）は標準の挙動に任せる。
+        try:
+            if (self.viewMode() != QListView.ListMode
+                    or self.verticalScrollMode() != QAbstractItemView.ScrollPerItem
+                    or e.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier
+                                        | Qt.AltModifier)):
+                return super().wheelEvent(e)
+            dy = int(e.angleDelta().y())
+            if not dy:
+                return super().wheelEvent(e)
+            notches = dy / 120.0
+            rows = self.wheel_rows()
+            sb = self.verticalScrollBar()
+            sb.setValue(int(round(sb.value() - notches * rows)))
+            e.accept()
+        except Exception as _e:
+            _swallow(_e, "ui/flat_column.py _DragListView.wheelEvent")
+            return super().wheelEvent(e)
 
     def _selected_paths(self):
         out = []
@@ -316,6 +359,8 @@ class FlatColumn(QWidget):
         self._view.setModel(self._proxy)
         self._view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._view.setUniformItemSizes(True)
+        # r144: カラムと同じ «行送り» を明示（ホイール量の基準を揃える）
+        self._view.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
         self._view.setDragEnabled(False)     # ドラッグは _DragListView が自前で行う
         self._view.drag_finished.connect(self.drag_finished)
         self._view.clicked.connect(self._on_clicked)

@@ -19,8 +19,9 @@ from core.diag import swallow as _swallow  # r112
 import os
 
 from core.compat import (
-    Qt, Signal, QWidget, QGridLayout, QLabel, QComboBox,
-    QToolButton, QPushButton, QSize, QIcon, QPainter, QColor,
+    Qt, Signal, QWidget, QGridLayout, QHBoxLayout, QLabel, QComboBox,
+    QToolButton, QPushButton, QSize, QIcon, QPainter, QColor, QSizePolicy,
+    QRect, QPixmap, QPen,
 )
 from core.i18n import tr
 
@@ -188,26 +189,363 @@ def dcc_app_icon(dcc: str) -> QIcon:
     return ic
 
 
+# ---------------------------------------------------------------------------
+# メニューのアイコン列を揃える（r142）
+# ---------------------------------------------------------------------------
+# ユーザー指摘 2026-10-08:
+#   「この maya のアイコンの場所のルールだとすると、Perforce のロゴも
+#     Maya のロゴと同じ列にあるのが正しいと思います。」
+#
+# 原因: DCC の項目だけが setIcon() で «本物のアイコン列» を使い、
+# 残りは絵文字を «テキストの頭» に置いていた。QMenu はアイコン列を
+# 常に確保するので、絵文字はその分だけ右へずれて並んでいた。
+# 全部を setIcon() に揃えれば列が一本になる。
+
+_GLYPH_ICON_CACHE = {}
+
+
+def glyph_icon(ch: str, size: int = 18) -> QIcon:
+    """文字（絵文字含む）をアイコンにする。色はテーマの本文色。"""
+    key = (ch, size)
+    hit = _GLYPH_ICON_CACHE.get(key)
+    if hit is not None:
+        return hit
+    try:
+        from core.compat import QPixmap
+        from core.theme_engine import qss_vars
+        color = qss_vars().get("on_surface", "#dddddd")
+        pm = QPixmap(size, size)
+        pm.fill(QColor(0, 0, 0, 0))
+        pt = QPainter(pm)
+        try:
+            pt.setRenderHint(QPainter.Antialiasing, True)
+            f = pt.font()
+            f.setPixelSize(max(10, int(size * 0.8)))
+            pt.setFont(f)
+            pt.setPen(QColor(color))
+            pt.drawText(pm.rect(), Qt.AlignCenter, ch)
+        finally:
+            pt.end()
+        ic = QIcon(pm)
+    except Exception:
+        ic = QIcon()
+    _GLYPH_ICON_CACHE[key] = ic
+    return ic
+
+
+# 外部サービス連携の exe（アイコンの出所）。detect() が見つけたものを入れる。
+_INTEG_EXE = {}
+_INTEG_ICON_CACHE = {}
+# exe が無いときの代替グリフ（ロゴの再現はしない）
+_INTEG_GLYPH = {"p4": "\u2387", "git": "\u2387", "svn": "\u2387",
+                "cloud": "\u2601"}
+
+
+def set_integration_exe(key: str, exe) -> None:
+    if exe and _INTEG_EXE.get(key) != exe:
+        _INTEG_EXE[key] = exe
+        _INTEG_ICON_CACHE.pop(key, None)
+
+
+def integration_icon(key: str) -> QIcon:
+    """連携先を表すアイコン。**必ず空でないものを返す**。
+
+    Maya / Blender と同じ仕組みで、まずインストール済み exe（Perforce なら
+    p4v.exe）に埋め込まれた正式アイコンを使う。無ければ文字へ落とす。"""
+    ic = _INTEG_ICON_CACHE.get(key)
+    if ic is not None:
+        return ic
+    ic = app_icon_for(_INTEG_EXE.get(key))
+    if ic.isNull():
+        p = os.path.join(_ICON_DIR, "app_%s.png" % key)
+        if os.path.isfile(p):
+            ic = QIcon(p)
+    if ic.isNull():
+        ic = glyph_icon(_INTEG_GLYPH.get(key, "\u2387"))
+    _INTEG_ICON_CACHE[key] = ic
+    return ic
+
+
+class PrefsBlock(QWidget):
+    """表示言語とテーマのプルダウン（r134）。
+
+    メニューバーの **真下の空き** に置く（ユーザー指示 2026-10-08）。
+    設定ダイアログにも同じ項目があるが、書き込む設定キーは同じなので
+    どちらから変えても矛盾しない。"""
+
+    language_changed = Signal(str)     # "auto" / "ja" / "en"
+    theme_changed = Signal(str)        # "system" / "light" / "dark"
+
+    LANGS = ("auto", "ja", "en")
+    THEMES = ("system", "light", "dark")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 0, 8, 2)
+        lay.setSpacing(6)
+        self.lang = QComboBox(self)
+        self.lang.addItems([tr("システム", "System"), "日本語", "English"])
+        self.lang.setToolTip(tr("表示言語", "UI language"))
+        self.theme = QComboBox(self)
+        self.theme.addItems([tr("システム", "System"),
+                             tr("ライト", "Light"), tr("ダーク", "Dark")])
+        self.theme.setToolTip(tr("テーマ", "Theme"))
+        for cap, cb in ((tr("言語", "Lang"), self.lang),
+                        (tr("テーマ", "Theme"), self.theme)):
+            lb = QLabel(cap, self)
+            lb.setObjectName("mfmPrefsCaption")
+            lay.addWidget(lb, 0)
+            cb.setMinimumWidth(92)
+            lay.addWidget(cb, 0)
+        lay.addStretch(1)
+        try:
+            from core.theme_engine import qss_vars
+            v = qss_vars()
+            self.setStyleSheet(
+                "#mfmPrefsCaption{color:%(on_surface_dim)s;"
+                "font-size:%(label_px)spx;background:transparent;}"
+                "QComboBox{font-size:%(label_px)spx;min-height:20px;}" % v)
+        except Exception:
+            pass
+        self.lang.currentIndexChanged.connect(
+            lambda i: self.language_changed.emit(
+                self.LANGS[i] if 0 <= i < len(self.LANGS) else "auto"))
+        self.theme.currentIndexChanged.connect(
+            lambda i: self.theme_changed.emit(
+                self.THEMES[i] if 0 <= i < len(self.THEMES) else "system"))
+
+    def set_values(self, language: str, theme: str):
+        """シグナルを出さずに表示だけ合わせる（起動時・設定画面からの反映）。"""
+        for cb, vals, cur in ((self.lang, self.LANGS, language),
+                              (self.theme, self.THEMES, theme)):
+            try:
+                i = vals.index(cur)
+            except ValueError:
+                i = 0
+            cb.blockSignals(True)
+            cb.setCurrentIndex(i)
+            cb.blockSignals(False)
+
+
+def _lead_icon(kind: str, color: str, size: int = 16) -> QIcon:
+    """ヘッダ左端のアイコンを描く（r145）。外部ファイルに依存しない。
+
+    kind="pin"     … 画鋲（最前面表示）
+    kind="compact" … 大きい枠の右下に小さい枠（コンパクトへ畳む）
+    kind="expand"  … 小さい枠から外へ広がる矢印（通常へ戻す）
+    """
+    pm = QPixmap(size, size)
+    pm.fill(QColor(0, 0, 0, 0))
+    pt = QPainter(pm)
+    try:
+        c = QColor(color)
+        pen = QPen(c)
+        pen.setWidth(1)
+        pt.setPen(pen)
+        pt.setRenderHint(QPainter.Antialiasing, kind == "pin")
+        u = size / 16.0
+
+        def R(x, y, w, h):
+            return QRect(int(x * u), int(y * u), int(w * u), int(h * u))
+
+        if kind == "pin":
+            pt.setBrush(c)
+            pt.drawEllipse(R(4, 2, 8, 8))          # 頭
+            pt.drawRect(R(7, 9, 2, 5))             # 針
+        elif kind == "compact":
+            pt.setBrush(QColor(0, 0, 0, 0))
+            pt.drawRect(R(1, 1, 14, 14))           # 今の窓
+            pt.setBrush(c)
+            pt.drawRect(R(8, 8, 6, 6))             # 畳んだ先
+        elif kind.startswith("dir:"):
+            # r145: コンパクトを «どちら向きに開くか»。
+            # 小さな点（パック）と、そこから伸びる枠（ウィンドウ）で示す。
+            d = kind.split(":", 1)[1]
+            right = d in ("dr", "ur")
+            down = d in ("dr", "dl")
+            wx = 5 if right else 1
+            wy = 5 if down else 1
+            pt.setBrush(QColor(0, 0, 0, 0))
+            pt.drawRect(R(wx, wy, 10, 10))         # 広がる先
+            pt.setBrush(c)
+            px = 4 if right else 11
+            py = 4 if down else 11
+            pt.drawRect(R(px - 2, py - 2, 4, 4))   # パック
+        else:                                      # expand
+            pt.setBrush(c)
+            pt.drawRect(R(1, 9, 6, 6))             # 今の小窓
+            pt.setBrush(QColor(0, 0, 0, 0))
+            pt.drawRect(R(5, 1, 10, 10))           # 戻る先
+    finally:
+        pt.end()
+    return QIcon(pm)
+
+
+class LeadBlock(QWidget):
+    """メニューバーの «左隣» に置く 2 つのトグル（r145、ユーザー指示 2026-10-09）。
+
+    - 最前面表示: すべてのウィンドウの上に出す／やめる
+    - コンパクトモード: Maya の上に小さく置いて、マウスオーバーで開く
+
+    ここは «状態を持たない» 見た目だけの部品。実際の切り替えは MainWindow 側。
+    """
+
+    always_on_top_toggled = Signal(bool)
+    compact_toggled = Signal(bool)
+    open_dir_changed = Signal(str)
+
+    # 押すたび 右下 → 左下 → 左上 → 右上 → 右下 …（指示 2026-10-09）
+    DIRS = ("dr", "dl", "ul", "ur")
+    DIR_LABELS = {"dr": ("右下", "down-right"), "dl": ("左下", "down-left"),
+                  "ul": ("左上", "up-left"), "ur": ("右上", "up-right")}
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("mfmLeadBlock")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(4, 0, 2, 0)
+        lay.setSpacing(2)
+        try:
+            from core.theme_engine import qss_vars
+            col = qss_vars().get("on_surface_dim", "#9aa0b4")
+        except Exception:
+            col = "#9aa0b4"
+        self.top_btn = QToolButton(self)
+        self.top_btn.setObjectName("mfmLeadToggle")
+        self.top_btn.setCheckable(True)
+        self.top_btn.setIcon(_lead_icon("pin", col))
+        self.top_btn.setIconSize(QSize(16, 16))
+        self.top_btn.setToolTip(tr("最前面に表示（すべてのウィンドウの上）",
+                                   "Always on top (above every window)"))
+        self.top_btn.toggled.connect(self.always_on_top_toggled.emit)
+
+        self.compact_btn = QToolButton(self)
+        self.compact_btn.setObjectName("mfmLeadToggle")
+        # r145: 押しっぱなしのトグル。今がコンパクトかどうかが «光っているか»
+        # で分かる（ユーザー指摘 2026-10-09: 今の状態が分からない）。
+        self.compact_btn.setCheckable(True)
+        self.compact_btn.setIcon(_lead_icon("compact", col))
+        self.compact_btn.setIconSize(QSize(16, 16))
+        self.compact_btn.setToolTip(tr(
+            "コンパクトモード（小さく畳んで、マウスを乗せると開く）",
+            "Compact mode (shrink to a puck; hover to open)"))
+        self.compact_btn.toggled.connect(self.compact_toggled.emit)
+
+        self._dir = "dr"
+        self._dir_col = col
+        self.dir_btn = QToolButton(self)
+        self.dir_btn.setObjectName("mfmLeadToggle")
+        self.dir_btn.setIconSize(QSize(16, 16))
+        self.dir_btn.clicked.connect(lambda _c=False: self._cycle_dir())
+        self._apply_dir_look()
+
+        for b in (self.top_btn, self.compact_btn, self.dir_btn):
+            b.setFixedSize(24, 22)
+            b.setCursor(Qt.PointingHandCursor)
+            lay.addWidget(b, 0)
+        try:
+            from core.theme_engine import qss_vars
+            self.setStyleSheet(
+                "#mfmLeadBlock{background:transparent;}"
+                "#mfmLeadToggle{background:transparent;border:1px solid "
+                "transparent;border-radius:5px;}"
+                "#mfmLeadToggle:hover{background:%(state_hover)s;}"
+                "#mfmLeadToggle:checked{background:%(cta_tint)s;"
+                "border-color:%(primary)s;}" % qss_vars())
+        except Exception:
+            pass
+
+    def set_always_on_top(self, on: bool):
+        """シグナルを出さずに見た目だけ合わせる。"""
+        self.top_btn.blockSignals(True)
+        self.top_btn.setChecked(bool(on))
+        self.top_btn.blockSignals(False)
+
+    def set_compact(self, on: bool):
+        """シグナルを出さずに見た目だけ合わせる（r145）。"""
+        self.compact_btn.blockSignals(True)
+        self.compact_btn.setChecked(bool(on))
+        self.compact_btn.blockSignals(False)
+
+    # ── 開く向き（r145）────────────────────────────────────────────
+    def open_dir(self) -> str:
+        return self._dir
+
+    def set_open_dir(self, d: str, notify: bool = False):
+        self._dir = d if d in self.DIRS else "dr"
+        self._apply_dir_look()
+        if notify:
+            self.open_dir_changed.emit(self._dir)
+
+    def _cycle_dir(self):
+        i = self.DIRS.index(self._dir) if self._dir in self.DIRS else 0
+        self.set_open_dir(self.DIRS[(i + 1) % len(self.DIRS)], notify=True)
+
+    def _apply_dir_look(self):
+        self.dir_btn.setIcon(_lead_icon("dir:" + self._dir, self._dir_col))
+        ja, en = self.DIR_LABELS.get(self._dir, ("右下", "down-right"))
+        self.dir_btn.setToolTip(tr(
+            "コンパクトから開く向き: %s（押すと右下→左下→左上→右上）" % ja,
+            "Compact opens toward: %s (click to cycle)" % en))
+
+
 class _HeaderRow(QWidget):
     """ヘッダ行の手動レイアウト（r69）: メニューは左端、動作ブロックは右端、
     DCC ブロックは «起動ボタンがウィンドウの中央に来る» 位置に置く。
-    QHBoxLayout の伸縮では左右の幅差で中央がずれるため自前で配置する。"""
+    QHBoxLayout の伸縮では左右の幅差で中央がずれるため自前で配置する。
 
-    def __init__(self, menubar, dcc_block, action_block, parent=None):
+    r134: メニューバーの真下は元々空いているので、そこに言語・テーマの
+    プルダウンを置く。DCC ブロックは 2 段なので全体の高さは変わらない。"""
+
+    def __init__(self, menubar, dcc_block, action_block, parent=None,
+                 prefs_block=None, lead_block=None):
         super().__init__(parent)
         self._mb, self._dcc, self._act = menubar, dcc_block, action_block
-        for w in (menubar, dcc_block, action_block):
+        self._prefs = prefs_block
+        self._lead = lead_block          # r145: メニューバーの左隣
+        for w in (menubar, dcc_block, action_block, prefs_block, lead_block):
+            if w is None:
+                continue
             w.setParent(self)
             w.show()
 
+    def _lead_w(self):
+        return self._lead.sizeHint().width() if self._lead is not None else 0
+
     def sizeHint(self):
-        h = max(self._mb.sizeHint().height(), self._dcc.sizeHint().height(),
+        left = self._mb.sizeHint().height()
+        if self._prefs is not None:
+            left += self._prefs.sizeHint().height()
+        h = max(left, self._dcc.sizeHint().height(),
                 self._act.sizeHint().height())
-        return QSize(self._mb.sizeHint().width() + self._dcc.sizeHint().width()
+        w = self._lead_w() + self._mb.sizeHint().width()
+        if self._prefs is not None:
+            w = max(w, self._prefs.sizeHint().width())
+        return QSize(w + self._dcc.sizeHint().width()
                      + self._act.sizeHint().width() + 24, h)
 
+    def _left_width(self, minimum=False):
+        """左ブロック（メニューバー／言語・テーマ）の幅。"""
+        f = (lambda w: w.minimumSizeHint().width()) if minimum \
+            else (lambda w: w.sizeHint().width())
+        w = self._lead_w() + f(self._mb)
+        if self._prefs is not None:
+            w = max(w, f(self._prefs))
+        return w
+
     def minimumSizeHint(self):
-        return self.sizeHint()
+        """r144: 幅まで «自然な大きさ» を要求すると、ウィンドウがこれ以上
+        細くできなくなる（ユーザー指摘 2026-10-08「もう半分くらいは細く
+        なってもUI的には大丈夫では」）。高さは必要なだけ要求し、幅は
+        各ブロックが «詰まった状態» で並ぶ分だけにする。
+        狭い時は DCC ブロックを縮めて収める（_relayout）。"""
+        s = self.sizeHint()
+        w = (self._left_width(minimum=True)
+             + self._dcc.minimumSizeHint().width()
+             + self._act.minimumSizeHint().width() + 24)
+        return QSize(max(320, min(w, s.width())), s.height())
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -220,9 +558,23 @@ class _HeaderRow(QWidget):
     def _relayout(self):
         W, H = self.width(), self.height()
         mbs, ds, as_ = self._mb.sizeHint(), self._dcc.sizeHint(), self._act.sizeHint()
-        self._mb.setGeometry(0, 0, mbs.width(), mbs.height())
+        lw = self._lead_w()
+        if self._lead is not None:
+            ls = self._lead.sizeHint()
+            # メニューバーと «同じ高さの中央» に置く（左端）
+            self._lead.setGeometry(0, max(0, (mbs.height() - ls.height()) // 2),
+                                   ls.width(), ls.height())
+        self._mb.setGeometry(lw, 0, mbs.width(), mbs.height())
+        if self._prefs is not None:
+            ps = self._prefs.sizeHint()
+            self._prefs.setGeometry(0, mbs.height(), ps.width(), ps.height())
         self._act.setGeometry(W - as_.width(), max(0, (H - as_.height()) // 2),
                               as_.width(), as_.height())
+        # r144: 幅が足りない時は DCC ブロックを縮めて収める（重ねない）。
+        left_min = self._left_width(minimum=True)
+        avail = W - left_min - as_.width() - 12
+        dw = max(self._dcc.minimumSizeHint().width(), min(ds.width(), avail))
+        ds = QSize(dw, ds.height())
         # 起動ボタンの中心を W/2 に合わせる（DCC ブロック内での起動ボタン位置を引く）
         try:
             self._dcc.resize(ds)
@@ -236,7 +588,10 @@ class _HeaderRow(QWidget):
             launch_cx = ds.width() // 2
         x = W // 2 - launch_cx
         # メニュー／動作ブロックと重ならない範囲に収める
-        x = max(mbs.width() + 6, min(x, W - as_.width() - ds.width() - 6))
+        left_w = self._left_width()
+        lo = min(left_w + 6, max(0, W - as_.width() - ds.width() - 6))
+        x = max(lo, min(x, W - as_.width() - ds.width() - 6))
+        x = max(0, x)
         self._dcc.setGeometry(x, max(0, (H - ds.height()) // 2), ds.width(), ds.height())
 
 
@@ -337,7 +692,7 @@ class DccHeader(QWidget):
 
         # 上段
         self.maya_ver = _PopupCombo()
-        self.maya_ver.setFixedWidth(136)
+        _elastic_width(self.maya_ver, 92, 136)
         self.maya_ver.setToolTip(tr("起動する Maya のバージョン", "Maya version to launch"))
         self.maya_badge = _icon_button("maya", "M", tr("Maya を操作対象にする", "Target Maya"))
         self.maya_badge.setObjectName("mfmDccBadge")
@@ -346,7 +701,7 @@ class DccHeader(QWidget):
                                           tr("Blender を操作対象にする", "Target Blender"))
         self.blender_badge.setObjectName("mfmDccBadge")
         self.blender_ver = _PopupCombo()
-        self.blender_ver.setFixedWidth(136)
+        _elastic_width(self.blender_ver, 92, 136)
         self.blender_ver.setToolTip(tr("起動する Blender のバージョン", "Blender version to launch"))
         # r119: Maya の起動設定（バージョン＋引数＋表示名）をここから開く。
         # 設定ダイアログの奥に埋めず、スイッチのすぐ右に置く（ユーザー指示）。
@@ -402,11 +757,12 @@ class DccHeader(QWidget):
     @staticmethod
     def _conn_combo(tip: str) -> QComboBox:
         c = _PopupCombo()
-        # 本体は固定幅（ヘッダ幅の暴発防止。想定外の長文はツールチップで読む）。
+        # 本体は上限つきの可変幅（ヘッダ幅の暴発防止。想定外の長文は
+        # ツールチップで読む）。r144: 狭い時は縮んでウィンドウを細くできる。
         # 展開リストは _PopupCombo が文字幅・項目数に合わせて広げる（r71）
-        c.setFixedWidth(136 + 60)
+        _elastic_width(c, 110, 136 + 60)
         c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        c.setMinimumContentsLength(20)
+        c.setMinimumContentsLength(8)
         c.setMaxVisibleItems(12)
         c.setToolTip(tip)
         return c
@@ -478,11 +834,28 @@ class ActionBlock(QWidget):
         self.dnd_combo.addItems(items)
         self.dnd_combo.setToolTip(self.dnd_icon.toolTip())
         for c in (self.click_combo, self.dnd_combo):
-            c.setFixedWidth(150)      # 「何もしない (None)」が見切れない幅（r69）
+            # 広い時は「何もしない (None)」が見切れない 150px（r69）、
+            # 狭い時は 96px まで詰まる（r144）
+            _elastic_width(c, 96, 150)
         g.addWidget(self.click_icon, 0, 0, Qt.AlignCenter)
         g.addWidget(self.click_combo, 0, 1)
         g.addWidget(self.dnd_icon, 1, 0, Qt.AlignCenter)
         g.addWidget(self.dnd_combo, 1, 1)
+
+
+def _elastic_width(w, minimum: int, maximum: int):
+    """幅を «詰められる» ようにする（r144）。
+
+    固定幅だとヘッダ全体がそれ以上細くならず、ウィンドウ幅の下限になる
+    （ユーザー指摘 2026-10-08「もう半分くらいは細くなっても大丈夫では」）。
+    広い時は従来の幅、狭い時は minimum まで縮む。中身はツールチップで読める。"""
+    w.setMinimumWidth(minimum)
+    w.setMaximumWidth(maximum)
+    try:
+        w.setSizePolicy(QSizePolicy.Preferred, w.sizePolicy().verticalPolicy())
+    except Exception:
+        pass
+    return w
 
 
 def _icon_label(stem: str, fallback_text: str, tip: str, size: int = 20) -> QLabel:

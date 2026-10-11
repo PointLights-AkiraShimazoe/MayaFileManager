@@ -28,6 +28,7 @@ from core.compat import (
 from core.diag import swallow as _swallow
 from core.i18n import tr
 from core import maya_bridge as mb
+from ui.dialog_util import pick_directory, pick_open_file  # r145
 
 
 def _tv():
@@ -148,7 +149,7 @@ class MayaBridgeDialog(QDialog):
 
     # ------------------------------------------------------------------
     def _browse(self):
-        d = QFileDialog.getExistingDirectory(
+        d = pick_directory(
             self,
             tr("Maya の設定フォルダを選択（中に 2026 等があります）",
                "Select Maya's user folder (it contains 2026, ...)"),

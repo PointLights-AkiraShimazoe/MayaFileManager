@@ -19,7 +19,8 @@ from core.diag import swallow as _swallow  # r112
 import json
 import os
 
-from .base import (Provider, ST_ONLINE_ONLY, ST_LOCAL, ST_PINNED, norm, run)
+from .base import (Provider, ST_ONLINE_ONLY, ST_LOCAL, ST_PINNED, norm, run,
+                   is_under)
 # 属性定数の単一の真実は core/cloud_state.py（r83。サムネ抑止と共用）
 from core.cloud_state import (ATTR_DEHYDRATED as _ATTR_DEHYDRATED,
                               ATTR_PINNED as _ATTR_PINNED)
@@ -123,7 +124,7 @@ class CloudProvider(Provider):
         best = None
         for svc, r in self.roots:
             k = norm(r)
-            if d == k or d.startswith(k + os.sep):
+            if is_under(d, k):                   # r137: ドライブ直下のルート対応
                 if best is None or len(k) > len(norm(best[1])):
                     best = (svc, r)
         return best

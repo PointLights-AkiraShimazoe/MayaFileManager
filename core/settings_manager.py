@@ -468,6 +468,52 @@ class SettingsManager:
         return (self.get_auto_naming_enabled(name),
                 self.get_auto_naming_rules(name))
 
+    def resolve_auto_name_rule(self, directory: str):
+        """そのフォルダに効く自動命名ルールを **全プリセット横断** で探す。
+
+        r139（ユーザー指示 2026-10-08）:
+          規則は «フォルダに付くもの»。他のプリセットに入れてあっても、
+          そのディレクトリへ保存するなら反応する。
+        r140: ルールは「ルート + 対象階層 + ファイル名 + ver 設定」の階層型。
+          **ルート以下ならどこでも、では無い**。対象階層と同じ深さで、
+          各段がパターンに合うフォルダだけが対象。
+
+        返り値: (ルール, 変数の辞書, 出所のプリセット名)。
+        無ければ (None, {}, "")。
+        """
+        from core import auto_name as _an
+        if not directory:
+            return None, {}, ""
+        if not bool(self.get("auto_naming_enabled", True)):
+            return None, {}, ""          # 全体のキルスイッチ
+        cur = self.get("quick_nav_preset", "default")
+        per = self._global_state.get("auto_naming_by_preset", {}) or {}
+        cands = []
+
+        def _add(rules, enabled, source, prio):
+            if not enabled or not rules:
+                return
+            for root, rule in (rules or {}).items():
+                if not root or not _an.is_hier_rule(rule):
+                    continue
+                values = _an.match_levels(root, directory,
+                                          rule.get("levels", ""))
+                if values is None:
+                    continue
+                depth = len(os.path.normcase(os.path.normpath(root)))
+                cands.append((depth, prio, rule, values, source))
+
+        for name, entry in per.items():
+            if not isinstance(entry, dict):
+                continue
+            _add(entry.get("rules") or {}, entry.get("enabled", True), name,
+                 2 if name == cur else 1)
+        if not cands:
+            return None, {}, ""
+        # より深い（具体的な）ルートが勝ち、同じなら今選んでいるプリセットが勝つ
+        cands.sort(key=lambda c: (c[0], c[1]), reverse=True)
+        return cands[0][2], cands[0][3], cands[0][4]
+
     def save_auto_naming_rules(self, rules: Dict[str, Any]):
         """共通（プリセット指定の無い）ルール。"""
         self._global_state["auto_naming_rules"] = rules

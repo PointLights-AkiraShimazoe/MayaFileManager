@@ -24,6 +24,7 @@ from core.compat import (
     QColor, QTextEdit
 )
 from core.maya_version import is_running_inside_maya
+from ui.dialog_util import pick_directory, pick_open_file  # r145
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +335,7 @@ class ReferenceEditor(QDialog):
     # ------------------------------------------------------------------
 
     def _browse_ref_path(self):
-        d = QFileDialog.getOpenFileName(
+        d = pick_open_file(
             self, "リファレンスファイルを選択", self._path_edit.text() or "",
             "Maya / FBX (*.ma *.mb *.fbx);;All (*.*)"
         )
@@ -447,7 +448,7 @@ class ReferenceEditor(QDialog):
             f.write(new_content)
 
     def _open_ma_file(self):
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = pick_open_file(
             self, ".ma ファイルを開く", "",
             "Maya ASCII (*.ma);;All (*.*)"
         )

@@ -9,9 +9,9 @@
 確認すること:
   1) is_read_only / set_read_only が付け外しできる（Perforce 同期の
      読み取り専用を «その場で» 外せる、が本題）
-  2) 対象の決め方: ファイルはそれ自身。フォルダ自身には付けない
-     （Windows が無視するので «付いたふり» をさせない）。
-     «下層フォルダまで含める» で配下のファイルを全部拾う
+  2) 対象の決め方: ファイルもフォルダもそれ自身が対象（r144 / ユーザー指摘
+     2026-10-08「フォルダに対しても読み取り専用というステータスは付く」）。
+     «下層フォルダまで含める» で配下のフォルダ・ファイルを全部拾う
   3) 複数選択でもプロパティがメニューに出る
 """
 import os
@@ -53,11 +53,12 @@ check(ok and not is_read_only(f1), "読み取り専用を外せる（%r）" % (e
 t = BrowserPanel._readonly_targets([f1], False)
 check(t == [f1], "ファイル単体はそれ自身（%r）" % (t,))
 t = BrowserPanel._readonly_targets([sub], False)
-check(t == [], "フォルダ自身には付けない（%r）" % (t,))
+check(t == [sub], "フォルダ単体でもフォルダ自身が対象（%r）" % (t,))
 t = sorted(BrowserPanel._readonly_targets([sub], True))
-check(t == sorted([f2, f3]), "下層フォルダまで含める＝配下のファイル全部（%r）" % (t,))
+check(t == sorted([sub, deep, f2, f3]),
+      "下層フォルダまで含める＝配下のフォルダもファイルも全部（%r）" % (t,))
 t = sorted(BrowserPanel._readonly_targets([f1, sub], True))
-check(t == sorted([f1, f2, f3]), "ファイルとフォルダの混在も拾う（%r）" % (t,))
+check(t == sorted([f1, sub, deep, f2, f3]), "ファイルとフォルダの混在も拾う（%r）" % (t,))
 t = BrowserPanel._readonly_targets([f1, f1], True)
 check(t == [f1], "同じパスを重ねて渡しても 1 回だけ（%r）" % (t,))
 
@@ -65,6 +66,11 @@ check(t == [f1], "同じパスを重ねて渡しても 1 回だけ（%r）" % (t
 for p in BrowserPanel._readonly_targets([sub], True):
     set_read_only(p, True)
 check(is_read_only(f2) and is_read_only(f3), "下層まで一括で付けられる")
+# フォルダ単体でも «自分自身» に属性が付いて、状態として読み戻せること
+set_read_only(sub, True)
+check(is_read_only(sub), "フォルダ自身にも読み取り専用が付く／読み戻せる")
+set_read_only(sub, False)
+check(not is_read_only(sub), "フォルダ自身の読み取り専用を外せる")
 for p in BrowserPanel._readonly_targets([sub], True):
     set_read_only(p, False)
 check(not is_read_only(f2) and not is_read_only(f3), "下層まで一括で外せる")

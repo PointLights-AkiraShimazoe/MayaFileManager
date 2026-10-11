@@ -19,7 +19,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from core.i18n import tr  # r118
+from core.i18n import tr
+from ui.dcc_header import glyph_icon, dcc_app_icon  # r142  # r118
 
 from core.compat import (
     Qt, Signal,
@@ -32,6 +33,7 @@ from core.compat import (
 from core.file_operations import (
     copy_items, move_items, reveal_in_explorer, format_size, FileOperationError
 )
+from ui.dialog_util import pick_directory, pick_open_file  # r145
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +220,7 @@ class DuplicateFolderPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _browse_root(self):
-        d = QFileDialog.getExistingDirectory(self, tr("スキャン対象を選択", "Select Scan Root"),
+        d = pick_directory(self, tr("スキャン対象を選択", "Select Scan Root"),
                                              self._root_edit.text() or str(Path.home()))
         if d:
             self._root_edit.setText(d)
@@ -349,25 +351,25 @@ class DuplicateFolderPanel(QWidget):
             return
 
         menu = QMenu(self)
-        nav_act = menu.addAction(tr("🗂 ここへ移動", "🗂 Go here"))
+        nav_act = menu.addAction(glyph_icon("🗂"), tr("ここへ移動", "Go here"))
         nav_act.triggered.connect(lambda: self.navigate_requested.emit(paths[0]))
 
-        reveal_act = menu.addAction(tr("📁 エクスプローラーで表示", "📁 Reveal in Explorer"))
+        reveal_act = menu.addAction(glyph_icon("📁"), tr("エクスプローラーで表示", "Reveal in Explorer"))
         reveal_act.triggered.connect(lambda: reveal_in_explorer(paths[0]))
 
         menu.addSeparator()
 
-        copy_act = menu.addAction(tr("📋 コピー...", "📋 Copy..."))
+        copy_act = menu.addAction(glyph_icon("📋"), tr("コピー...", "Copy..."))
         copy_act.triggered.connect(lambda: self._copy_paths(paths))
 
-        move_act = menu.addAction(tr("✂ 移動...", "✂ Move..."))
+        move_act = menu.addAction(glyph_icon("✂"), tr("移動...", "Move..."))
         move_act.triggered.connect(lambda: self._move_paths(paths))
 
         menu.exec_(self._tree.viewport().mapToGlobal(pos))
         menu.deleteLater()      # r124: 右クリックの回数だけ溜めない
 
     def _copy_paths(self, paths: List[str]):
-        dst = QFileDialog.getExistingDirectory(self, tr("コピー先を選択", "Select Copy Destination"))
+        dst = pick_directory(self, tr("コピー先を選択", "Select Copy Destination"))
         if not dst:
             return
         try:
@@ -377,7 +379,7 @@ class DuplicateFolderPanel(QWidget):
             QMessageBox.critical(self, tr("エラー", "Error"), str(e))
 
     def _move_paths(self, paths: List[str]):
-        dst = QFileDialog.getExistingDirectory(self, tr("移動先を選択", "Select Move Destination"))
+        dst = pick_directory(self, tr("移動先を選択", "Select Move Destination"))
         if not dst:
             return
         try:

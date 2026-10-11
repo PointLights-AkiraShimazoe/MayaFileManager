@@ -16,6 +16,7 @@ from typing import Dict, List
 
 from core.i18n import tr  # r118
 
+from ui.dialog_util import pick_directory, pick_open_file  # r145
 from core.compat import (
     Qt, Signal,
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
@@ -124,99 +125,160 @@ class ExtensionListWidget(QWidget):
 # ---------------------------------------------------------------------------
 
 class AutoNamingRuleRow(QFrame):
-    """One row = one directory rule."""
+    """自動命名ルール 1 件（r140: 階層型）。
+
+    ユーザー指示 2026-10-08 の例::
+
+        ルート   D:/Work/SampleProject/
+        対象階層 {Group}/{Set}/n{Item}/
+        ファイル名 {Group}_{Set}_{Item}_{ver}   ← 拡張子は書かない
+
+    変数は固定で持たない。対象階層に書いた ``{...}`` がそのまま変数になり、
+    ファイル名側はそれを参照する。``{ver}`` だけが特別で、下の ver 設定を持つ。
+    """
 
     remove_requested = Signal(object)
 
     def __init__(self, directory: str = "", rule: Dict = None, parent=None):
         super().__init__(parent)
-        self._rule = rule or {
-            "template": "{seq:04d}",
-            "seq_start": 1,
-            "counter_file": ".mfm_seq",
+        from core.auto_name import DEFAULT_VER
+        from core import auto_name as _an
+        rule = rule if isinstance(rule, dict) else {}
+        self._rule = {
+            "levels": rule.get("levels", ""),
+            "filename": _an.stem_template(rule),
+            "ver": dict(DEFAULT_VER, **(rule.get("ver") or {})),
         }
         self.setFrameShape(QFrame.StyledPanel)
         self._build(directory)
 
     def _build(self, directory: str):
+        from core.compat import QCheckBox
         layout = QGridLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
 
-        layout.addWidget(QLabel(tr("ディレクトリ:", "Directory:")), 0, 0)
+        layout.addWidget(QLabel(tr("ルート:", "Root:")), 0, 0)
         self._dir_edit = QLineEdit(directory)
         self._dir_edit.setPlaceholderText(
-            tr("このフォルダ以下で保存する時に効きます（例 D:/Projects/CHR）",
-               "Applies when saving in this folder or below "
-               "(e.g. D:/Projects/CHR)"))
+            "D:/Work/SampleProject")
         self._dir_edit.setToolTip(tr(
-            "ここに入れたフォルダ «以下» で保存する時に、下のテンプレートで\n"
-            "ファイル名を提案します。\n"
-            "複数のルールが当てはまる場合は «より深い» ルールが優先されます。",
-            "When you save in this folder or below, the template suggests a "
-            "file name.\nIf several rules match, the deepest one wins."))
-        layout.addWidget(self._dir_edit, 0, 1)
+            "対象階層の起点になるフォルダ。",
+            "The folder the target levels below are counted from."))
+        layout.addWidget(self._dir_edit, 0, 1, 1, 3)
 
         browse_btn = QToolButton()
-        browse_btn.setText("…")
+        browse_btn.setText("\u2026")
         browse_btn.clicked.connect(self._browse_dir)
-        layout.addWidget(browse_btn, 0, 2)
+        layout.addWidget(browse_btn, 0, 4)
 
         del_btn = QToolButton()
-        del_btn.setText("✕")
+        del_btn.setText("\u2715")
         del_btn.clicked.connect(lambda: self.remove_requested.emit(self))
-        layout.addWidget(del_btn, 0, 3)
+        layout.addWidget(del_btn, 0, 5)
 
-        layout.addWidget(QLabel(tr("テンプレート:", "Template:")), 1, 0)
-        self._tmpl_edit = QLineEdit(self._rule.get("template", "{seq:04d}"))
-        self._tmpl_edit.setPlaceholderText("CHR_{seq:04d}")
-        # r119d: «指定方法が分からない» という指摘。使えるトークンは
-        # core.file_operations.AUTO_NAME_TOKENS を唯一の出所にして、
-        # ツールチップと下の説明の両方へ出す（取り残しが起きない）。
-        from core.file_operations import AUTO_NAME_TOKENS
-        from core.i18n import current_lang
-        _ja = current_lang() == "ja"
-        tips = "\n".join("  %-11s %s" % (tok, ja if _ja else en)
-                          for tok, ja, en in AUTO_NAME_TOKENS)
-        self._tmpl_edit.setToolTip(
-            tr("使えるトークン:\n%s", "Available tokens:\n%s") % tips)
-        layout.addWidget(self._tmpl_edit, 1, 1)
+        layout.addWidget(QLabel(tr("対象階層:", "Levels:")), 1, 0)
+        self._levels_edit = QLineEdit(self._rule["levels"])
+        self._levels_edit.setPlaceholderText("{Group}/{Set}/n{Item}")
+        self._levels_edit.setToolTip(tr(
+            "ルートからの階層を / 区切りで書きます。\n"
+            "{名前} はその段のフォルダ名を拾う変数になり、\n"
+            "n{Item} のように固定文字と混ぜられます。\n"
+            "**ここと同じ深さのフォルダだけ** が対象です"
+            "（ルート以下ならどこでも、ではありません）。",
+            "Levels under the root, separated by /.\n"
+            "{Name} captures that folder name as a variable, and can be mixed "
+            "with literal text such as n{Item}.\n"
+            "Only folders at exactly this depth are affected."))
+        self._levels_edit.textChanged.connect(self._refresh_hint)
+        layout.addWidget(self._levels_edit, 1, 1, 1, 5)
 
-        layout.addWidget(QLabel(tr("開始番号:", "Start number:")), 1, 2)
-        self._start_spin = QSpinBox()
-        self._start_spin.setRange(0, 99999)
-        self._start_spin.setValue(self._rule.get("seq_start", 1))
-        self._start_spin.setToolTip(tr(
-            "連番の最初の番号。実際に保存するたびに 1 ずつ進み、\n"
-            "進んだ値はそのフォルダの .mfm_seq に記録されます。",
-            "The first sequence number. It advances by one on each actual "
-            "save,\nand the current value is kept in .mfm_seq in that folder."))
-        layout.addWidget(self._start_spin, 1, 3)
+        layout.addWidget(QLabel(tr("ファイル名:", "File name:")), 2, 0)
+        self._file_edit = QLineEdit(self._rule["filename"])
+        self._file_edit.setPlaceholderText(
+            "{Group}_{Set}_{Item}_{ver}")
+        self._file_edit.setToolTip(tr(
+            "対象階層で決めた変数と {ver} を使えます。\n"
+            "拡張子は書きません（保存時に選んだ形式が付きます）。",
+            "Use the variables from the levels above, plus {ver}.\n"
+            "Do not type an extension; the one chosen when saving is used."))
+        self._file_edit.textChanged.connect(self._refresh_hint)
+        layout.addWidget(self._file_edit, 2, 1, 1, 5)
 
-        # 使い方をその場に出す（ツールチップだけでは気付けない）
-        hint = QLabel(tr(
-            "使えるトークン: %s　／　例: CHR_{seq:04d} → CHR_0001",
-            "Tokens: %s　/　e.g. CHR_{seq:04d} \u2192 CHR_0001")
-            % "  ".join(tok for tok, _j, _e in AUTO_NAME_TOKENS))
-        hint.setWordWrap(True)
-        hint.setToolTip(self._tmpl_edit.toolTip())
-        hint.setStyleSheet("color:%(on_surface_dim)s;font-size:%(label_px)spx;"
-                           % _tv())
-        layout.addWidget(hint, 2, 0, 1, 4)
+        v = self._rule["ver"]
+        layout.addWidget(QLabel(tr("最新表記:", "Latest label:")), 3, 0)
+        self._latest_edit = QLineEdit(str(v.get("latest_label", "cur")))
+        self._latest_edit.setFixedWidth(70)
+        layout.addWidget(self._latest_edit, 3, 1)
+        layout.addWidget(QLabel(tr("接頭辞:", "Prefix:")), 3, 2)
+        self._prefix_edit = QLineEdit(str(v.get("prefix", "v")))
+        self._prefix_edit.setFixedWidth(50)
+        layout.addWidget(self._prefix_edit, 3, 3)
+        layout.addWidget(QLabel(tr("桁数:", "Digits:")), 3, 4)
+        self._digits_spin = QSpinBox()
+        self._digits_spin.setRange(1, 12)
+        self._digits_spin.setValue(int(v.get("digits", 3)))
+        layout.addWidget(self._digits_spin, 3, 5)
+
+        self._incr_cb = QCheckBox(
+            tr("インクリメンタルセーブ",
+               "Incremental save"))
+        self._incr_cb.setChecked(bool(v.get("incremental", False)))
+        self._incr_cb.setToolTip(tr(
+            "ON にすると、保存ダイアログにインクリメンタルセーブの\n"
+            "スイッチが出ます。そこで ON にして保存すると、既存の最新\n"
+            "ファイルを «次の番号» へ複製してから、最新表記で保存します。",
+            "When on, the save dialog shows an incremental-save switch. "
+            "Saving with it on copies the existing latest file to the next "
+            "number, then saves under the latest label."))
+        layout.addWidget(self._incr_cb, 4, 0, 1, 6)
+
+        self._hint = QLabel("")
+        self._hint.setWordWrap(True)
+        self._hint.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
+        layout.addWidget(self._hint, 5, 0, 1, 6)
+        self._refresh_hint()
+
+    def _refresh_hint(self, *_a):
+        """書いた内容から «こうなります» をその場に出す。"""
+        from core import auto_name as _an
+        levels = self._levels_edit.text()
+        filename = self._file_edit.text()
+        names = _an.level_vars(levels)
+        miss = _an.missing_vars({"levels": levels, "filename": filename})
+        parts = []
+        if names:
+            parts.append(tr("変数: %s", "Variables: %s") % ", ".join(names))
+        if miss:
+            parts.append(tr("⚠ 対象階層に無い変数: %s",
+                            "⚠ Not defined in the levels: %s") % ", ".join(miss))
+        self._hint.setText("\u3000/\u3000".join(parts) if parts else tr(
+            "例: 対象階層 {Group}/n{Item} → ファイル名 {Group}_{Item}_{ver}（拡張子は保存時）",
+            "e.g. levels {Group}/n{Item} \u2192 file name {Group}_{Item}_{ver} (extension comes from the save dialog)"))
 
     def _browse_dir(self):
         from core.compat import QFileDialog
-        d = QFileDialog.getExistingDirectory(
-            self, "ディレクトリを選択", self._dir_edit.text() or "",
+        d = pick_directory(
+            self, tr("ルートを選択", "Select the root"),
+            self._dir_edit.text() or "",
             QFileDialog.ShowDirsOnly | QFileDialog.DontUseNativeDialog)   # ネイティブは mayapy でクラッシュ（r64）
         if d:
             self._dir_edit.setText(d)
 
     def get_data(self):
+        from core import auto_name as _an
         return self._dir_edit.text(), {
-            "template": self._tmpl_edit.text(),
-            "seq_start": self._start_spin.value(),
-            "counter_file": self._rule.get("counter_file", ".mfm_seq"),
+            "levels": self._levels_edit.text().strip(),
+            # r145: 拡張子は設定に入れない（保存時に選んだ形式を付ける）
+            "filename": _an.stem_template(
+                {"filename": self._file_edit.text().strip()}),
+            "ver": {
+                "latest_label": self._latest_edit.text().strip() or "cur",
+                "prefix": self._prefix_edit.text().strip() or "v",
+                "digits": int(self._digits_spin.value()),
+                "incremental": bool(self._incr_cb.isChecked()),
+            },
         }
 
 
@@ -234,7 +296,6 @@ class SettingsDialog(QDialog):
         self.setWindowTitle(tr("設定", "Settings"))
         self.setMinimumSize(640, 520)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self._auto_naming_rows: List[AutoNamingRuleRow] = []
         self._build_ui()
         self._load_values()
 
@@ -303,7 +364,11 @@ class SettingsDialog(QDialog):
         layout.addRow(_HLine())
         layout.addRow(_SectionLabel(tr("テーマ", "Theme")))
         self._theme_combo = QComboBox()
-        self._theme_combo.addItems([tr("ダーク", "Dark"), tr("ライト", "Light")])
+        self._theme_combo.addItems([
+            tr("システム（OS に追従）", "System (follow OS)"),
+            tr("ライト", "Light"),
+            tr("ダーク", "Dark"),
+        ])
         layout.addRow(tr("テーマ:", "Theme:"), self._theme_combo)
         _theme_note = QLabel(tr("※ 再起動後に反映されます",
                                 "* Takes effect after restart"))
@@ -481,50 +546,32 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(w)
         layout.setSpacing(6)
 
-        # r119: 自動命名はプリセット毎にも設定できる（クイックナビ
-        # プリセットエディタの「自動命名」タブ）。ここは «共通» 設定で、
-        # プリセットが自前の設定を持たない時に使われる。
-        scope = QLabel(tr(
-            "ここは «共通» の設定です。プリセット毎に変えたい場合は\n"
-            "ツール →「クイックナビ プリセットエディタ...」→「自動命名」タブで\n"
-            "そのプリセット専用の設定を作れます。",
-            "These are the shared settings, used when a preset has none of its "
-            "own.\nTo vary them per preset, use Tools > \u201cQuick Nav Preset "
-            "Editor...\u201d > \u201cAuto Naming\u201d."))
-        scope.setWordWrap(True)
-        scope.setStyleSheet("color:%(on_surface_dim)s;font-size:%(label_px)spx;"
-                            % _tv())
-        layout.addWidget(scope)
-
-        self._auto_naming_enabled_cb = QCheckBox(tr("自動命名を有効にする", "Enable auto naming"))
+        # r139: **ルールの編集口はここから廃止した。**
+        # 従来はここが «共通» 設定で、プリセットが自前の設定を持たない時の
+        # フォールバックだったが、それは «プリセット毎設定を後から足した際の
+        # 後方互換» であって、ユーザー向けの意図は無かった（指摘 2026-10-08）。
+        # 二重管理をやめ、規則はプリセットエディタに一本化する。
+        # ここには全体のキルスイッチだけを残す。
+        self._auto_naming_enabled_cb = QCheckBox(
+            tr("自動命名を有効にする", "Enable auto naming"))
         layout.addWidget(self._auto_naming_enabled_cb)
 
-        info = QLabel(
+        info = QLabel(tr(
             "指定ディレクトリ以下で新規ファイルを保存する際、\n"
-            "テンプレートに従って自動的にファイル名を提案します。"
-        )
+            "テンプレートに従って自動的にファイル名を提案します。\n\n"
+            "規則はツール →「クイックナビ プリセットエディタ...」→「自動命名」で\n"
+            "設定します。どのプリセットに入れた規則でも、そのフォルダへ\n"
+            "保存する限り効きます。",
+            "When you save a new file under a folder a rule names, the file "
+            "name is suggested from its template.\n\n"
+            "Rules live in Tools > \u201cQuick Nav Preset Editor...\u201d > "
+            "\u201cAuto Naming\u201d, and apply whenever you save into the "
+            "folder they name - whichever preset holds them."))
+        info.setWordWrap(True)
         info.setStyleSheet(
             "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
         layout.addWidget(info)
-
-        layout.addWidget(_HLine())
-
-        # Rule container (scrollable)
-        self._rule_container = QWidget()
-        self._rule_layout = QVBoxLayout(self._rule_container)
-        self._rule_layout.setContentsMargins(0, 0, 0, 0)
-        self._rule_layout.setSpacing(4)
-        self._rule_layout.addStretch()
-
-        scroll = QScrollArea()
-        scroll.setWidget(self._rule_container)
-        scroll.setWidgetResizable(True)
-        layout.addWidget(scroll)
-
-        add_btn = QPushButton(tr("＋ ルールを追加", "+ Add rule"))
-        # clicked(bool) の checked 引数が directory に流れ込むのを防ぐ
-        add_btn.clicked.connect(lambda _c=False: self._add_naming_rule())
-        layout.addWidget(add_btn)
+        layout.addStretch(1)
 
         return w
 
@@ -536,8 +583,8 @@ class SettingsDialog(QDialog):
         sm = self._sm
 
         # 一般
-        theme_map = {"dark": 0, "light": 1}
-        self._theme_combo.setCurrentIndex(theme_map.get(sm.get("theme", "dark"), 0))
+        theme_map = {"system": 0, "light": 1, "dark": 2}
+        self._theme_combo.setCurrentIndex(theme_map.get(sm.get("theme", "dark"), 2))
 
         # 言語モード
         lang_map = {"auto": 0, "ja": 1, "en": 2}
@@ -576,18 +623,16 @@ class SettingsDialog(QDialog):
         self._maya_args_edit.setText(" ".join(args))
         self._last_maya_ver_edit.setText(sm.get("last_maya_version", ""))
 
-        # 自動命名
+        # 自動命名（r139: ルールの編集はプリセットエディタへ一本化。ここは入/切）
         self._auto_naming_enabled_cb.setChecked(sm.get("auto_naming_enabled", True))
-        rules = sm.get_auto_naming_rules()
-        for directory, rule in rules.items():
-            self._add_naming_rule(directory=directory, rule=rule)
 
     def _apply(self):
         sm = self._sm
 
         # 一般
-        theme_map = {0: "dark", 1: "light"}
-        sm.set("theme", theme_map[self._theme_combo.currentIndex()], save=False)
+        theme_map = {0: "system", 1: "light", 2: "dark"}
+        sm.set("theme", theme_map.get(self._theme_combo.currentIndex(), "dark"),
+               save=False)
 
         sm.set("ui_language",
                {0: "auto", 1: "ja", 2: "en"}.get(
@@ -620,14 +665,8 @@ class SettingsDialog(QDialog):
         args_text = self._maya_args_edit.text().strip()
         sm.set("maya_launch_args", args_text.split() if args_text else [], save=False)
 
-        # 自動命名
+        # 自動命名（r139: 全体のキルスイッチだけ。ルールは触らない）
         sm.set("auto_naming_enabled", self._auto_naming_enabled_cb.isChecked(), save=False)
-        rules: Dict = {}
-        for row in self._auto_naming_rows:
-            directory, rule_data = row.get_data()
-            if directory.strip():
-                rules[directory.strip()] = rule_data
-        sm.save_auto_naming_rules(rules)
 
         sm.save()
         self.settings_changed.emit()
@@ -653,15 +692,5 @@ class SettingsDialog(QDialog):
     # Auto-naming helpers
     # ------------------------------------------------------------------
 
-    def _add_naming_rule(self, directory: str = "", rule: Dict = None):
-        row = AutoNamingRuleRow(directory=directory, rule=rule)
-        row.remove_requested.connect(self._remove_naming_rule)
-        self._auto_naming_rows.append(row)
-        # Insert before stretch
-        self._rule_layout.insertWidget(self._rule_layout.count() - 1, row)
-
-    def _remove_naming_rule(self, row: AutoNamingRuleRow):
-        if row in self._auto_naming_rows:
-            self._auto_naming_rows.remove(row)
-        self._rule_layout.removeWidget(row)
-        row.deleteLater()
+    # r139: ルール行の追加・削除はプリセットエディタ側へ移った。
+    # AutoNamingRuleRow 自体はあちらから import されているのでこのファイルに残す。

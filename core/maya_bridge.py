@@ -560,7 +560,7 @@ class MayaBridge:
         except OSError:
             return False
 
-    def send_python(self, code: str, timeout: float = 3.0):
+    def send_python(self, code: str, timeout: float = 3.0, tag: str = ""):
         """Python コードを送信する。
 
         Returns:
@@ -582,8 +582,22 @@ class MayaBridge:
                     caller = "%s:%d %s" % (_os.path.basename(fr.filename),
                                            fr.lineno, fr.name)
                     break
-            bridge_log("send port=%s thread=%s from=%s code=%r"
-                       % (self.port, _th.current_thread().name, caller, head))
+            # r145: «どの操作か» が分からないログは調査の役に立たない
+            # （実機 2026-10-08: リファレンス／インポートが 2 回実行された件で、
+            #  1 行目だけでは両者を区別できず原因を絞れなかった）。
+            # tag（操作ラベル）と呼び出し経路の積み上げを必ず残す。
+            trail = " < ".join(
+                "%s:%d %s" % (_os.path.basename(fr.filename), fr.lineno, fr.name)
+                for fr in reversed(_tb.extract_stack()[:-1])
+                if "maya_bridge.py" not in fr.filename)
+            bridge_log("send port=%s tag=%r thread=%s from=%s len=%d sha=%s\n"
+                       "        trail: %s\n        code1=%r"
+                       % (self.port, tag, _th.current_thread().name, caller,
+                          len(code or ""),
+                          __import__("hashlib").sha1(
+                              (code or "").encode("utf-8", "replace")
+                          ).hexdigest()[:10],
+                          trail[-600:], head))
         except Exception:
             pass
         try:

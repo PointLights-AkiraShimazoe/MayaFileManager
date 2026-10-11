@@ -58,3 +58,72 @@ def show_tool_window(owner, attr: str, factory, reuse: bool = True):
     dlg.raise_()
     dlg.activateWindow()
     return dlg
+
+
+# ---------------------------------------------------------------------------
+# ファイル／フォルダ選択（r145）
+# ---------------------------------------------------------------------------
+# ユーザー報告 2026-10-09:
+#   「フォルダを指定するために「⋯」ボタンを押し、キャンセルすると、
+#     manager がしばらくフリーズします。maya でも起きていますが、
+#     Manager で同じ問題は起こさないでほしいです。」
+#
+# 原因は Windows の «ネイティブ» ダイアログ（IFileDialog）。シェルが
+# ネットワークドライブやクラウドの名前空間を列挙しに行くので、閉じる時に
+# その後始末で数秒〜十数秒ブロックすることがある。Maya で起きるのも同じ理由。
+# Qt 自前のダイアログはシェルを通さないので、この待ちが発生しない。
+# 見た目は OS 標準と変わるが、«固まらない» 方を取る。
+
+def _qt_dialog_opts(extra=None):
+    """ネイティブ無効を必ず含むオプション。
+
+    PySide6 の QFileDialog.Option は «int との |» を受け付けないので、
+    既定値は 0 ではなく None にして、足す時だけ合流させる。"""
+    from core.compat import QFileDialog
+    opt = QFileDialog.DontUseNativeDialog
+    try:
+        opt |= QFileDialog.DontResolveSymlinks     # 解決で待たない
+    except Exception:
+        pass
+    if extra is not None:
+        try:
+            opt |= extra
+        except Exception:
+            pass
+    return opt
+
+
+def pick_directory(parent, title: str, start: str = "", *extra, **_kw) -> str:
+    """フォルダを選ぶ。キャンセルしても固まらない（r145）。
+
+    extra には昔の呼び出しが渡していたオプションが来ることがある。
+    ネイティブ無効だけは必ず足したうえで合流させる。"""
+    from core.compat import QFileDialog
+    try:
+        opt = _qt_dialog_opts(QFileDialog.ShowDirsOnly)
+    except Exception:
+        opt = _qt_dialog_opts()
+    for e in extra:
+        try:
+            opt |= e
+        except Exception:
+            pass
+    return QFileDialog.getExistingDirectory(parent, title, start or "", opt)
+
+
+def pick_open_file(parent, title: str, start: str = "", filt: str = "",
+                   *extra, **_kw):
+    """ファイルを選ぶ。戻り値は (パス, 選ばれたフィルタ)（r145）。"""
+    from core.compat import QFileDialog
+    opt = _qt_dialog_opts()
+    sel = ""
+    for e in extra:
+        if isinstance(e, str):
+            sel = sel or e
+            continue
+        try:
+            opt |= e
+        except Exception:
+            pass
+    return QFileDialog.getOpenFileName(parent, title, start or "", filt or "",
+                                       sel, opt)

@@ -16,7 +16,7 @@ import os
 
 from .base import (Provider, ST_CLEAN, ST_MODIFIED, ST_ADDED, ST_DELETED,
                    ST_UNTRACKED, ST_OUTDATED, ST_LOCKED, ST_OTHER_OPEN,
-                   norm, which,
+                   norm, which, is_under,
                    first_existing, program_files_candidates, run, spawn,
                    walk_up_for)
 
@@ -54,6 +54,13 @@ class P4Provider(Provider):
             self.p4v = which("p4v") or first_existing(
                 *program_files_candidates(r"Perforce\p4v.exe"))
             self.available = bool(self.p4)
+            # r142: メニューのアイコンに P4V の正式アイコンを使う。
+            # Maya / Blender と同じ «exe に埋め込まれたアイコン» の仕組み。
+            try:
+                from ui.dcc_header import set_integration_exe
+                set_integration_exe("p4", self.p4v or self.p4vc or self.p4)
+            except Exception as _e:
+                _swallow(_e, "core/integrations/p4_provider.py detect(icon)")
             self._conn_args = []
             self._clients = None
             self._client_for_dir = {}
@@ -178,8 +185,12 @@ class P4Provider(Provider):
         rows.sort(key=lambda r: len(r[0]), reverse=True)
         self._clients = rows
         self.info["clients"] = [(n, r) for _k, n, r in rows]
-        self._log("ワークスペース %d 件: %s"
-                  % (len(rows), [(n, r) for _k, n, r in rows][:8]))
+        # r137: **打ち切らない。** 従来は先頭 8 件だけ出していたため、
+        # 実機の調査で «13 件と言いながら 8 件しか見えない» 状態になり、
+        # どのワークスペースが関係しているのか判別できなかった。
+        for _k, n, r in rows:
+            self._log("  ws %s -> %s" % (n, r))
+        self._log("ワークスペース %d 件" % len(rows))
         return self._clients
 
     def client_for(self, directory: str):
@@ -189,7 +200,7 @@ class P4Provider(Provider):
             return self._client_for_dir[key]
         found = ""
         for root_key, name, _root in self._all_clients():
-            if key == root_key or key.startswith(root_key + os.sep):
+            if is_under(key, root_key):          # r137: ドライブ直下のルート対応
                 found = name
                 break
         self._client_for_dir[key] = found
@@ -248,14 +259,14 @@ class P4Provider(Provider):
         # 他のワークスペースのフォルダが «Perforce 管理外» 扱いになっていた。
         d = norm(directory)
         for root_key, name, root in self._all_clients():
-            if d == root_key or d.startswith(root_key + os.sep):
+            if is_under(d, root_key):            # r137: ドライブ直下のルート対応
                 self._log("root via clients: %r (ws=%s)" % (root, name))
                 return root
         cr = self._client_root_via_info()
         self._log("info clientRoot=%r conn_args=%r" % (cr, self._conn_args))
         if cr:
             c = norm(cr)
-            if d == c or d.startswith(c + os.sep):
+            if is_under(d, c):                   # r137: 同上
                 return cr
             # 文字列一致しない（subst/マッピング/別表記）場合はサーバーに照会
             if self._in_client_view(directory):
@@ -287,6 +298,10 @@ class P4Provider(Provider):
 
     def fetch_status(self, root: str, directory: str):
         # fstat はワイルドカード指定。表示中フォルダ直下のみ。
+        # r137: «どのワークスペースで聞いたか» を残す。違う ws で聞いていたために
+        # «管理外» に見えていた、をログだけで追えるようにする。
+        self._log("fstat ws=%r dir=%r" % (self.client_for(directory) or "(既定)",
+                                          directory))
         pattern = os.path.join(directory, "*")
         rc, out, err = run([self.p4] + self.conn_args_for(directory)
                            + ["-ztag", "fstat", "-T",

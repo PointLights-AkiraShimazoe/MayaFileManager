@@ -53,6 +53,7 @@ def _tv():
     ImportError（cannot import name 'qss_vars'）になる（r82 で実害）。"""
     from core.theme_engine import qss_vars
     return qss_vars()
+from ui.dialog_util import pick_directory, pick_open_file  # r145
 from ui.preset_editor import ReferencePresetEditor
 from ui.settings_dialog import SettingsDialog
 from ui.batch_rename_dialog import BatchRenameDialog
@@ -65,18 +66,13 @@ from ui.reference_editor import ReferenceEditor
 
 
 
-# «シーンを開く» のように後戻りできない操作は、重ねて送ったら事故になる。
-# 1.2 秒の窓だけでは «開き終わってから» の二重送信を止められない
-# （実機報告 2026-10-02: シーンを開いた後にもう一度コマンドが走りかけた）。
-# → この種別は «前の送信が片付くまで» 一切受け付けない（r119e）。
+# «シーンを開く» のように後戻りできない操作は、読み込み中に次を送ると
+# Maya ごと固まる（commandPort は受け取ったデータを «後で» 処理するため）。
+# → この種別は «前の送信が片付くまで» 受け付けない（r119e）。
+# これは «重複を捨てる» ガードではなく «まだ走っている» という状態の話なので、
+# r145 の時間窓撤去の対象外。
 # クラス属性ではなくモジュール定数にしてあるのは、Mixin を «部分的に»
 # 真似た呼び出し元（テストの軽量スタブ等）でも必ず効かせるため。
-# r123: 同じコードを同じ DCC へ送るのを抑止する時間（秒）。
-# «まったく同じ 1 行の Python» を 2 秒以内に二度送るのは、どう考えても
-# 二重発火であって意図した操作ではない。意図的な繰り返し（同じファイルを
-# もう一度リファレンスする等）は、ダイアログ操作を挟むので必ずこれより長い。
-SEND_DEDUP_SEC = 2.0
-
 DESTRUCTIVE_KINDS = ("open", "run_script")
 # 応答が来ないまま固まった時の最後の砦。シーンの読み込みは数分かかる
 # ことがあるので長めに取る（短いと «まだ開いている最中» に次を送れてしまう）。
@@ -211,6 +207,8 @@ class MainWindowDccMixin:
             launch_blender(inst, command_port=port)
             self._bl_bridge.set_port(port)
             self._sm.set("blender_command_port", int(port), save=False)
+            # r138: 起動中のこの Blender へ接続を向けておく（待たない）
+            self._claim_launched_port("blender", port)
             self.statusBar().showMessage(
                 tr("Blender %s を起動しました（連携ポート :%d）",
                    "Launched Blender %s (bridge port :%d)") % (inst.version, port))
@@ -218,6 +216,79 @@ class MainWindowDccMixin:
                 QTimer.singleShot(delay, self._refresh_connections)
         except Exception as e:
             QMessageBox.critical(self, tr("起動エラー", "Launch Error"), str(e))
+
+    # ------------------------------------------------------------------
+    # 起動した DCC へ接続を向ける（r138）
+    # ------------------------------------------------------------------
+    # ユーザー指示 2026-10-08:
+    #   「mayaとBlenderを起動した際には、最新で開いたものへコネクトを
+    #     切り替えてください。この挙動の実装により、manager が拘束される
+    #     ようであれば、不採用になります。」
+    #
+    # 拘束しないことが条件なので、**待たない**。起動時に «このポートに来るはず»
+    # という予約だけを置き、実際の検出は従来どおりワーカースレッドの
+    # スキャンに任せる。UI はその結果を受けるだけで、ソケット I/O も待ち合わせも
+    # しない。タイマーは期限が来れば止まる。
+    #
+    # これがないと起きること（従来の不具合）:
+    #   起動直後のスキャンでは新しい Maya のポートはまだ開いていない。
+    #   _on_conn_list は «現在の接続先が一覧に無い» と見て、別の Maya へ
+    #   勝手に乗り換えてしまう（bridge.set_port ごと）。
+
+    LAUNCH_CLAIM_SEC = 180.0        # これを過ぎたら諦める（起動失敗等）
+    LAUNCH_WATCH_MS = 4000          # 様子見の間隔（スキャン中なら即 return）
+
+    def _claim_launched_port(self, dcc: str, port: int):
+        """«このポートに起動中の DCC が来る» と予約する（r138）。"""
+        import time as _t
+        claims = getattr(self, "_launch_claims", None)
+        if claims is None:
+            claims = self._launch_claims = {}
+        claims[dcc] = {"port": int(port),
+                       "until": _t.monotonic() + self.LAUNCH_CLAIM_SEC}
+        t = getattr(self, "_launch_watch_timer", None)
+        if t is None:
+            t = QTimer(self)
+            t.setInterval(self.LAUNCH_WATCH_MS)
+            t.timeout.connect(self._watch_launch_claims)
+            self._launch_watch_timer = t
+        if not t.isActive():
+            t.start()
+
+    def _launch_claim(self, dcc: str):
+        """生きている予約のポート。無ければ None（期限切れはここで捨てる）。"""
+        import time as _t
+        claims = getattr(self, "_launch_claims", None) or {}
+        c = claims.get(dcc)
+        if not c:
+            return None
+        if _t.monotonic() >= c["until"]:
+            claims.pop(dcc, None)
+            return None
+        return c["port"]
+
+    def _clear_launch_claim(self, dcc: str):
+        claims = getattr(self, "_launch_claims", None) or {}
+        claims.pop(dcc, None)
+        if not claims:
+            t = getattr(self, "_launch_watch_timer", None)
+            if t is not None:
+                t.stop()
+
+    def _watch_launch_claims(self):
+        """予約が残っている間だけ、接続一覧を見直す。
+
+        _refresh_* はスキャン中なら即座に戻るので、ここで止まることは無い。"""
+        alive = [d for d in ("maya", "blender") if self._launch_claim(d)]
+        if not alive:
+            t = getattr(self, "_launch_watch_timer", None)
+            if t is not None:
+                t.stop()
+            return
+        if "maya" in alive and not self._inside_maya:
+            self._refresh_maya_connections()
+        if "blender" in alive:
+            self._refresh_blender_connections()
 
     def _refresh_connections(self):
         """Maya / Blender 両方の接続一覧を更新する（r67: 2つのコンボを常時表示）。"""
@@ -372,7 +443,15 @@ class MainWindowDccMixin:
         cur_port = bridge.port
         combo.blockSignals(True)
         combo.clear()
-        if not items:
+        claim_empty = self._launch_claim(dcc)
+        if not items and claim_empty is not None:
+            # r138: 起動直後はまだ 1 つも見つからない。«なし» と言い切らず、
+            # これから来ることを表示する（コンボと bridge のポートもさせない）。
+            combo.addItem(tr("起動中… (:%d)", "starting… (:%d)") % claim_empty,
+                          claim_empty)
+            combo.setEnabled(True)
+            combo.setCurrentIndex(0)
+        elif not items:
             combo.addItem(tr("（%s なし）", "(no %s)") % self._dcc_label(dcc), None)
             combo.setEnabled(False)
             # r119: «起動しているのに出ない» が一番多い詰まり方なので、
@@ -398,6 +477,8 @@ class MainWindowDccMixin:
                 self._conn_pids = pids
             sel = -1
             first_ok = -1
+            claim = self._launch_claim(dcc)      # r138: 起動中の予約
+            claim_idx = -1
             for i, it in enumerate(items):
                 port, label, identified = it[0], it[1], it[2]
                 combo.addItem(label, port)
@@ -406,7 +487,32 @@ class MainWindowDccMixin:
                     sel = i
                 if identified and first_ok < 0:
                     first_ok = i
-            if sel < 0:
+                if claim is not None and port == claim and identified:
+                    claim_idx = i
+            if claim is not None:
+                if claim_idx >= 0:
+                    # r138: 起動した当人が出てきた。ここへ向けて予約を終える。
+                    sel = claim_idx
+                    if cur_port != claim:
+                        bridge.set_port(int(claim))
+                        self._sm.set(port_key, int(claim), save=False)
+                    self._clear_launch_claim(dcc)
+                    self.statusBar().showMessage(
+                        tr("%s 起動完了。接続先を切替: %s",
+                           "%s is up. Connection switched: %s")
+                        % (self._dcc_label(dcc), combo.itemText(sel)), 8000)
+                else:
+                    # r138: **まだ来ていない。別の %s へ勝手に乗り換えない。**
+                    # 従来はここで first_ok へ落ち、起動したはずの側ではない
+                    # Maya へ送る状態になっていた。
+                    sel = combo.count()
+                    combo.addItem(tr("起動中… (:%d)", "starting… (:%d)")
+                                  % claim, claim)
+                    combo.setItemData(
+                        sel, tr("起動した %s の準備ができ次第ここへ繋がります",
+                                "Will connect here once the launched %s is ready")
+                        % self._dcc_label(dcc), Qt.ToolTipRole)
+            elif sel < 0:
                 # 現在の接続先が一覧に無い場合のみ切り替える。
                 # 切替先は «識別できたポート» を優先（別アプリのポートへ
                 # 送ってしまうと「何も起きない」ため）。
@@ -425,6 +531,9 @@ class MainWindowDccMixin:
         port = combo.itemData(idx)
         if port is None:
             return
+        # r138: 手で選び直したなら、起動予約よりユーザーの意思を優先する。
+        if self._launch_claim(dcc) not in (None, int(port)):
+            self._clear_launch_claim(dcc)
         if dcc == "blender":
             self._bl_bridge.set_port(int(port))
             self._sm.set("blender_command_port", int(port), save=False)
@@ -756,8 +865,15 @@ class MainWindowDccMixin:
         pid = self._conn_pids.get(self._bridge.port)
         self._focus_pid_window(pid, "Maya", self._refresh_maya_connections)
 
-    def _focus_pid_window(self, pid, app_name: str, rescan):
+    def _focus_pid_window(self, pid, app_name: str, rescan, quiet: bool = False):
+        """PID からそのアプリのメインウィンドウを最前面へ（Windows 専用）。
+
+        quiet=True は «送信のついで» の自動最前面化用（r141）。
+        失敗しても黙って諦める——本体の操作は成功しているので、
+        ここのつまずきでメッセージを出したり再スキャンを走らせたりしない。"""
         if not pid:
+            if quiet:
+                return
             self.statusBar().showMessage(
                 tr("%sのPIDが未取得です。⟳で再スキャンしてください。",
                    "%s PID unknown. Rescan with ⟳ first.") % app_name)
@@ -783,15 +899,18 @@ class MainWindowDccMixin:
 
             u32.EnumWindows(_enum, 0)
             if not found:
-                self.statusBar().showMessage(
-                    tr("%sのウィンドウが見つかりません（PID %d）",
-                       "%s window not found (PID %d)") % (app_name, pid))
+                if not quiet:
+                    self.statusBar().showMessage(
+                        tr("%sのウィンドウが見つかりません（PID %d）",
+                           "%s window not found (PID %d)") % (app_name, pid))
                 return
             hwnd = found[0]
             if u32.IsIconic(hwnd):
                 u32.ShowWindow(hwnd, 9)    # SW_RESTORE
             u32.SetForegroundWindow(hwnd)
         except Exception as e:
+            if quiet:
+                return
             self.statusBar().showMessage(
                 tr("最前面化に失敗: %s", "Failed to bring to front: %s") % e)
 
@@ -803,26 +922,14 @@ class MainWindowDccMixin:
         import threading
         import time as _t
         bridge = bridge or self._bridge
-        # r123: **最後の砦。** 経路を問わず «まったく同じコードを同じ DCC へ»
-        # 短時間に二度送ることは無い。上流のどこかで二重に呼ばれても、
-        # 実際に送る直前のここで必ず止まる。
-        # 2026-10-06 実機: リファレンスが 2 回実行された。Namespace の
-        # モーダルダイアログが 1.2 秒窓を跨いでしまい、上流のガードを
-        # すり抜けていた。個別の穴を塞ぐだけでは «次の穴» が必ず出るので、
-        # 送信そのものに重複排除を置く。
-        _port = getattr(bridge, "port", None)
-        _sig = (_port, code)
-        _prev_sig, _prev_t = getattr(self, "_last_sent_sig", (None, 0.0))
-        if _sig == _prev_sig and (_t.monotonic() - _prev_t) < SEND_DEDUP_SEC:
-            try:
-                from ui.browser_panel import _mfm_log
-                _mfm_log("dcc-send: 同一コードの二重送信を抑止 port=%s label=%r "
-                         "dt=%.3f" % (_port, label, _t.monotonic() - _prev_t))
-            except Exception as _e:
-                _swallow(_e, "ui/main_window_dcc.py _bridge_send_async(dedup log)")
-            self._dcc_arm = None
-            return
-        self._last_sent_sig = (_sig, _t.monotonic())
+        # r145: «同じコードを短時間に二度送ったら捨てる» という時間窓の栓は
+        # 撤去した。1 操作 = 1 実行は «操作 ID による冪等化»（core/dcc_log）で
+        # 保証する。時間窓はユーザーの正当な連続実行まで握りつぶすうえ、
+        # そもそも «2 回来ること» を前提にした対症療法だった。
+        # r141: «送った先のウィンドウを最前面に»（ユーザー指示 2026-10-08）。
+        # DCC へ実際に渡るのはここだけなので、開く/インポート/リファレンス/
+        # 保存/書き出し/スクリプト実行のどの経路でもここを通る。
+        self._raise_sent_dcc(bridge)
         # r119e: «実際に DCC へ渡る» のはここだけ。予約を «実行中» に昇格させる。
         arm = getattr(self, "_dcc_arm", None)
         if arm:
@@ -835,11 +942,26 @@ class MainWindowDccMixin:
             self._start_dcc_watch()
 
         def _run():
-            ok, reply = bridge.send_python(code, timeout=timeout)
+            ok, reply = bridge.send_python(code, timeout=timeout, tag=label)
             self._bridge_notify.done.emit(ok, label, reply)
 
         threading.Thread(target=_run, daemon=True,
                          name="mfm-dcc-send").start()
+
+    RAISE_ON_SEND_KEY = "dcc_raise_on_send"
+
+    def _raise_sent_dcc(self, bridge):
+        """送信先の DCC を最前面へ（r141）。設定で切れる。"""
+        try:
+            if not bool(self._sm.get(self.RAISE_ON_SEND_KEY, True)):
+                return
+            is_bl = bridge is getattr(self, "_bl_bridge", None)
+            pids = self._bl_conn_pids if is_bl else self._conn_pids
+            pid = pids.get(getattr(bridge, "port", None))
+            self._focus_pid_window(pid, "Blender" if is_bl else "Maya",
+                                   lambda: None, quiet=True)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _raise_sent_dcc")
 
     def _on_bridge_done(self, ok: bool, label: str, reply):
         # r119e/r119i: «実行中» の印を落とすのは **応答が返った時だけ**。
@@ -851,6 +973,17 @@ class MainWindowDccMixin:
         # 送れなかった時は実行されていないので落とす。
         if (not ok) or reply is not None:
             self._clear_dcc_pending()
+        # r145: «同じ操作 ID が 2 回届いた» ＝ 配送が重複している証拠。
+        # ユーザーには何も出さない（操作は 1 回しか起きていない）が、
+        # 原因調査のためログには必ず残す。
+        if isinstance(reply, str) and reply.strip() == "Duplicate":
+            try:
+                from ui.browser_panel import _mfm_log
+                _mfm_log("dcc-send: DCC 側で重複配送を破棄（同じ操作 ID の 2 通目）"
+                         " label=%r" % (label,))
+            except Exception as _e:
+                _swallow(_e, "ui/main_window_dcc.py _on_bridge_done(dup log)")
+            return
         if ok:
             msg = tr("送信: %s", "Sent: %s") % label
             if reply is None:
@@ -873,8 +1006,9 @@ class MainWindowDccMixin:
     def _blender_send_or_prompt(self, code: str, label: str, log=None) -> bool:
         """log=(操作名, パス) を渡すと Blender 側の Info エディタにログを残す（r88）。"""
         if log:
-            from core.dcc_log import wrap_blender
-            code = wrap_blender(code, log[0], log[1])
+            from core.dcc_log import wrap_blender, new_op_id
+            code = wrap_blender(code, log[0], log[1],
+                                op_id=getattr(self, "_dcc_op_id", "") or new_op_id())
         if self._bl_bridge.is_connected(timeout=0.3):
             self.statusBar().showMessage(
                 tr("Blenderへ送信中: %s …", "Sending to Blender: %s …") % label)
@@ -883,16 +1017,13 @@ class MainWindowDccMixin:
             return True
         ver = self._blender_inst.version if self._blender_inst else ""
         ret = QMessageBox.question(
-            self, tr("Blender未接続", "Blender Not Connected"),
-            tr("連携できるBlenderが見つかりません。\n"
-               "連携できるのは、このマネージャーの「起動」から起動したBlender、\n"
-               "またはツールメニューで連携をインストール済みのBlenderです。\n\n"
-               "Blender %s を今すぐ起動しますか？",
-               "No connectable Blender found.\nOnly Blender launched from this "
-               "manager, or with the bridge installed (Tools menu), can be controlled."
-               "\n\nLaunch Blender %s now?") % ver,
+            self, tr("Blender 未接続", "Blender Not Connected"),
+            tr("接続中の Blender がありません。\n\nBlender %s を起動しますか？",
+               "No Blender is connected.\n\nLaunch Blender %s?") % ver,
             QMessageBox.Yes | QMessageBox.No)
         if ret == QMessageBox.Yes:
+            self._queue_after_launch("blender", code,
+                                     "Blender: " + label)   # r145
             self._launch_blender()
         return False
 
@@ -935,9 +1066,9 @@ class MainWindowDccMixin:
         start = ""
         if self._blender_inst:
             start = str(self._blender_inst.executable.parent)
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = pick_open_file(
             self, tr("blender.exe を選択", "Select blender.exe"), start,
-            "Blender (blender.exe blender);;All (*)", options=QFileDialog.DontUseNativeDialog)
+            "Blender (blender.exe blender);;All (*)")
         if not path:
             return
         self._sm.set("blender_exe", path, save=True)
@@ -1058,21 +1189,20 @@ class MainWindowDccMixin:
         code = "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_result'))[1])({})" % inner
         if self._maya_send_or_prompt(
                 code, tr("スクリプト実行 %s", "Run script %s") % Path(path).name,
-                log=(tr("スクリプト実行", "Run script"), path), guard=True):
+                log=(tr("スクリプト実行", "Run script"), path)):
             QTimer.singleShot(400, self._focus_connected_maya)
 
     def _dcc_once(self, kind: str, path: str, app: str) -> bool:
-        """«1操作＝1回» を保証するガード（r86 / r119e で強化）。
+        """DCC へ送ってよいかの判定（r145 で «時間窓» を撤去）。
 
-        * 同じ (種別, パス, 送り先) が 1.2 秒以内に再度来たら捨てる。
-          クリック動作・右クリック・D&D のどの経路から来ても、DCC へ送る
-          直前のここを必ず通るので、発火元がどれでも止まる。
-        * **シーンを開く等の «後戻りできない» 種別は、パスが違っても
-          前の送信が終わるまで受け付けない。** 開くのに数十秒かかる間に
-          2 回目を送ると、読み込み終了後にもう一度実行されてしまう
-          （commandPort は受け取ったデータを «後で» 処理するため）。
-        捨てた時はログに残すので、mfm ログを見れば «どの経路が二重に呼んで
-        いるか» を後から特定できる。"""
+        ここで見るのは «今まさに進行中かどうか» という状態だけ:
+        * ダイアログを出している最中（_dcc_in_progress）は新しい操作を受けない。
+        * シーンを開く等の «後戻りできない» 種別は、前の送信が片付くまで
+          受け付けない（開いている最中に次を送ると Maya ごと固まるため）。
+
+        «同じ操作が短時間に 2 回来たら捨てる» という類の栓は持たない。
+        ユーザーが 2 回やったら 2 回実行されるのが正しく、1 操作が 2 回
+        届く問題は操作 ID による冪等化（core/dcc_log の _OPID）で潰す。"""
         import time as _time_mod
         from ui.browser_panel import _mfm_log
         try:
@@ -1117,16 +1247,10 @@ class MainWindowDccMixin:
             self._dcc_arm = None
             return False
 
-        last_key, last_t = getattr(self, "_last_dcc_send", (None, 0.0))
-        if key == last_key and (now - last_t) < 1.2:
-            _mfm_log("dcc-send: 二重発火を抑止 kind=%s app=%s dt=%.3f path=%r"
-                     % (kind, app, now - last_t, path))
-            self.statusBar().showMessage(
-                tr("連続した同一操作を1回にまとめました: %s",
-                   "Merged a repeated action into one: %s") % Path(path).name, 4000)
-            self._dcc_arm = None
-            return False
-        self._last_dcc_send = (key, now)
+        # r145: «1.2 秒以内の同じ操作は捨てる» という時間窓は撤去した。
+        # ユーザーが続けて 2 回実行したら 2 回実行されるのが正しい。
+        # 1 操作が 2 回届いてしまう問題は、操作 ID による冪等化
+        # （core/dcc_log の _OPID）で «実行側» が保証する。
         return True
 
     # ── r120: «前の操作が終わったか» の見張り ───────────────────────────
@@ -1245,10 +1369,21 @@ class MainWindowDccMixin:
     # 入口ごとにガードを書くと必ず書き忘れが出る（実際、シーン保存／選択の
     # 書き出しにはガードが無かった）。1 本の関数に集約し、
     #   * 進行中は次を受けない（ダイアログ表示中を含む）
-    #   * 完了«後»に時刻を押し直す（ダイアログで窓が流れるのを防ぐ）
+    #   * 1 操作につき 1 個の操作 ID を発行する（r145）
     # を必ず通す。
     def _dcc_guarded(self, kind: str, path: str, app: str, fn):
-        import time as _time_mod
+        # r145: 二重実行の調査用。«どの経路から・どのウィンドウ実体が» 呼んだかを
+        # 必ず残す（実機 2026-10-08: リファレンス／インポートが 2 回実行された）。
+        try:
+            import traceback as _tb
+            from ui.browser_panel import _mfm_log
+            trail = " < ".join(
+                "%s:%d %s" % (os.path.basename(fr.filename), fr.lineno, fr.name)
+                for fr in reversed(_tb.extract_stack()[:-1])[:8])
+            _mfm_log("dcc-call: kind=%s app=%s win=%#x path=%r\n"
+                     "          trail: %s" % (kind, app, id(self), path, trail))
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _dcc_guarded(log)")
         if not self._dcc_accepts(kind, path, app):
             return False
         if not self._dcc_once(kind, path, app):
@@ -1257,15 +1392,37 @@ class MainWindowDccMixin:
             key = (kind, os.path.normcase(os.path.abspath(path)), app or "")
         except Exception:
             key = (kind, path, app or "")
-        self._dcc_in_progress = key
+        self._dcc_begin_op(kind, path, app)
         try:
             fn()
         finally:
-            self._dcc_in_progress = None
-            # 「いつ始めたか」ではなく「いつ終わったか」から数える。
-            # ダイアログに何秒かけても、その直後に届いた二重発火は止まる。
-            self._last_dcc_send = (key, _time_mod.monotonic())
+            self._dcc_end_op()
         return True
+
+    # ── 1 操作の始まりと終わり（r145 で 1 箇所に集約）──────────────────
+    def _dcc_begin_op(self, kind: str, path: str, app: str):
+        """操作の開始を記録し、この操作の ID を発行する。
+
+        ID は «1 操作 = 1 個»。送信経路が何本に枝分かれしても同じ ID を持ち、
+        DCC 側は同じ ID を 2 回実行しない（core/dcc_log の _OPID）。"""
+        from core.dcc_log import new_op_id
+        try:
+            key = (kind, os.path.normcase(os.path.abspath(path)), app or "")
+        except Exception:
+            key = (kind, path, app or "")
+        self._dcc_in_progress = key
+        self._dcc_op_id = new_op_id()
+        try:
+            from ui.browser_panel import _mfm_log
+            _mfm_log("dcc-op: opid=%s kind=%s app=%s path=%r"
+                     % (self._dcc_op_id[:8], kind, app, path))
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _dcc_begin_op(log)")
+        return key
+
+    def _dcc_end_op(self):
+        self._dcc_op_id = ""
+        self._dcc_in_progress = None
 
     def _dcc_open(self, path: str, app: str = None):
         target = app or dcc_for_path(path, self._dcc)
@@ -1285,16 +1442,18 @@ class MainWindowDccMixin:
             self._blender_link(path) if target == "blender"
             else self._maya_reference(path, ask_ns=ask_ns)))
 
-    def _maya_send_or_prompt(self, code: str, label: str, log=None,
-                             guard: bool = False) -> bool:
+    def _maya_send_or_prompt(self, code: str, label: str, log=None) -> bool:
         """起動済みMaya（commandPort）へPythonコードを送る。未接続なら
         Mayaの起動を提案する。送信を開始できたら True。
         log=(操作名, パス) を渡すと Maya のスクリプトエディタにログを残す（r88）。
-        guard=True で «直前に同じ操作が走っていたら実行しない» 栓を付ける
-        （r119e。開く/スクリプト実行のような «重ねたら事故» の操作だけ）。"""
+
+        r145: 包む時に «この操作の ID» を埋め込む。同じ ID が Maya に 2 回
+        届いても実行は 1 回きり（配送の重複に強い）。ユーザーが続けて 2 回
+        実行した時は ID が別なので、どちらも実行される。"""
         if log:
-            from core.dcc_log import wrap_maya
-            code = wrap_maya(code, log[0], log[1], guard=guard)
+            from core.dcc_log import wrap_maya, new_op_id
+            code = wrap_maya(code, log[0], log[1],
+                             op_id=getattr(self, "_dcc_op_id", "") or new_op_id())
         if self._bridge.is_connected(timeout=0.3):
             self.statusBar().showMessage(
                 tr("Mayaへ送信中: %s …", "Sending to Maya: %s …") % label)
@@ -1302,27 +1461,85 @@ class MainWindowDccMixin:
             return True
         self._dcc_arm = None           # 送れていないので «実行中» ではない
         ver = self._maya_inst.version if self._maya_inst else ""
-        _port_hint = (f'  cmds.commandPort(name=":{self._bridge.port}", '
-                      'sourceType="python")')
         ret = QMessageBox.question(
-            self, tr("Maya未接続", "Maya Not Connected"),
-            tr("連携できるMayaが見つかりません。\n"
-               "連携できるのは、このマネージャーの「起動」ボタンから起動したMayaです。\n"
-               "（手動起動のMayaと繋ぐ場合は、Mayaのスクリプトエディタで\n"
-               "%s\nを実行してください）\n\n"
-               "Maya %s を今すぐ起動しますか？",
-               "No connectable Maya found.\n"
-               "Only Maya launched from this manager's Launch button can be "
-               "controlled.\n(To connect a manually launched Maya, run\n"
-               "%s\nin Maya's Script Editor)\n\n"
-               "Launch Maya %s now?") % (_port_hint, ver),
+            self, tr("Maya 未接続", "Maya Not Connected"),
+            # r145: «マネージャーから起動した Maya だけ» は嘘になった
+            # （userSetup の連携を入れてあれば普通に起動した Maya も拾う）。
+            # 説明を並べず、聞きたいことだけを出す（ユーザー指摘 2026-10-09）。
+            tr("接続中の Maya がありません。\n\nMaya %s を起動しますか？",
+               "No Maya is connected.\n\nLaunch Maya %s?") % ver,
             QMessageBox.Yes | QMessageBox.No)
         if ret == QMessageBox.Yes:
+            # r145: 起動したら «今やろうとしていた操作» をそのまま実行する
+            # （ユーザー指摘 2026-10-09: Yes で起動しても Open が走らなかった）。
+            self._queue_after_launch("maya", code, label)
             self._launch_maya()
-            self.statusBar().showMessage(
-                tr("Mayaを起動中です。起動完了後にもう一度実行してください。",
-                   "Launching Maya. Please retry after it finishes starting."))
         return False
+
+    # ── 起動したら続きを実行する（r145）──────────────────────────────
+    PENDING_LAUNCH_SEC = 300.0       # これを過ぎたら待つのをやめる
+    PENDING_POLL_MS = 1500
+    PENDING_SEEN_TIMES = 2           # 連続で «つながった» と見えたら送る
+
+    def _queue_after_launch(self, dcc: str, code: str, label: str):
+        """起動待ちの操作を 1 つだけ覚える（新しいものが来たら差し替え）。
+
+        code は既に «操作 ID 入り» に包まれているので、起動後に送っても
+        二重実行にはならない（同じ ID は DCC 側が 1 回しか実行しない）。"""
+        import time as _t
+        self._pending_after_launch = {
+            "dcc": dcc, "code": code, "label": label,
+            "t": _t.monotonic(), "seen": 0,
+        }
+        t = getattr(self, "_pending_launch_timer", None)
+        if t is None:
+            try:
+                t = QTimer(self)          # 窓と一緒に片付く
+            except Exception:
+                t = QTimer()              # 窓を持たない呼び出し元（テスト等）
+            t.setInterval(self.PENDING_POLL_MS)
+            t.timeout.connect(self._poll_pending_after_launch)
+            self._pending_launch_timer = t
+        t.start()
+        self.statusBar().showMessage(
+            tr("起動後に実行します: %s", "Will run after launch: %s") % label)
+
+    def _cancel_pending_after_launch(self):
+        self._pending_after_launch = None
+        t = getattr(self, "_pending_launch_timer", None)
+        if t is not None:
+            t.stop()
+
+    def _poll_pending_after_launch(self):
+        import time as _t
+        p = getattr(self, "_pending_after_launch", None)
+        if not p:
+            self._cancel_pending_after_launch()
+            return
+        if _t.monotonic() - p["t"] > self.PENDING_LAUNCH_SEC:
+            self._cancel_pending_after_launch()
+            self.statusBar().showMessage(
+                tr("起動待ちをやめました: %s", "Gave up waiting: %s") % p["label"],
+                8000)
+            return
+        bridge = (self._bl_bridge if p["dcc"] == "blender" else self._bridge)
+        try:
+            ok = bridge.is_connected(timeout=0.3)
+        except Exception:
+            ok = False
+        if not ok:
+            p["seen"] = 0
+            return
+        # 起動直後はポートが開いても «まだ動かせない» ことがあるので、
+        # 続けて見えたことを確かめてから送る。
+        p["seen"] += 1
+        if p["seen"] < self.PENDING_SEEN_TIMES:
+            return
+        self._cancel_pending_after_launch()
+        self.statusBar().showMessage(
+            tr("起動しました。続けて実行します: %s",
+               "Launched. Running now: %s") % p["label"])
+        self._bridge_send_async(p["code"], p["label"], bridge=bridge)
 
     def _maya_local_setproject(self, path: str):
         """Maya 内起動時: workspace.mel があれば «プロジェクトをセットするか» を
@@ -1375,7 +1592,7 @@ class MainWindowDccMixin:
             code = "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_result'))[1])({})" % inner
             self._maya_send_or_prompt(
                 code, tr("開く %s", "Open %s") % Path(path).name,
-                log=(tr("開く", "Open"), path), guard=True)
+                log=(tr("開く", "Open"), path))
             return
         act = tr("開く", "Open")
         self._maya_local_log(act, path, "start")
@@ -1542,14 +1759,11 @@ class MainWindowDccMixin:
         kind = "export" if mode == "export" else "save"
         if not self._dcc_once(kind, path, dcc):
             return
-        self._dcc_in_progress = (kind, path, dcc)
+        self._dcc_begin_op(kind, path, dcc)
         try:
             self._dcc_save_send(dcc, code, label, act, path)
         finally:
-            import time as _t2
-            self._dcc_in_progress = None
-            self._last_dcc_send = ((kind, os.path.normcase(os.path.abspath(path)),
-                                    dcc), _t2.monotonic())
+            self._dcc_end_op()
 
     def _dcc_save_send(self, dcc, code, label, act, path):
         if dcc == "blender":
@@ -1717,6 +1931,8 @@ class MainWindowDccMixin:
             launch_maya(inst, extra_args=extra or None, command_port=port)
             self._bridge.set_port(port)
             self._sm.set("maya_command_port", int(port), save=False)
+            # r138: 起動中のこの Maya へ接続を向けておく（待たない）
+            self._claim_launched_port("maya", port)
             self.statusBar().showMessage(
                 tr("Maya %s を起動しました（連携ポート :%d）%s",
                    "Launched Maya %s (bridge port :%d)%s")

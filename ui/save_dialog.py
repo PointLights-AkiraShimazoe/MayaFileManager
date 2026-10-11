@@ -40,6 +40,8 @@ class SaveDialog(QDialog):
         self._opt_ext = None            # 現在オプションを表示している拡張子
         self._result_path = ""
         self._result_opts = {}
+        self._archived_as = ""      # r140: 退避したファイル名
+        self._incr_available = False  # r140: インクリメンタルを出すか
         app = "Blender" if self._dcc == "blender" else "Maya"
         self.setWindowTitle("%s: %s" % (
             app, tr("選択を書き出し", "Export Selection") if self._mode == "export"
@@ -77,6 +79,18 @@ class SaveDialog(QDialog):
         grid.setColumnStretch(1, 1)
         root.addLayout(grid)
 
+        # r140: ルール側でインクリメンタルセーブが ON の時だけ出す。
+        from core.compat import QCheckBox as _QCheckBox
+        self._incr_cb = _QCheckBox(
+            tr("インクリメンタルセーブ", "Incremental save"))
+        self._incr_cb.setToolTip(tr(
+            "既存の最新ファイルを v??? へ退避してから、\n"
+            "最新表記の名前で保存します。",
+            "Archives the current latest file as v??? and saves this one\n"
+            "under the latest label."))
+        self._incr_cb.toggled.connect(lambda _v=False: self._refresh_auto_name())
+        root.addWidget(self._incr_cb)
+
         self._opt_box = QGroupBox(tr("オプション", "Options"))
         self._opt_layout = QGridLayout(self._opt_box)
         self._opt_layout.setHorizontalSpacing(8)
@@ -105,9 +119,12 @@ class SaveDialog(QDialog):
         # r119d: 自動命名は «設定するだけで何も起きない» 機能だった
         # （apply_auto_name に呼び出し元が無かった）。ここで繋ぐ。
         name = os.path.basename(initial_name or "")
-        auto = self._auto_name_suggestion(os.path.splitext(name)[0])
+        # r145: 自動命名は «拡張子なしの名前» を返す。拡張子は、選んでいた
+        # ファイル／直近の形式／DCC 既定の順で決める（下の分岐がやる）。
+        auto = self._auto_name_suggestion(bool(name))
         if auto:
-            name = auto + os.path.splitext(name)[1]
+            keep = os.path.splitext(name)[1]
+            name = auto + keep
         ext = os.path.splitext(name)[1].lower()
         if ext not in dcc_save.exts_for(self._dcc):
             last = self._remembered_ext()
@@ -116,6 +133,8 @@ class SaveDialog(QDialog):
         # r86: コンボの既定は «Optional（任意）»（＝index 0、ユーザー指示）。
         # 拡張子はファイル名側（name）に入っているので、この既定のままでも
         # 保存される形式は変わらない（effective_ext がファイル名から判定する）。
+        self._incr_available = self.incremental_available()
+        self._incr_cb.setVisible(self._incr_available)
         self._ext_combo.setCurrentIndex(0)
         self._ext_combo.currentIndexChanged.connect(self._on_ext_changed)
         self._name_edit.setText(name)
@@ -299,10 +318,19 @@ class SaveDialog(QDialog):
                 % os.path.basename(p), QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if ret != QMessageBox.Yes:
                 return
+        # r140: インクリメンタルセーブは «保存が確定した時だけ» 退避する。
+        # 退避は複製なので、この後の保存が失敗しても元の内容は残る。
+        if self.incremental_on():
+            dst, err = self._archive_for_incremental()
+            if err is not None:
+                QMessageBox.warning(
+                    self, self.windowTitle(),
+                    tr("既存の最新ファイルを退避できませんでした。\n%s",
+                       "Could not archive the existing latest file.\n%s") % err)
+                return
+            if dst:
+                self._archived_as = dst
         self._result_path = p
-        # r119d: 自動命名の連番は «保存が確定した時だけ» 進める
-        # （提案しただけで進めると、取り消した分だけ番号が飛ぶ）。
-        self._commit_auto_seq()
         self._result_opts = self.current_options()
         self._store_current_options()
         if self._sm is not None:
@@ -313,45 +341,90 @@ class SaveDialog(QDialog):
             self._sm.set("save_last_ext", d, save=True)   # save_options も同時に永続化
         self.accept()
 
-    # ── 自動命名（r119d）────────────────────────────────────────────
-    def _auto_naming(self):
-        """この保存先に効くルール (ルール, 連番)。無ければ (None, 0)。"""
+    # ── 自動命名（r140: 階層型）─────────────────────
+    def _auto_rule(self):
+        """この保存先に効くルール (rule, values)。無ければ (None, {})。"""
         if self._sm is None or not self._folder:
-            return None, 0
+            return None, {}
         try:
-            from core.file_operations import find_auto_name_rule, peek_auto_seq
-            enabled, rules = self._sm.get_active_auto_naming()
-            if not enabled or not rules:
-                return None, 0
-            _d, rule = find_auto_name_rule(self._folder, rules)
-            if not rule:
-                return None, 0
-            return rule, peek_auto_seq(self._folder, rule)
+            rule, values, _src = self._sm.resolve_auto_name_rule(self._folder)
+            return rule, values
         except Exception as _e:
-            _swallow(_e, "ui/save_dialog.py _auto_naming")
-            return None, 0
+            _swallow(_e, "ui/save_dialog.py _auto_rule")
+            return None, {}
 
-    def _auto_name_suggestion(self, base_name: str) -> str:
-        rule, seq = self._auto_naming()
+    def incremental_available(self) -> bool:
+        """ルール側でインクリメンタルセーブが ON か（オプションを出すか）。"""
+        from core import auto_name as _an
+        rule, _v = self._auto_rule()
+        return bool(rule) and _an.ver_settings(rule)["incremental"]
+
+    def incremental_on(self) -> bool:
+        """今回の保存でインクリメンタルセーブを使うか。
+
+        r140b: 判定に isVisible() を使わない。子ウィジェットの可視性は
+        親がまだ show() されていないと False なので、«出すつもりかどうか» とは
+        別物だった（実機でダイアログを開く前の判定が常に外れていた）。"""
+        cb = getattr(self, "_incr_cb", None)
+        return bool(self._incr_available and cb is not None and cb.isChecked())
+
+    def _auto_name_suggestion(self, had_selection: bool) -> str:
+        """提案するファイル名（**拡張子なし**）。口を出さない時は ""。
+
+        r140（ユーザー指示 2026-10-08）:
+          「インクリメンタルセーブのスイッチが ON になっていなければ、
+            選択しているファイル名が表示されるだけで OK です。何も選ばずで
+            保存とした場合か、インクリメンタルセーブのスイッチが ON に
+            なっているのみでの挙動となります。」
+        """
+        from core import auto_name as _an
+        rule, values = self._auto_rule()
         if not rule:
             return ""
+        incr = _an.ver_settings(rule)["incremental"]
+        if had_selection and not incr:
+            return ""              # 選んだファイル名をそのまま出す
         try:
-            from core.file_operations import expand_auto_name
-            return expand_auto_name(rule.get("template", "{seq:04d}"), seq,
-                                    directory=self._folder, name=base_name)
+            return _an.suggest_name(self._folder, rule, values, incr)
         except Exception as _e:
             _swallow(_e, "ui/save_dialog.py _auto_name_suggestion")
             return ""
 
-    def _commit_auto_seq(self):
-        rule, seq = self._auto_naming()
+    def _refresh_auto_name(self):
+        """インクリメンタルの入/切で {ver} の扱いが変わるので名前を付け直す。"""
+        from core import auto_name as _an
+        rule, values = self._auto_rule()
         if not rule:
             return
         try:
-            from core.file_operations import commit_auto_seq
-            commit_auto_seq(self._folder, rule, seq)
+            name = _an.suggest_name(self._folder, rule, values,
+                                    self.incremental_on())
         except Exception as _e:
-            _swallow(_e, "ui/save_dialog.py _commit_auto_seq")
+            _swallow(_e, "ui/save_dialog.py _refresh_auto_name")
+            return
+        if not name:
+            return
+        # r145: 提案は拡張子を持たない。今ついている拡張子を保つ
+        # （無ければ選択中の形式を付ける）。
+        cur_ext = os.path.splitext(self._name_edit.text().strip())[1]
+        if not cur_ext:
+            cur_ext = self.effective_ext() or ""
+        name = name + cur_ext
+        self._name_edit.blockSignals(True)
+        self._name_edit.setText(name)
+        self._name_edit.blockSignals(False)
+        self._on_name_changed(name)
+
+    def _archive_for_incremental(self):
+        """保存の直前に、既存の最新ファイルを «次の番号» へ退避する。
+
+        どのファイルを選んでいても、合致する最新バージョンを v??? へ送り、
+        最新（cur）が書き換わる。返り値は (退避先の名前, 例外)。"""
+        from core import auto_name as _an
+        rule, values = self._auto_rule()
+        if not rule:
+            return "", None
+        return _an.archive_latest(self._folder, rule, values)
 
     def result_path(self) -> str:
         return self._result_path

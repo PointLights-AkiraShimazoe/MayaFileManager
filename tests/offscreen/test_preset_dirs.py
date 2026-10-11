@@ -29,24 +29,43 @@ def _settle(ms=400):
     app.processEvents()
 
 
+def mark(label):
+    """このテストは実機で ACCESS_VIOLATION で死ぬことがある（2026-10-08）。
+    落ちると例外も Traceback も残らないので、どこまで進んだかを印で残す。
+    （ハーネスは -u で子を走らせるので、落ちてもここまでの出力は残る）"""
+    print("[step] " + label, flush=True)
+
+
 def _same(a, b):
     return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
 def s1():
+    mark("s1 start")
     a0, a1 = w._areas[0], w._areas[1]
+    mark("areas picked")
     for a in (a0, a1):
         a.quick_nav.set_active_preset("default", notify=False)
         a.quick_nav._link_btn.setChecked(False)
+    mark("link off")
 
     # default に居る状態でそれぞれ別のディレクトリへ
-    a0.browser.navigate_to(DIRS["a_def"]); a1.browser.navigate_to(DIRS["b_def"])
+    a0.browser.navigate_to(DIRS["a_def"])
+    mark("nav a_def")
+    a1.browser.navigate_to(DIRS["b_def"])
+    mark("nav b_def")
     _settle()
+    mark("settled 1")
 
     # エリア0 を MM へ → 記憶が無いので現在地のまま。そこで a_mm へ移動
     a0.quick_nav.set_active_preset("MM")
+    mark("preset MM")
     _settle()
-    a0.browser.navigate_to(DIRS["a_mm"]); _settle()
+    mark("settled 2")
+    a0.browser.navigate_to(DIRS["a_mm"])
+    mark("nav a_mm")
+    _settle()
+    mark("settled 3")
 
     # エリア1 は影響を受けていない（リンクOFF＝エリア毎に独立）
     assert _same(a1.browser.current_path(), DIRS["b_def"]), \
@@ -54,17 +73,22 @@ def s1():
 
     # エリア0 を default へ戻す → a_def が復元されること
     a0.quick_nav.set_active_preset("default")
+    mark("preset default")
     _settle()
+    mark("settled 4")
     assert _same(a0.browser.current_path(), DIRS["a_def"]), \
         ("default の記憶が復元されない", a0.browser.current_path())
 
     # もう一度 MM → a_mm が復元されること
     a0.quick_nav.set_active_preset("MM")
+    mark("preset MM again")
     _settle()
+    mark("settled 5")
     assert _same(a0.browser.current_path(), DIRS["a_mm"]), \
         ("MM の記憶が復元されない", a0.browser.current_path())
     print("per-area / per-preset directory memory: OK")
 
+    mark("state round-trip")
     # ── 状態保存で残る（再起動相当） ─────────────────────────────
     st = a0.get_state()
     assert st.get("preset_paths", {}).get("MM"), ("保存に含まれていない", st)
@@ -79,23 +103,36 @@ def s1():
         ("保存された記憶から復元されない", a1.browser.current_path())
     print("state round-trip keeps per-preset dirs: OK")
 
+    mark("linked presets")
     # ── 🔗リンクON: 連動して切り替わったエリアも «自分の記憶» で移動する ──
+    # r145: ここで断続的に ACCESS_VIOLATION になる。どの操作で落ちるかを
+    # 切り分けられるよう、1 手ごとに足跡を残す。
     for a in (a0, a1):
         a.quick_nav.set_active_preset("default", notify=False)
+    mark("lp: set default")
     a0.browser.navigate_to(DIRS["a_def"]); a1.browser.navigate_to(DIRS["b_def"])
+    mark("lp: navigated")
     _settle()
+    mark("lp: settled A")
     a0._preset_paths["MM"] = DIRS["a_mm"]
     a1._preset_paths["MM"] = DIRS["b_mm"]
     a0.quick_nav._link_btn.setChecked(True)      # リンクON（グローバル設定）
+    mark("lp: link on")
     _settle(120)
+    mark("lp: settled B")
     a0.quick_nav._preset_combo.setCurrentText("MM")
+    mark("lp: combo MM")
     _settle()
+    mark("lp: settled C")
     assert _same(a0.browser.current_path(), DIRS["a_mm"]), \
         ("リンクON: 操作したエリアが違う", a0.browser.current_path())
     assert _same(a1.browser.current_path(), DIRS["b_mm"]), \
         ("リンクON: 連動先が自分の記憶で移動していない", a1.browser.current_path())
+    mark("done")
     print("linked areas each restore their own dir: OK")
     finish(True)
 
 
-run(s1, delay=900)
+# r145: 実機（mayapy）で 40 秒の番犬に掛かるようになった。機能は通って
+# いるので番犬を伸ばす（止まった時の報告が遅れるだけ）。
+run(s1, delay=900, timeout=90000)

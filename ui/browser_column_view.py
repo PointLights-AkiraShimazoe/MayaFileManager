@@ -135,6 +135,7 @@ class _ColumnSizePopup(QFrame):
         self._view = None            # 対象カラム（QListView）
         self._btn = None
         self._mode = "list"          # r104: 今どのモード用に出しているか
+        self._saved_tip = None       # r129: 退避したボタンのツールチップ
         self.setObjectName("mfmSizePopup")
         self.setFrameShape(QFrame.NoFrame)
         lay = QHBoxLayout(self)
@@ -187,15 +188,56 @@ class _ColumnSizePopup(QFrame):
         self._label.setText("%dpx" % self._slider.value())
         self._apply_style()
         self.adjustSize()
-        # r103: 親（カラムビュー）の座標系で、ボタンの真下に出す。
+        # r129: ボタンの «同じ高さの右» に出す（ユーザー指示 2026-10-08）。
+        # 真下だと «切替の説明ツールチップ» と同じ場所を争って重なる。
         # はみ出す時は内側へ寄せる（子ウィジェットなのでクリップされるため）。
-        pos = self._owner.mapFromGlobal(btn.mapToGlobal(QPoint(0, btn.height() + 2)))
-        x = max(2, min(pos.x(), self._owner.width() - self.width() - 2))
+        anchor = btn.mapToGlobal(QPoint(btn.width() + 6,
+                                        (btn.height() - self.height()) // 2))
+        pos = self._owner.mapFromGlobal(anchor)
+        x = pos.x()
+        if x + self.width() + 2 > self._owner.width():
+            # 右に入らなければボタンの左へ（高さはそのまま）
+            left = self._owner.mapFromGlobal(
+                btn.mapToGlobal(QPoint(-6, 0))).x() - self.width()
+            x = left
+        x = max(2, min(x, self._owner.width() - self.width() - 2))
         y = max(2, min(pos.y(), self._owner.height() - self.height() - 2))
         self.move(QPoint(x, y))
+        # r129: ボタンの説明ツールチップと «2 重に出る» のを止める。
+        # すでに出ているものを消し、バーが出ている間は出ないようにする。
+        self._suppress_btn_tip(btn)
         self.show()
         self.raise_()
         self._hide_timer.stop()
+
+    # --- ツールチップの抑制（r129） ---------------------------------
+    def _suppress_btn_tip(self, btn):
+        try:
+            from core.compat import QtWidgets as _QtWidgets
+            _QtWidgets.QToolTip.hideText()
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py _suppress_btn_tip")
+        try:
+            if btn is not None and getattr(self, "_saved_tip", None) is None:
+                self._saved_tip = btn.toolTip()
+                btn.setToolTip("")
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py _suppress_btn_tip(set)")
+
+    def _restore_btn_tip(self):
+        tip = getattr(self, "_saved_tip", None)
+        if tip is None:
+            return
+        self._saved_tip = None
+        try:
+            if self._btn is not None:
+                self._btn.setToolTip(tip)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py _restore_btn_tip")
+
+    def hideEvent(self, e):
+        self._restore_btn_tip()
+        super().hideEvent(e)
 
     def _on_value(self, v):
         self._label.setText("%dpx" % v)
@@ -266,6 +308,18 @@ class _SizeButtonHover(QObject):
         self._timer.setInterval(self.HOVER_DELAY_MS)
         self._timer.timeout.connect(self._open_now)
 
+    def _cursor_on_button(self):
+        """今 «本物のカーソル» がボタンの上にあるか。
+
+        r128: 切り出してあるのは、テストから差し替えられるようにするため。
+        QTest.mouseMove は OS のカーソルを実際には動かさないので、
+        この判定をそのまま走らせると実機では常に False になる。
+        """
+        btn = self._btn
+        if btn is None or not btn.isVisible():
+            return False
+        return btn.rect().contains(btn.mapFromGlobal(QCursor.pos()))
+
     def _open_now(self):
         # 予約が切れた時点で «まだボタンの上に居る» ことを確かめてから出す。
         # 離れた直後にタイマーだけ生き残って開く、を防ぐ。
@@ -273,7 +327,7 @@ class _SizeButtonHover(QObject):
             btn = self._btn
             if btn is None or not btn.isVisible():
                 return
-            if not btn.rect().contains(btn.mapFromGlobal(QCursor.pos())):
+            if not self._cursor_on_button():
                 return
             self._owner.size_popup().show_for(self._view, btn)
         except Exception as e:
@@ -324,6 +378,14 @@ class _NoAnimationStyle(QProxyStyle):
         if SH_ANIMATION_DURATION is not None and hint == SH_ANIMATION_DURATION:
             return 0
         return super().styleHint(hint, option, widget, returnData)
+
+
+def _safe_delete(w):
+    """既に C++ 側が消えているウィジェットでも落ちない deleteLater（r144）。"""
+    try:
+        w.deleteLater()
+    except Exception as _e:
+        _swallow(_e, "ui/browser_column_view.py _safe_delete")
 
 
 class _ColumnResizeHandle(QWidget):
@@ -721,12 +783,32 @@ class CappedColumnView(QColumnView):
         self._mfm_columns.append(view)
         self._invalidate_expanded_cache()
         try:
-            view.destroyed.connect(lambda *_: self._on_column_destroyed())
+            # r144: destroyed は «C++ のデストラクタの中» から飛ぶ。この中で
+            # 他のカラムのメソッドを呼ぶと、QColumnView が同時に捨てている
+            # «死にかけのカラム» を叩いて ACCESS_VIOLATION で落ちる
+            # （test_preset_dirs の断続クラッシュ 3221225477 の正体）。
+            # ここでは «死んだ本人を自分の台帳から外す» だけにして、
+            # 走査と再描画は次のイベントループへ逃がす。
+            view.destroyed.connect(
+                lambda *_a, _i=id(view): self._on_column_destroyed(_i))
         except Exception as _e:
             _swallow(_e, "ui/browser_column_view.py:598 _track_column")
         QTimer.singleShot(0, self._repaint_columns)
 
-    def _on_column_destroyed(self):
+    def _on_column_destroyed(self, dead_id=None):
+        """破棄通知（デストラクタの中）。ここでは一切カラムを触らない。"""
+        if dead_id is not None:
+            # id() は «リストが参照を持っている間» 一意（解放されない）
+            self._mfm_columns = [c for c in self._mfm_columns
+                                 if id(c) != dead_id]
+        self._invalidate_expanded_cache()
+        try:
+            QTimer.singleShot(0, self._after_column_destroyed)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py _on_column_destroyed")
+
+    def _after_column_destroyed(self):
+        """破棄が終わってから走査・再描画する（r144）。"""
         self._live_columns()
         self._invalidate_expanded_cache()
         self._repaint_columns()
@@ -821,7 +903,9 @@ class CappedColumnView(QColumnView):
                                                 is_expanded_index=self._is_expanded_index))
         except Exception as _e:
             _swallow(_e, "ui/browser_column_view.py:670 createColumn")
-        # このカラムのフォルダの連携状態をワーカーへ要求（表示時に1回）
+        # このカラムの連携状態をワーカーへ要求する。
+        # r136: 自動更新のために «このカラムがどのフォルダか» を覚えておく。
+        view._mfm_folder_path = folder_path or ""
         try:
             if folder_path:
                 self._integrations().request_status(folder_path)
@@ -843,7 +927,9 @@ class CappedColumnView(QColumnView):
         # ハンドルはビューポートの子（カラムの子ではない）なので、カラム破棄時に
         # 一緒に消す
         _h = view._mfm_resize_handle
-        view.destroyed.connect(lambda *_a, h=_h: h.deleteLater())
+        # r144: これもデストラクタの中から飛ぶので、次のループへ逃がす
+        view.destroyed.connect(
+            lambda *_a, h=_h: QTimer.singleShot(0, lambda w=h: _safe_delete(w)))
         self._reposition_column_header(view)
         view.installEventFilter(self)
         view.viewport().installEventFilter(self)
@@ -1974,6 +2060,26 @@ class CappedColumnView(QColumnView):
             except Exception as _e:
                 _swallow(_e, "ui/browser_column_view.py:1523 _integrations")
         return mgr
+
+    def open_folder_paths(self):
+        """今開いているカラムのフォルダを左から順に返す（r136）。
+
+        注意: QColumnView はカラムを非同期に作っては捨てる。**タイマーから
+        定期的に呼ばないこと**（生成・破棄の最中に触ると落ちる。r136b）。"""
+        out, seen = [], set()
+        try:
+            for v in self.findChildren(QListView):
+                p = getattr(v, "_mfm_folder_path", "")
+                if not p:
+                    continue
+                k = os.path.normcase(os.path.abspath(p))
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(p)
+        except RuntimeError:
+            pass
+        return out
 
     def _on_integration_status(self, _directory: str):
         try:

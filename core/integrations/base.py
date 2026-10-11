@@ -36,6 +36,32 @@ def norm(p: str) -> str:
         return ""
 
 
+def is_under(path_key: str, root_key: str) -> bool:
+    """norm() 済みの 2 つを比べて «path が root の下（または同一）» かを返す（r137）。
+
+    単純な path.startswith(root + os.sep) だと **ドライブ直下がルートの時に
+    必ず外れる**。norm("S:\\") は "s:\\" のまま（末尾の区切りが残る）なので、
+    もう一つ区切りを足すと "s:\\\\" という存在しない前置きになる。
+
+    実際に踏んだ例（ユーザー報告 2026-10-08）:
+      ワークスペースの Root が "S:\\"（Google ドライブの共有ドライブ）だったため、
+      "S:\\" 自体は Perforce 管理下と認識されるのに、
+      "S:\\<共有フォルダ>\\..." が全部 «管理外» になっていた。
+    """
+    if not path_key or not root_key:
+        return False
+    if path_key == root_key:
+        return True
+    r = root_key
+    if len(r) > 1 and r[-1] in "\\/":
+        r = r[:-1]                      # "s:\\" -> "s:" / "c:\\foo\\" -> "c:\\foo"
+    if path_key == r:
+        return True
+    if r in ("", "/", "\\"):           # POSIX のルート
+        return path_key.startswith(("/", "\\"))
+    return path_key.startswith(r + os.sep) or path_key.startswith(r + "/")
+
+
 def which(*names):
     """PATH 上のコマンドを探す（最初に見つかったもの）。"""
     for n in names:

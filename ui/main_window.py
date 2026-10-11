@@ -26,10 +26,11 @@ from typing import Optional, List
 
 from core.compat import (
     Qt, Signal, QObject,
-    QMainWindow, QWidget, QHBoxLayout,
+    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QApplication,
     QLabel, QComboBox, QToolButton, QMenu, QMenuBar, QSplitter, QMessageBox, QFileDialog, QInputDialog, QDialog,
     QTimer
 )
+from core.compat import QtCore as _QtCore
 from core.settings_manager import SettingsManager
 from core.bookmark_manager import BookmarkManager
 from core.thumbnail_generator import ThumbnailManager
@@ -119,12 +120,18 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             f"Maya File Manager {version_string()}"
             + (f"  —  Maya {self._maya_ver}" if self._maya_ver else "")
         )
-        self.setMinimumSize(1024, 640)
+        # r144: 640px 下限だとエリアを縦に積んだ時に «ここから縮まない» に
+        # なる（ユーザー指摘 2026-10-08）。実用に耐える最小まで下げる。
+        self.setMinimumSize(720, 360)
 
         self._build_ui()
         self._build_menu()
         self._install_header()      # メニュー構築後（以降 self.menuBar() を呼ばない）
         self._restore_geometry()
+        # r145: 最前面表示は «ジオメトリ復元の後» に当てる（フラグ変更で
+        # ウィンドウが作り直されるため、先にやると復元した位置が飛ぶ）。
+        if bool(self._sm.get(self.ALWAYS_ON_TOP_KEY, False)):
+            QTimer.singleShot(0, lambda: self.set_always_on_top(True))
 
     # ------------------------------------------------------------------
     # UI Construction
@@ -162,6 +169,11 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         self._bm_dock = None
         self._hist_dock = None
         self.setCentralWidget(self._areas_split)
+        # r130: エリアの表示方式（並列 / タブ）を復元する。
+        self._active_area = 0
+        mode = self._sm.get(self.AREA_VIEW_MODE_KEY, "split")
+        self._area_view_mode = "tabs" if mode == "tabs" else "split"
+        self._apply_area_view_mode()
 
         # （旧「重複フォルダ検出」ドックは r56 で廃止。複数選択＋平坦/共通子
         #   フォルダ表示が上位互換で、再帰スキャンはリンク越しI/Oの温床だった）
@@ -214,6 +226,9 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         area.remove_requested.connect(self._on_area_remove)
         area.move_up_requested.connect(lambda a: self._on_area_move(a, -1))
         area.move_down_requested.connect(lambda a: self._on_area_move(a, +1))
+        # r130: 表示方式（並列 ⇄ タブ）
+        area.view_mode_toggle_requested.connect(self._toggle_area_view_mode)
+        area.tab_selected.connect(self._on_area_tab_selected)
 
         if after is not None and after in self._areas:
             pos = self._areas.index(after) + 1
@@ -231,21 +246,31 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
     def _on_area_add_below(self, area):
         # 件数が変わると保存済みの割合は当てはまらない。以後は現状を保存する。
         self._area_sizes_ready = True
-        self._add_area(after=area)
+        new = self._add_area(after=area)
+        if self._is_tab_mode():
+            # r130: 追加したタブをそのまま開く（見えないまま増えても困る）
+            try:
+                self._active_area = self._areas.index(new)
+            except ValueError:
+                pass
+            self._apply_area_view_mode()
+        return new
 
     def _on_area_remove(self, area):
         if len(self._areas) <= 1 or area not in self._areas:
             return
         self._area_sizes_ready = True
+        i = self._areas.index(area)
         self._areas.remove(area)
         area.setParent(None)
         area.deleteLater()
         # 互換エイリアスの付け替え
-        self._browser = self._areas[0].browser
-        self._bookmark_panel = self._areas[0].bookmark_panel
-        self._history_panel = self._areas[0].history_panel
-        self._quick_nav = self._areas[0].quick_nav
+        self._bind_aliases(self._areas[0])
         self._refresh_area_headers()
+        if self._is_tab_mode():
+            # r130: 消したタブの位置を引き継ぐ（末尾を消したら一つ前）
+            self._active_area = max(0, min(i, len(self._areas) - 1))
+            self._apply_area_view_mode()
         self._save_areas_state()
 
     def _on_area_move(self, area, delta):
@@ -259,6 +284,13 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         self._areas.insert(j, area)
         self._areas_split.insertWidget(j, area)
         self._refresh_area_headers()
+        if self._is_tab_mode():
+            # r130: 表示中のタブを動かしたのだから、表示もそれに付いていく
+            if self._active_area == i:
+                self._active_area = j
+            elif self._active_area == j:
+                self._active_area = i
+            self._apply_area_view_mode()
         self._save_areas_state()
 
     def _refresh_area_headers(self):
@@ -268,6 +300,14 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
                 a.set_index(i, n)
             except Exception as _e:
                 _swallow(_e, "ui/main_window.py:491 _refresh_area_headers")
+        if self._is_tab_mode():
+            labels = [tr("エリア %d", "Area %d") % (i + 1) for i in range(n)]
+            act = max(0, min(getattr(self, "_active_area", 0), n - 1))
+            for a in self._areas:
+                try:
+                    a.set_tabs(labels, act)
+                except Exception as _e:
+                    _swallow(_e, "ui/main_window.py _refresh_area_headers(tabs)")
 
     AREA_SIZES_KEY = "browser_area_sizes"
 
@@ -279,6 +319,66 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             _swallow(_e, "ui/main_window.py:498 _save_areas_state")
         self._save_area_sizes()
 
+    AREA_VIEW_MODE_KEY = "area_view_mode"
+
+    # ------------------------------------------------------------------
+    # エリアの表示方式: 並列（縦スプリッタ）⇄ タブ（r130）
+    # ------------------------------------------------------------------
+    # タブ表示は «アクティブ以外を hide() する» だけ。QSplitter は隠れた子に
+    # 場所を割かないので、並び順・状態保存・エリア操作はそのまま使える。
+    # +▲▼✕ の意味も変えない（追加 / 上へ / 下へ / 削除）が、タブ表示中は
+    # それが «表示中のタブ» に対する操作になる（ユーザー指示 2026-10-08）。
+
+    def _is_tab_mode(self) -> bool:
+        return getattr(self, "_area_view_mode", "split") == "tabs"
+
+    def _toggle_area_view_mode(self):
+        self._area_view_mode = "split" if self._is_tab_mode() else "tabs"
+        try:
+            self._sm.set(self.AREA_VIEW_MODE_KEY, self._area_view_mode)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _toggle_area_view_mode")
+        self._apply_area_view_mode()
+
+    def _apply_area_view_mode(self):
+        n = len(self._areas)
+        if n == 0:
+            return
+        self._active_area = max(0, min(getattr(self, "_active_area", 0), n - 1))
+        tabs = self._is_tab_mode()
+        labels = [tr("エリア %d", "Area %d") % (i + 1) for i in range(n)]
+        for i, a in enumerate(self._areas):
+            try:
+                a.set_view_mode(self._area_view_mode)
+                if tabs:
+                    a.set_tabs(labels, self._active_area)
+                a.setVisible((not tabs) or i == self._active_area)
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py _apply_area_view_mode")
+        if tabs:
+            self._bind_aliases(self._areas[self._active_area])
+        else:
+            self._bind_aliases(self._areas[0])
+            QTimer.singleShot(0, self._restore_area_sizes)
+
+    def _bind_aliases(self, area):
+        """既存機能が見ている «代表エリア» の参照を付け替える。"""
+        try:
+            self._browser = area.browser
+            self._bookmark_panel = area.bookmark_panel
+            self._history_panel = area.history_panel
+            self._quick_nav = area.quick_nav
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _bind_aliases")
+
+    def _on_area_tab_selected(self, index: int):
+        if not self._is_tab_mode():
+            return
+        if not (0 <= index < len(self._areas)) or index == self._active_area:
+            return
+        self._active_area = index
+        self._apply_area_view_mode()
+
     def _save_area_sizes(self):
         """エリアの縦の高さを保存する（r119g）。
 
@@ -288,6 +388,10 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         **復元が済むまでは書かない。** 起動直後のレイアウトでも
         splitterMoved が飛ぶため、保存値を均等割りで潰してしまう。"""
         if not getattr(self, "_area_sizes_ready", False):
+            return
+        if self._is_tab_mode():
+            # r130: タブ表示中は 1 つしか見えていない。その比率を書くと
+            # 並列に戻した時に «他が潰れた» 状態で復元される。
             return
         try:
             sizes = [int(x) for x in self._areas_split.sizes()]
@@ -304,6 +408,9 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         """保存した割合で高さを戻す。エリア数が変わっていたら何もしない。
 
         終わったら «以後は保存してよい» 印を立てる。"""
+        if self._is_tab_mode():
+            self._area_sizes_ready = True
+            return
         try:
             ratios = self._sm.get(self.AREA_SIZES_KEY, None)
             if not isinstance(ratios, list) or len(ratios) != len(self._areas):
@@ -333,11 +440,28 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         # deleteLater する。そのため QMainWindow.menuBar() が作る既定バーは使わず、
         # _build_menu が自前の QMenuBar（self._menubar）にメニューを構築し、
         # ここでヘッダ行へ組み込む。以降どこでも self.menuBar() を呼ばないこと。
-        from ui.dcc_header import _HeaderRow
+        from ui.dcc_header import _HeaderRow, PrefsBlock, LeadBlock
         mb = self._menubar
         mb.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        # r134: メニューバーの真下の空きに «言語 / テーマ» のプルダウンを置く
+        self._prefs_blk = PrefsBlock()
+        self._prefs_blk.set_values(self._sm.get("ui_language", "auto"),
+                                   self._sm.get("theme", "dark"))
+        self._prefs_blk.language_changed.connect(self._on_language_changed)
+        self._prefs_blk.theme_changed.connect(self._on_theme_changed)
+        # r145: メニューバーの左隣に «最前面表示» と «コンパクトモード»
+        self._lead_blk = LeadBlock()
+        self._lead_blk.set_always_on_top(
+            bool(self._sm.get(self.ALWAYS_ON_TOP_KEY, False)))
+        self._lead_blk.always_on_top_toggled.connect(self.set_always_on_top)
+        self._lead_blk.compact_toggled.connect(self.set_compact_mode)
+        # r145: コンパクトから開く向き（右下→左下→左上→右上）
+        self._lead_blk.set_open_dir(self._sm.get("compact_open_dir", "dr"))
+        self._lead_blk.open_dir_changed.connect(self.set_compact_open_dir)
         # 手動レイアウト: 起動ボタンがウィンドウ中央に来るように DCC ブロックを配置
-        header = _HeaderRow(mb, self._dcc_hdr, self._action_blk, self)
+        header = _HeaderRow(mb, self._dcc_hdr, self._action_blk, self,
+                            prefs_block=self._prefs_blk,
+                            lead_block=self._lead_blk)
         header.setObjectName("mfmHeaderCorner")     # 視認性の階層: 最も沈めた面
         header.setAttribute(Qt.WA_StyledBackground, True)
         self.setMenuWidget(header)
@@ -475,6 +599,26 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         self._integ_act.setChecked(bool(self._sm.get("integrations_enabled", True)))
         self._integ_act.toggled.connect(
             lambda v: self._sm.set("integrations_enabled", bool(v)))
+        # r136: 連携状態の自動更新。オフにすると従来どおり
+        # «表示時に 1 回＋手動更新»。オンは即時反映。
+        from ui.browser_panel import BrowserPanel as _BP
+        self._integ_auto_act = edit_menu.addAction(
+            tr("連携状態を自動で更新（%d 秒ごと／窓を戻した時）",
+               "Refresh integration status automatically (every %ds / on focus)")
+            % _BP.INTEG_AUTO_DEFAULT)
+        self._integ_auto_act.setCheckable(True)
+        self._integ_auto_act.setChecked(
+            int(self._sm.get(_BP.INTEG_AUTO_KEY, _BP.INTEG_AUTO_DEFAULT) or 0) > 0)
+        self._integ_auto_act.toggled.connect(self._on_integ_auto_toggled)
+        # r141: DCC へ送ったらそのウィンドウを最前面へ（ユーザー指示 2026-10-08）
+        self._raise_act = edit_menu.addAction(
+            tr("送った DCC のウィンドウを最前面に出す",
+               "Bring the target DCC window to front when sending"))
+        self._raise_act.setCheckable(True)
+        self._raise_act.setChecked(
+            bool(self._sm.get(self.RAISE_ON_SEND_KEY, True)))
+        self._raise_act.toggled.connect(
+            lambda v: self._sm.set(self.RAISE_ON_SEND_KEY, bool(v)))
 
         # ── ブックマーク ──────────────────────────────────────────────
         bm_menu = mb.addMenu(tr("ブックマーク", "Bookmarks"))
@@ -573,14 +717,14 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
                                         "Added %d item(s) to bookmarks") % added)
 
     def _open_dialog(self):
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = pick_open_file(
             self, "ファイルを開く", "", "Scenes (*.ma *.mb *.blend);;All (*.*)"
         )
         if path:
             self._dcc_open(path)
 
     def _import_dialog(self):
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = pick_open_file(
             self, "インポート", "",
             "3D Files (*.ma *.mb *.blend *.fbx *.obj *.abc *.usd *.usda *.usdc *.gltf *.glb);;All (*.*)"
         )
@@ -588,7 +732,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             self._dcc_import(path)
 
     def _reference_dialog(self):
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = pick_open_file(
             self, "リファレンス / リンク", "",
             "Scenes (*.ma *.mb *.blend *.fbx);;All (*.*)"
         )
@@ -607,7 +751,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
 
     def _show_tool_window(self, attr: str, factory, reuse: bool = True):
         """非モーダルの道具窓を開く（実体は ui/dialog_util）。"""
-        from ui.dialog_util import show_tool_window
+        from ui.dialog_util import show_tool_window, pick_directory, pick_open_file
         return show_tool_window(self, attr, factory, reuse=reuse)
 
     def _open_preset_editor(self):
@@ -690,6 +834,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             except Exception as _e:
                 _swallow(_e, "ui/main_window.py:1937 _on_settings_changed")
         self._thumb_mgr.set_cache_size(self._sm.get("thumbnail_cache_size", 256))
+        self.sync_prefs_block()        # r134: ヘッダのプルダウンとずれさせない
         self.statusBar().showMessage(tr("設定を適用しました", "Settings applied"))
 
     def _open_batch_rename(self, paths=None):
@@ -740,31 +885,398 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         dock.show()
         dock.raise_()
 
+    # ------------------------------------------------------------------
+    # 表示言語 / テーマ（ヘッダのプルダウン。r134）
+    # ------------------------------------------------------------------
+
+    def _on_language_changed(self, value: str):
+        if self._sm.get("ui_language", "auto") == value:
+            return
+        try:
+            self._sm.set("ui_language", value)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _on_language_changed")
+        self._relaunch_ui(tr("表示言語を適用しています…",
+                             "Applying the UI language…"))
+
+    def _on_theme_changed(self, value: str):
+        if self._sm.get("theme", "dark") == value:
+            return
+        try:
+            self._sm.set("theme", value)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _on_theme_changed")
+        self._relaunch_ui(tr("テーマを適用しています…",
+                             "Applying the theme…"))
+
+    # ------------------------------------------------------------------
+    # テーマ / 言語の «プロセスを落とさない再適用»（r135）
+    # ------------------------------------------------------------------
+    # なぜ作り直すのか:
+    #   apply_theme() を呼び直すだけでは足りない。UI のあちこちで
+    #   setStyleSheet("... % qss_vars()") と «生成時の色を焼き込んでいる» ため、
+    #   アプリ全体の QSS を差し替えても古い色が残る。tr() も同じで、
+    #   文字列はウィジェットを作った時点の言語で固まっている。
+    #   全部に refresh フックを生やすより、窓ごと作り直す方が取りこぼしが無い。
+    # プロセス再起動にしない理由:
+    #   Maya 内組込みでは Maya ごと落とすことになる。単一起動ガードとも
+    #   競合する。窓だけ作り直せばどちらも避けられる。
+
+    def _relaunch_ui(self, note: str = ""):
+        if getattr(self, "_rebuilding", False):
+            return None
+        self._rebuilding = True
+        overlay = self._show_busy_overlay(note)
+        try:
+            self._close_tool_windows()
+            self._persist_for_relaunch()
+            self._apply_prefs_now()
+            new = self._spawn_replacement()
+        except Exception as e:
+            _swallow(e, "ui/main_window.py _relaunch_ui")
+            self._rebuilding = False
+            if overlay is not None:
+                overlay.deleteLater()
+            return None
+        # 古い窓は «シグナルの外» で閉じる（コンボのスロットの中で自分を
+        # 消すと C++ 側が死んだオブジェクトへ戻ってくる）。
+        QTimer.singleShot(0, self._finish_relaunch)
+        return new
+
+    def _finish_relaunch(self):
+        try:
+            self.close()
+            self.setParent(None)
+            self.deleteLater()
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _finish_relaunch")
+
+    def _show_busy_overlay(self, note: str):
+        """«適用しています…» の覆い。作り直しの間のチラつきを隠す。"""
+        if not note:
+            return None
+        try:
+            from core.theme_engine import qss_vars
+            v = qss_vars()
+            ov = QWidget(self)
+            ov.setObjectName("mfmBusyOverlay")
+            ov.setAttribute(Qt.WA_StyledBackground, True)
+            ov.setStyleSheet(
+                "#mfmBusyOverlay{background:%(surface)s;}"
+                "QLabel{color:%(on_surface)s;font-size:%(title_px)spx;}"
+                % dict(v, title_px=v.get("label_px", 11)))
+            lay = QVBoxLayout(ov)
+            lab = QLabel(note, ov)
+            lab.setAlignment(Qt.AlignCenter)
+            lay.addWidget(lab)
+            ov.setGeometry(self.rect())
+            ov.show()
+            ov.raise_()
+            QApplication.processEvents()
+            return ov
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _show_busy_overlay")
+            return None
+
+    def _close_tool_windows(self):
+        """開いている非モーダルの道具窓を閉じる（古い窓の子なので残せない）。"""
+        for attr in [a for a in list(vars(self)) if a.endswith("_dlg")]:
+            try:
+                d = getattr(self, attr, None)
+                if d is not None:
+                    d.close()
+                    d.deleteLater()
+                setattr(self, attr, None)
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py _close_tool_windows")
+
+    def _persist_for_relaunch(self):
+        """作り直し前に «復元に要るもの» を全部書き出す。
+
+        set(..., save=False) で止まっている値が残っているので、最後に save()。"""
+        try:
+            self._sm.set("window_geometry",
+                         self.saveGeometry().toHex().data().decode(), save=False)
+            self._sm.set("window_state",
+                         self.saveState(4).toHex().data().decode(), save=False)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _persist_for_relaunch(geom)")
+        try:
+            self._sm.set("last_path", self._browser.current_path(), save=False)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _persist_for_relaunch(path)")
+        self._area_sizes_ready = True
+        self._save_areas_state()
+        try:
+            self._sm.save()
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _persist_for_relaunch(save)")
+
+    def _apply_prefs_now(self):
+        """言語とテーマを «これから作るウィジェット» に効く形で適用する。"""
+        from core import i18n
+        from core.theme_engine import set_mode
+        try:
+            i18n.set_language(self._sm.get("ui_language", "auto"))
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _apply_prefs_now(lang)")
+        mode = self._sm.get("theme", "dark")
+        try:
+            set_mode(mode)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _apply_prefs_now(mode)")
+        # Maya 内では Maya 全体の見た目を壊すのでアプリ全体には当てない（r82）。
+        if self._inside_maya:
+            return
+        try:
+            from core.theme_engine import apply_theme
+            app = QApplication.instance()
+            if app is not None:
+                apply_theme(app, mode=mode)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _apply_prefs_now(apply)")
+
+    def _spawn_replacement(self):
+        """同じ設定で MainWindow をもう一つ作って表に出す。"""
+        new = MainWindow(self._sm, maya_installation=self._maya_inst)
+        new.show()
+        new.raise_()
+        new.activateWindow()
+        # 単一起動ガードの «2 つ目が来たら前面へ» が古い窓を指さないようにする。
+        try:
+            import main as _m
+            if hasattr(_m, "register_main_window"):
+                _m.register_main_window(new, in_maya=self._inside_maya)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _spawn_replacement(register)")
+        return new
+
+    def sync_prefs_block(self):
+        """設定ダイアログから変えられた時にヘッダの表示を合わせる（r134）。"""
+        blk = getattr(self, "_prefs_blk", None)
+        if blk is None:
+            return
+        blk.set_values(self._sm.get("ui_language", "auto"),
+                       self._sm.get("theme", "dark"))
+
+    # ------------------------------------------------------------------
+    # 連携状態の自動更新（r136）
+    # ------------------------------------------------------------------
+
+    def _on_integ_auto_toggled(self, on: bool):
+        from ui.browser_panel import BrowserPanel as _BP
+        self._sm.set(_BP.INTEG_AUTO_KEY,
+                     _BP.INTEG_AUTO_DEFAULT if on else 0)
+        for a in getattr(self, "_areas", []):
+            try:
+                a.browser.apply_integration_auto_refresh()
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py _on_integ_auto_toggled")
+        self.statusBar().showMessage(
+            tr("連携状態の自動更新を入にしました",
+               "Automatic integration refresh is on") if on else
+            tr("連携状態は表示時と手動更新のみにしました",
+               "Integration status now updates on open and manual refresh only"),
+            6000)
+
+    def changeEvent(self, event):
+        """窓が前面に戻ったら連携状態を見直す（r136）。
+
+        他アプリ（P4V 等）でチェックアウトして戻ってくるのが典型。
+
+        r136b: **ここでは何もしない。** changeEvent は Qt の都合で呼ばれ、
+        窓の破棄中にも来る。その最中にエリアやブラウザを辿ると、
+        すでに C++ 側が消えているものを掴むことがある。次のイベントループへ
+        逃がしておけば、その時点で窓が生きているかを見てから触れられる。"""
+        try:
+            if (event is not None
+                    and event.type() == _QtCore.QEvent.ActivationChange):
+                QTimer.singleShot(0, self._refresh_integrations_if_active)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py changeEvent")
+        super().changeEvent(event)
+
+    def _refresh_integrations_if_active(self):
+        try:
+            if not self.isVisible() or not self.isActiveWindow():
+                return
+            areas = list(getattr(self, "_areas", []) or [])
+        except RuntimeError:
+            return                      # 窓がもう無い
+        for a in areas:
+            try:
+                a.browser.refresh_integrations_on_activate()
+            except (RuntimeError, AttributeError):
+                pass
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py _refresh_integrations_if_active")
+
+    LOGO_FILE = "pls_logo.png"
+
+    @staticmethod
+    def _logo_pixmap(width=240):
+        """PointLights のロゴを読む（r131）。無ければ None。
+
+        原本は CMYK の JPEG（BREST/Logo/PLs）。Qt は CMYK JPEG を確実には
+        読めないので、RGB の PNG に落としたものを同梱している。"""
+        import os as _os
+        from core.compat import QPixmap
+        path = _os.path.join(_os.path.dirname(_os.path.dirname(
+            _os.path.abspath(__file__))), "resources", "icons",
+            MainWindow.LOGO_FILE)
+        if not _os.path.isfile(path):
+            return None
+        pm = QPixmap(path)
+        if pm.isNull():
+            return None
+        if pm.width() > width:
+            pm = pm.scaledToWidth(width, Qt.SmoothTransformation)
+        return pm
+
     def _about(self):
+        """バージョン情報（r131: 非モーダル）。
+
+        r119 の «原則 Manager を止めない» に合わせ、他の道具窓と同じ扱いにする。"""
+        self._show_tool_window("_about_dlg", self._build_about_dialog)
+
+    def _build_about_dialog(self, parent=None):
+        parent = parent if parent is not None else self
         # r119: バージョンは core/version.py を唯一の出所にする
         # （ここに手書きしていたため «v1.0» のまま取り残されていた）。
         from core.version import version_string, COPYRIGHT
-        QMessageBox.about(
-            self, "Maya File Manager",
-            "Maya File Manager %s\n\n%s\nPySide2 / PySide6\n\n%s"
-            % (version_string(),
-               tr("Maya 2023 以降対応", "Supports Maya 2023 and later"),
-               COPYRIGHT))
+        from core.compat import QDialog, QVBoxLayout, QHBoxLayout, QPushButton
+        from core.theme_engine import qss_vars
+        v = qss_vars()
+        body = ("Maya File Manager %s\n\n%s\nPySide2 / PySide6\n\n%s"
+                % (version_string(),
+                   tr("Maya 2023 以降対応", "Supports Maya 2023 and later"),
+                   COPYRIGHT))
+        dlg = QDialog(parent)
+        dlg.setWindowTitle(tr("バージョン情報", "About"))
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(20, 18, 20, 14)
+        lay.setSpacing(12)
+        pm = self._logo_pixmap(240)
+        if pm is not None:
+            # ロゴは白地。ダークでもライトでも読めるよう白いカードに載せる。
+            holder = QLabel(dlg)
+            holder.setPixmap(pm)
+            holder.setAlignment(Qt.AlignCenter)
+            # ロゴは «白地の上に成り立つ意匠» の絵柄なので、ダークでも白い台に載せる。
+            # その «テーマによらず白» をトークン artwork_backdrop として持つ（r131）。
+            holder.setStyleSheet(
+                "background:%(artwork_backdrop)s;border-radius:%(r_m)spx;"
+                "padding:10px;" % v)
+            lay.addWidget(holder, 0, Qt.AlignHCenter)
+        txt = QLabel(body, dlg)
+        txt.setAlignment(Qt.AlignHCenter)
+        txt.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        txt.setStyleSheet("color:%(on_surface)s;" % v)
+        lay.addWidget(txt)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        ok = QPushButton(tr("閉じる", "Close"), dlg)
+        ok.setDefault(True)
+        ok.clicked.connect(dlg.accept)
+        row.addWidget(ok)
+        lay.addLayout(row)
+        return dlg
 
     # ------------------------------------------------------------------
     # Window state
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # 最前面表示 / コンパクトモード（r145、ユーザー指示 2026-10-09）
+    # ------------------------------------------------------------------
+    ALWAYS_ON_TOP_KEY = "always_on_top"
+
+    def set_always_on_top(self, on: bool):
+        """すべてのウィンドウの上に出す／やめる。
+
+        Windows ではフラグを変えると一度ウィンドウが作り直されるので、
+        位置と大きさを自分で持ち越す（放っておくと左上へ飛ぶ）。"""
+        on = bool(on)
+        try:
+            self._sm.set(self.ALWAYS_ON_TOP_KEY, on)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py set_always_on_top(save)")
+        try:
+            if bool(self.windowFlags() & Qt.WindowStaysOnTopHint) == on:
+                return
+            geo = self.geometry()
+            visible = self.isVisible()
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+            self.setGeometry(geo)
+            if visible:
+                self.show()
+                self.raise_()
+        except Exception as e:
+            try:
+                from ui.browser_panel import _mfm_log
+                _mfm_log("always_on_top failed: %r" % (e,))
+            except Exception:
+                pass
+        try:
+            self._lead_blk.set_always_on_top(on)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py set_always_on_top(ui)")
+
+    def _compact(self):
+        """コンパクトモードの制御（遅延生成）。"""
+        c = getattr(self, "_compact_ctl", None)
+        if c is None:
+            from ui.compact_mode import CompactController
+            c = CompactController(self, self._sm)
+            self._compact_ctl = c
+        return c
+
+    def set_compact_mode(self, on: bool):
+        """コンパクトモードの入り切り（r145）。
+
+        入る時は最前面表示も一緒に入れる。そうしないとパックが Maya の裏に
+        回ってしまい «乗せる» ことができない。"""
+        if bool(on):
+            self.set_always_on_top(True)
+        self._compact().set_active(bool(on))
+
+    def enter_compact_mode(self):
+        self.set_compact_mode(True)
+
+    def leave_compact_mode(self):
+        self.set_compact_mode(False)
+
+    def is_compact_mode(self) -> bool:
+        return self._compact().is_active()
+
+    def set_compact_open_dir(self, d: str):
+        """コンパクトから開く向きを変える（r145、指示 2026-10-09）。"""
+        self._compact().set_open_dir(d)
+        try:
+            self._lead_blk.set_open_dir(self._compact().open_dir())
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py set_compact_open_dir")
+
+    def sync_compact_button(self):
+        """ヘッダのボタンの «光っている/いない» を今の状態に合わせる。"""
+        try:
+            self._lead_blk.set_compact(self._compact().is_active())
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py sync_compact_button")
 
     def _restore_geometry(self):
         geom = self._sm.get("window_geometry")
         state = self._sm.get("window_state")
         if geom:
             try:
-                from core.compat import Qt
-                import base64
                 self.restoreGeometry(bytes.fromhex(geom))
             except Exception as _e:
                 _swallow(_e, "ui/main_window.py:2000 _restore_geometry")
+            # r145: 保存位置が «今つながっている画面の外» なら引き戻す。
+            # モニタ構成が変わった（サブを外した・配置を変えた）後に起動すると、
+            # 画面外に開いて «起動しない» ように見える（実機 2026-10-09:
+            # 保存値が x=-2143, y=-606 / screenNumber=3 だった）。
+            self._pull_onto_screen()
         if state:
             try:
                 # version=3: プリセット行のエリア内移動に伴い旧状態を無効化
@@ -772,6 +1284,45 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
                 self.restoreState(bytes.fromhex(state), 4)
             except Exception as _e:
                 _swallow(_e, "ui/main_window.py:2007 _restore_geometry")
+
+    def _pull_onto_screen(self, min_visible: int = 120):
+        """ウィンドウが «どの画面にも十分に載っていない» なら中央へ戻す。
+
+        min_visible: 載っていると見なす最小の重なり（px 四方）。タイトルバーを
+        掴める程度は見えていないと «起動しない» のと同じ。"""
+        from core.compat import QApplication
+        try:
+            frame = self.frameGeometry()
+            best = 0
+            for sc in QApplication.screens():
+                a = sc.availableGeometry().intersected(frame)
+                if a.isValid():
+                    best = max(best, min(a.width(), a.height()))
+            if best >= min_visible:
+                return
+            sc = QApplication.primaryScreen()
+            if sc is None:
+                return
+            av = sc.availableGeometry()
+            w = min(self.width() or 1200, max(1, av.width() - 40))
+            h = min(self.height() or 800, max(1, av.height() - 60))
+            self.resize(max(w, self.minimumWidth()), max(h, self.minimumHeight()))
+            g = self.frameGeometry()
+            g.moveCenter(av.center())
+            self.move(g.topLeft())
+            self._log_quiet("geometry: 画面外だったので中央へ戻した frame=%r"
+                            % (frame,))
+        except Exception as e:
+            self._log_quiet("pull_onto_screen failed: %r" % (e,))
+
+    @staticmethod
+    def _log_quiet(msg: str):
+        """ログに残すだけ（失敗しても何もしない）。"""
+        try:
+            from ui.browser_panel import _mfm_log
+            _mfm_log(msg)
+        except Exception:
+            pass
 
     def closeEvent(self, event):
         # version=3: ナビツールバー廃止（プリセット行はエリア内へ移動）に伴い
@@ -784,10 +1335,13 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             _swallow(_e, "ui/main_window.py:2017 closeEvent")
         self._save_areas_state()
         self._sm.save()
-        # Undo 用の作業ごみ箱（削除の取り消し先）を OS のごみ箱へ送る（r62）
-        try:
-            from core.undo_stack import get_undo_stack
-            get_undo_stack().dispose_all()
-        except Exception as _e:
-            _swallow(_e, "ui/main_window.py:2025 closeEvent")
+        # Undo 用の作業ごみ箱（削除の取り消し先）を OS のごみ箱へ送る（r62）。
+        # r135: ただしテーマ/言語の作り直しは «終了» ではないので捨てない。
+        # ここで捨てると、テーマを変えただけで Undo が全部吸われる。
+        if not getattr(self, "_rebuilding", False):
+            try:
+                from core.undo_stack import get_undo_stack
+                get_undo_stack().dispose_all()
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py:2025 closeEvent")
         super().closeEvent(event)

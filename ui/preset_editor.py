@@ -26,6 +26,7 @@ from core.compat import (
     QPoint
 )
 from core.maya_version import is_running_inside_maya
+from ui.dialog_util import pick_directory, pick_open_file  # r145
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +115,7 @@ class ReferenceEntryWidget(QFrame):
         layout.addWidget(del_btn)
 
     def _browse(self):
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = pick_open_file(
             self, "リファレンスファイルを選択", "",
             "Maya / FBX (*.ma *.mb *.fbx);;All (*.*)"
         )
@@ -280,7 +281,7 @@ class ScriptEntryWidget(QFrame):
     def _browse_file(self):
         lang = self._lang_combo.currentText()
         ext_filter = "Python (*.py)" if lang == "python" else "MEL (*.mel)"
-        path, _ = QFileDialog.getOpenFileName(self, tr("スクリプトファイルを選択", "Select a script file"),
+        path, _ = pick_open_file(self, tr("スクリプトファイルを選択", "Select a script file"),
                                               "", ext_filter + ";;All (*.*)")
         if path:
             self._file_edit.setText(path)

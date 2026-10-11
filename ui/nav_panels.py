@@ -28,7 +28,7 @@ from core.compat import (
     Qt, Signal, QObject,
     QMainWindow, QWidget, QHBoxLayout,
     QLabel, QComboBox, QToolButton, QMenu, QMenuBar, QSplitter, QMessageBox, QFileDialog, QInputDialog, QDialog,
-    QTimer
+    QTimer, QScrollArea, QFrame, QSizePolicy
 )
 from core.settings_manager import SettingsManager
 from core.bookmark_manager import BookmarkManager
@@ -164,7 +164,9 @@ class QuickNavBar(QWidget):
         from core.i18n import tr as _tr
         layout.addWidget(QLabel(_tr("プリセット:", "Preset:")))
         self._preset_combo = QComboBox()
-        self._preset_combo.setFixedWidth(120)
+        # r144: 上限つきの可変幅（狭い時は詰まる）
+        self._preset_combo.setMinimumWidth(84)
+        self._preset_combo.setMaximumWidth(120)
         self._preset_combo.currentTextChanged.connect(self._on_preset_changed)
         layout.addWidget(self._preset_combo)
 
@@ -201,17 +203,45 @@ class QuickNavBar(QWidget):
         self._btn_layout = QHBoxLayout(self._container)
         self._btn_layout.setContentsMargins(0, 0, 0, 0)
         self._btn_layout.setSpacing(4)
-        layout.addWidget(self._container)
-        layout.addStretch()
+        # r144: ナビボタンを «そのまま» 並べると、ボタンの合計幅がそのまま
+        # ウィンドウ幅の下限になる（ユーザー指摘 2026-10-08: 細くできない）。
+        # 横スクロールに入れて、狭い時は溢れた分をスクロールで出す。
+        self._btn_scroll = QScrollArea()
+        self._btn_scroll.setObjectName("mfmPresetScroll")
+        self._btn_scroll.setWidget(self._container)
+        self._btn_scroll.setWidgetResizable(True)
+        self._btn_scroll.setFrameShape(QFrame.NoFrame)
+        self._btn_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._btn_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._btn_scroll.setMinimumWidth(80)
+        self._btn_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._btn_scroll.setStyleSheet(
+            "#mfmPresetScroll{background:transparent;border:none;}"
+            "#mfmPresetScroll > QWidget > QWidget{background:transparent;}")
+        layout.addWidget(self._btn_scroll, 1)
 
         self.refresh()
 
     def refresh(self):
+        # r145: 窓を閉じる途中など、C++ 側が先に消えていることがある。
+        # 触る前に «生きているか» を確かめて、死んでいたら黙って帰る。
+        try:
+            self._btn_layout.count()
+        except RuntimeError:
+            return
         # Clear existing buttons
         while self._btn_layout.count():
             item = self._btn_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            w = item.widget() if item is not None else None
+            if w is not None:
+                # r145: «親から外してから» 捨てる。deleteLater だけだと、
+                # 捨てた後にスクロールエリアの再レイアウトが走った時に
+                # 死にかけのウィジェットを触りうる（実機で
+                # 「Internal C++ object (QHBoxLayout) already deleted」が
+                # 出ていたのと同じ経路。捕まらないと ACCESS_VIOLATION）。
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
         self._buttons.clear()
 
         # Populate preset combo（選択はこのエリア固有の self._active を使う）
@@ -238,6 +268,7 @@ class QuickNavBar(QWidget):
             btn.clicked.connect(lambda checked=False, p=path: self.navigate_requested.emit(p))
             self._btn_layout.addWidget(btn)
             self._buttons.append(btn)
+        self._btn_layout.addStretch(1)      # r144: ボタンは左詰めのまま
 
     def active_preset(self) -> str:
         return self._active

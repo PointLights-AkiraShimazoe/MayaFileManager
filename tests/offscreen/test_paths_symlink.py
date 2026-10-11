@@ -32,7 +32,7 @@ def s1():
         def parent(self): return Idx(self.n[:-1])
     class Mdl:
         def fileName(self, i): return i.n[-1]
-    assert _safe_file_path(Mdl(), Idx(["ローカル ディスク (C:)", "GameStudio"])) == "C:/GameStudio"
+    assert _safe_file_path(Mdl(), Idx(["ローカル ディスク (C:)", "Work"])) == "C:/Work"
     assert _safe_file_path(Mdl(), Idx(["Local Disk (D:)"])) == "D:/"
     print("drive label normalization: OK")
     b.navigate_to(link)

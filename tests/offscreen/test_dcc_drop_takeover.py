@@ -48,6 +48,8 @@ class _W:
     _dcc_once = _M._dcc_once
     _dcc_accepts = _M._dcc_accepts
     _dcc_guarded = _M._dcc_guarded          # r123: 共通の関所
+    _dcc_begin_op = _M._dcc_begin_op        # r145: 操作 ID の発行
+    _dcc_end_op = _M._dcc_end_op
     _maya_run_script_now = _M._maya_run_script_now
 
     def __init__(self, connected=True, action="open"):

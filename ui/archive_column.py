@@ -31,6 +31,7 @@ except ImportError:  # PySide2
 
 from core import archive_browse as ab
 from core.i18n import tr
+from ui.dialog_util import pick_directory, pick_open_file  # r145
 
 INNER_ROLE = Qt.UserRole + 11       # 書庫内パス（"/" 区切り）
 ISDIR_ROLE = Qt.UserRole + 12
@@ -236,7 +237,7 @@ class ArchiveColumn(QWidget):
 
     def _extract_dialog(self, names):
         start = os.path.dirname(self._archive) or ""
-        dest = QFileDialog.getExistingDirectory(
+        dest = pick_directory(
             self, tr("展開先を選択", "Extract to"), start,
             QFileDialog.ShowDirsOnly | QFileDialog.DontUseNativeDialog)
         if dest:

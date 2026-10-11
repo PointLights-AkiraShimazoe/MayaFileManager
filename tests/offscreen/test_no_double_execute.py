@@ -14,11 +14,15 @@ r119e では «開く» と «スクリプト実行» だけを対象にし、�
 
 (A) を守るために (B) を素通しにしていた。
 
-さらに、時間窓（1.2 秒）だけでは (B) を止めきれない。リファレンスは
-Namespace の **モーダルダイアログ** を出すので、入力している間に窓が
-過ぎ、その後に届いた 2 回目がすり抜ける。これが今回の報告の正体。
+r145 でこの «時間窓» を全廃した。窓は (A) を壊すうえ、(B) も止めきれて
+いなかった（実機 2026-10-08: リファレンスとインポートが 2 回実行された）。
 
-ここでは全種別について «2 回続けて呼んでも送信は 1 回» を検証する。
+新しい保証の置き方:
+  (A) 送信側は «ユーザーが呼んだ回数» をそのまま送る。捨てない。
+  (B) 1 操作につき 1 個の操作 ID を発行し、DCC 側が «同じ ID は 1 回しか
+      実行しない» ことで保証する（core/dcc_log の _OPID）。
+
+ここでは全種別について «呼んだ回数だけ送る» ことと «1 操作 = 1 ID» を検証する。
 """
 import os
 import time
@@ -48,8 +52,23 @@ class _Host(mwd.MainWindowDccMixin):
         self.sent = []
         self._dcc = "maya"
         # 既定ではスタブで数える。節 5 だけ del して本物を使う。
-        self._bridge_send_async = lambda code, label, timeout=6.0, bridge=None: \
+        self.op_ids = []
+        # 既定ではスタブで数える。
+        def _send(code, label, timeout=6.0, bridge=None):
             self.sent.append(label)
+            # 本物の _bridge_send_async は «予約（_dcc_arm）» を «実行中
+            # （_dcc_pending）» に昇格させる。開くの «前の読み込みが終わる
+            # まで受けない» はこの印で効くので、スタブでも同じことをする。
+            import time as _t
+            arm = getattr(self, "_dcc_arm", None)
+            if arm:
+                self._dcc_pending = (arm[0], _t.monotonic())
+                self._dcc_arm = None
+            # r145: 送ったコードに埋まっている操作 ID を拾う
+            import re as _re
+            m = _re.search(r"_OPID = \\?'([0-9a-f]*)", code or "")
+            self.op_ids.append(m.group(1) if m else "")
+        self._bridge_send_async = _send
 
     def statusBar(self):
         return _Bar()
@@ -77,113 +96,61 @@ def _fresh():
     return h
 
 
-def _twice(fn, gap=0.0):
-    """1 操作を «続けて 2 回» 呼ぶ（二重発火の再現）。"""
-    fn()
-    if gap:
-        time.sleep(gap)
-    fn()
+def _call(fn, n=2):
+    """1 操作を n 回呼ぶ。"""
+    for _ in range(n):
+        fn()
 
 
-# ── 1) リファレンス（報告された経路）──────────────────────────────
+def _ids_of(h):
+    return [c for c in h.op_ids if c]
+
+
+# ── 1) 呼んだ回数だけ送る（握りつぶさない）─────────────────────────
 h = _fresh()
-_twice(lambda: h._dcc_reference(scene, "maya", ask_ns=False))
-assert len(h.sent) == 1, ("リファレンスが二重に送られた", h.sent)
-print("reference fires once (the reported case): OK")
+_call(lambda: h._dcc_reference(scene, "maya", ask_ns=False))
+assert len(h.sent) == 2, ("連続した同じ操作が握りつぶされている", h.sent)
+print("a repeated reference is sent every time: OK")
 
-# ── 2) ダイアログで時間が経っても二重にならない ────────────────────
-# Namespace ダイアログ相当として «2 秒かかる処理» を挟む。従来の 1.2 秒窓は
-# これで流れてしまい、2 回目が素通りしていた。
+# ── 2) «重ねられる» 種別は握りつぶさない ─────────────────────────
 h = _fresh()
-real_ref = h._maya_reference
+_call(lambda: h._dcc_import(scene, "maya"))
+assert len(h.sent) == 2, ("インポートが握りつぶされた", h.sent)
+print("import is not swallowed either: OK")
 
-
-def _slow_ref(path, ask_ns=True):
-    time.sleep(2.0)             # モーダルダイアログに相当
-    return real_ref(path, ask_ns=False)
-
-
-h._maya_reference = _slow_ref
-h._dcc_reference(scene, "maya", ask_ns=False)
-h._dcc_reference(scene, "maya", ask_ns=False)   # ダイアログ明け直後に届く 2 回目
-assert len(h.sent) == 1, ("ダイアログを跨いで二重に送られた", h.sent)
-print("a slow modal dialog no longer lets a second one through: OK")
-
-# ── 3) 他の種別も同じであること ─────────────────────────────────
+# ── 2b) «後戻りできない» 種別（開く / スクリプト実行）だけは別扱い ──
+# 前の処理が終わるまで次を受けない。これは «重複を捨てる» のではなく
+# «まだ走っている» という状態の話なので残す（読み込み中に次を送ると
+# Maya ごと固まる。実機 2026-10-02）。
 for kind, call in (
-    ("インポート", lambda hh: hh._dcc_import(scene, "maya")),
     ("開く", lambda hh: hh._dcc_open(scene, "maya")),
     ("スクリプト実行", lambda hh: hh._maya_run_script(script)),
 ):
     h = _fresh()
-    _twice(lambda: call(h))
-    assert len(h.sent) == 1, ("%s が二重に送られた" % kind, h.sent)
-print("import / open / run-script each fire once: OK")
+    _call(lambda: call(h))
+    assert len(h.sent) == 1, ("%s の «進行中» ガードが効いていない" % kind, h.sent)
+assert "run_script" in mwd.DESTRUCTIVE_KINDS and "open" in mwd.DESTRUCTIVE_KINDS
+print("open / run-script refuse a second send while the first is running: OK")
 
-# ── 4) 意図した繰り返しは止めない（(A) を壊していないこと）──────────
+# ── 3) 1 操作 = 1 ID、操作ごとに別の ID ──────────────────────────
 h = _fresh()
-h._dcc_reference(scene, "maya", ask_ns=False)
-time.sleep(2.2)                               # 十分に間を空けた «2 回目»
-h._dcc_reference(scene, "maya", ask_ns=False)
-assert len(h.sent) == 2, ("意図した 2 回目まで止めている", h.sent)
-print("a deliberate second reference is still allowed: OK")
+_call(lambda: h._dcc_reference(scene, "maya", ask_ns=False))
+ids = _ids_of(h)
+assert len(ids) == 2, ("操作 ID が発行されていない", h.op_ids)
+assert ids[0] != ids[1], ("別の操作なのに同じ ID", ids)
+assert not getattr(h, "_dcc_op_id", ""), "操作が終わったら ID は空に戻す"
+print("each operation carries its own op id: OK")
 
-# 別ファイルなら続けて送れる
-h = _fresh()
-h._dcc_reference(scene, "maya", ask_ns=False)
-h._dcc_reference(other, "maya", ask_ns=False)
-assert len(h.sent) == 2, ("別ファイルまで止めている", h.sent)
-print("a different file is never blocked: OK")
-
-# ── 5) 最後の砦: 上流を飛ばしても «同じコード» は二度送られない ──────
-# どの経路から来ても、送信の直前で止まることを確かめる。
-class _CountingBridge:
-    """本物の _bridge_send_async を使い、«実際にソケットへ渡った» 回数を数える。"""
-    port = 20261
-
-    def __init__(self):
-        self.calls = []
-
-    def is_connected(self, timeout=0.3):
-        return True
-
-    def send_python(self, code, timeout=6.0):
-        self.calls.append(code)
-        return True, "ok"
-
-
-class _Notify:
-    class _Sig:
-        def emit(self, *a, **k):
-            pass
-    done = _Sig()
-
-
-h = _fresh()
-cb = _CountingBridge()
-h._bridge = cb
-h._bridge_notify = _Notify()
-del h._bridge_send_async          # スタブを外して本物を使う
-code = "print('same')"
-h._bridge_send_async(code, "A")
-h._bridge_send_async(code, "B")
-time.sleep(0.4)                   # ワーカーの送信を待つ
-assert len(cb.calls) == 1, ("同一コードの二重送信が素通りしている", cb.calls)
-# 違うコードは通る
-h._bridge_send_async("print('other')", "C")
-time.sleep(0.4)
-assert len(cb.calls) == 2, cb.calls
-print("the send-level dedupe stops any path we missed: OK")
-
-# ── 6) ガードを通らない送信入口が残っていないこと（棚卸し）───────────
+# ── 4) 時間窓の残骸が残っていないこと ────────────────────────────
 import io as _io
 src = _io.open(os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "ui", "main_window_dcc.py"), encoding="utf-8").read()
-# _dcc_once / _dcc_guarded を経由する種別が揃っていること
 for kind in ("open", "import", "reference", "run_script", "save", "export"):
     assert ('"%s"' % kind) in src, kind
-assert "_dcc_guarded" in src and "SEND_DEDUP_SEC" in src
-print("every action kind goes through the guard: OK")
+assert "_dcc_guarded" in src and "_dcc_begin_op" in src
+assert "SEND_DEDUP_SEC" not in src, "送信側の時間窓が残っている"
+assert "_last_dcc_send" not in src, "使われない時間記録が残っている"
+print("no leftovers from the time-window dedupe: OK")
 
 finish(True)

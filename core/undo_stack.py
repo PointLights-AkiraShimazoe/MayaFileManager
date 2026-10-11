@@ -298,11 +298,14 @@ def trash_root_for(path: str) -> Optional[str]:
     return None
 
 
-def delete_to_work_trash(paths: List[str], progress_cb=None, pairs: Optional[list] = None):
+def delete_to_work_trash(paths: List[str], progress_cb=None, pairs: Optional[list] = None,
+                         failed_paths: Optional[list] = None):
     """削除対象を作業ごみ箱へ移動する。
     戻り値: (DeleteOp or None, 失敗リスト["path — 理由"], 直接ごみ箱送りにしたパス)
     progress_cb(i, n): 各項目後に呼ぶ（例外で中断可）。pairs を渡すと部分完了分を
-    そこへ積む（キャンセル時に Undo 記録を作るため）。"""
+    そこへ積む（キャンセル時に Undo 記録を作るため）。
+    failed_paths を渡すと «失敗した生パス» をそこへ積む（r144: 呼び出し側が
+    監視ハンドルを手放してから再試行できるようにするため）。"""
     paths = [p for p in paths if p and os.path.lexists(p)]
     if not paths:
         return None, [], []
@@ -340,6 +343,8 @@ def delete_to_work_trash(paths: List[str], progress_cb=None, pairs: Optional[lis
             bad = recycle([p])
             if bad:
                 failed.append("%s — 削除できません（使用中または権限なし）" % p)
+                if failed_paths is not None:
+                    failed_paths.append(p)
             else:
                 direct.append(p)
         if progress_cb:

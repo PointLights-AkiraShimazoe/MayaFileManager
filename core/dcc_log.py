@@ -37,80 +37,67 @@ def _messages(action: str, path: str):
             PREFIX, tr("確認待ち", "Waiting"), action, name,
             tr("未保存の変更があるため DCC 側で確認中",
                "unsaved changes — confirm in the DCC")),
-        # r119e: 二重実行ガード用。«同じ操作か» の判定キーと、止めた時の文言。
-        "key": "%s|%s" % (action, shown),
-        "dup": "%s %s: %s %s（%s）" % (
-            PREFIX, tr("二重実行を防止", "Duplicate blocked"), action, name,
-            tr("直前に同じ操作を受け取っているため実行しませんでした",
-               "the same action arrived moments ago, so it was not run")),
     }
 
 
-# 結果判定と出力（DCC 側で exec される本体。_l(msg, level) は DCC ごとに差し替え）
-# r119e/r119i: **DCC 側の二重実行ガード**。
-# commandPort は受け取ったデータを «後で» 処理するため、Maya がシーンを
-# 読み込んでいる間に届いた 2 通目は «読み込みが終わってから» 実行される。
-# 送信側のガードをすり抜けた分をここで止める（実機報告 2026-10-02:
-# シーンを開き終わった直後にもう一度コマンドが走りかけた）。
+# ---------------------------------------------------------------------------
+# DCC 側で実行される本体
+# ---------------------------------------------------------------------------
+# r145: **時間窓による «二重実行ガード» を全廃した。**
 #
-# r119i: **実行中（_mfm_busy）も止める。** confirmDialog は入れ子の
-# イベントループを回すので、ダイアログを出している最中に届いた 2 通目が
-# «ダイアログの中で» 実行される。シーンを開く処理が «開く確認の最中» に
-# 走ると Maya ごと固まる（実機 2026-10-02: 開こうとして完全に固まった）。
-# 完了時刻だけでは «まだ終わっていない» を表せないので、実行中の印を別に持つ。
+# 旧実装は «直前に同じ操作が来たら実行しない» という時間窓（8 秒）だった。
+# これは二重に間違っている:
+#   1. ユーザーが «わざと» 同じ操作を 2 回続けた時まで握りつぶす。
+#      しかも「二重実行を防止しました」という警告を出すので、
+#      ユーザーには «勝手に実行されなかった» としか見えない（指摘 2026-10-08）。
+#   2. そもそも «2 回届くこと» を前提にした対症療法で、
+#      1 操作 = 1 実行 という本来の保証になっていない。
 #
-# 判定は «前回の完了からの経過» で行う。開始時刻で測ると、読み込みに 60 秒
-# かかった場合に «直後に走る 2 通目» が窓から外れて素通りしてしまう。
-# 溜まっていた 2 通目は «完了の直後» に走るので、窓は短くてよい。
-# 短いことが重要で、«わざと同じシーンを開き直す» のは塞がない。
-_GUARD_SEC = 8.0
-
-_GUARD = r"""
-import time as _mfm_time, __main__ as _mfm_main
-_mfm_seen = _mfm_main.__dict__.setdefault("_mfm_recent_ops", {})
-_mfm_busy = _mfm_main.__dict__.setdefault("_mfm_running_ops", {})
-_mfm_key = _M.get("key") or _M["start"]
-_mfm_now = _mfm_time.monotonic()
-for _k in [k for k, t in _mfm_seen.items() if _mfm_now - t > 600.0]:
-    _mfm_seen.pop(_k, None)
-for _k in [k for k, t in _mfm_busy.items() if _mfm_now - t > 1800.0]:
-    _mfm_busy.pop(_k, None)      # 異常終了で残った印の掃除
-_mfm_last = _mfm_seen.get(_mfm_key)
-_mfm_dup = (_mfm_key in _mfm_busy) or (
-    _mfm_last is not None and (_mfm_now - _mfm_last) < %r)
-""" % _GUARD_SEC
-
-# 結果判定と出力（DCC 側で exec される本体。_l(msg, level) は DCC ごとに差し替え）
+# 代わりに «操作 ID（_OPID）» で冪等にする。
+#   - マネージャー側で 1 操作につき 1 個だけ ID を作る
+#   - DCC 側は «実行前に» ID を記録し、同じ ID が再び届いたら黙って捨てる
+# これで「配送が重複しても絶対に 2 回実行されない」かつ
+# 「ユーザーが 2 回やったら 2 回実行される（ID が別だから）」が両立する。
+# 警告も要らない（ユーザーの操作は 1 回しか起きていないのだから、
+# 捨てたことは報告するような出来事ではない）。
 _BODY = r"""
-if _mfm_dup:
-    _l(_M["dup"], "warning")
-    _mfm_r = "Cancelled: duplicate"
+import __main__ as _mfm_main
+_mfm_ops = _mfm_main.__dict__.setdefault("_mfm_seen_ops", [])
+if _OPID and _OPID in _mfm_ops:
+    _mfm_r = "Duplicate"
 else:
- _mfm_busy[_mfm_key] = _mfm_time.monotonic()
- _l(_M["start"], "info")
- try:
+    if _OPID:
+        _mfm_ops.append(_OPID)
+        del _mfm_ops[:-256]
+    _l(_M["start"], "info")
     try:
-        _mfm_r = eval(_CODE)
-    except SyntaxError:
-        exec(_CODE)
-        _mfm_r = None
- except Exception as _e:
-    _mfm_busy.pop(_mfm_key, None)
-    _mfm_seen[_mfm_key] = _mfm_time.monotonic()
-    _l(_M["fail"] + str(_e), "error")
-    raise
- _mfm_busy.pop(_mfm_key, None)
- _mfm_seen[_mfm_key] = _mfm_time.monotonic()   # «完了» 時刻を記録する
- _s = "" if _mfm_r is None else str(_mfm_r)
- _low = _s.strip().lower()
- if _low.startswith("error:") or _low.startswith("failed:"):
-    _l(_M["fail"] + _s.split(":", 1)[1].strip(), "error")
- elif _low.startswith("cancelled"):
-    _l(_M["cancel"], "warning")
- elif _low == "confirm":
-    _l(_M["confirm"], "info")
- else:
-    _l(_M["done"], "info")
+        # «式なら eval / 文なら exec» はコンパイルで判定する。
+        # eval を try して SyntaxError で exec にフォールバックすると、
+        # «評価の最中に出た SyntaxError» でも本体をもう一度走らせてしまう。
+        try:
+            _mfm_c = compile(_CODE, "<mfm>", "eval")
+            _mfm_eval = True
+        except SyntaxError:
+            _mfm_c = compile(_CODE, "<mfm>", "exec")
+            _mfm_eval = False
+        if _mfm_eval:
+            _mfm_r = eval(_mfm_c)
+        else:
+            exec(_mfm_c)
+            _mfm_r = None
+    except Exception as _e:
+        _l(_M["fail"] + str(_e), "error")
+        raise
+    _s = "" if _mfm_r is None else str(_mfm_r)
+    _low = _s.strip().lower()
+    if _low.startswith("error:") or _low.startswith("failed:"):
+        _l(_M["fail"] + _s.split(":", 1)[1].strip(), "error")
+    elif _low.startswith("cancelled"):
+        _l(_M["cancel"], "warning")
+    elif _low == "confirm":
+        _l(_M["confirm"], "info")
+    else:
+        _l(_M["done"], "info")
 """
 
 
@@ -136,46 +123,41 @@ def _l(m, lv):
         try:
             _mfm_logf(m, lv)
             return
-        except Exception as _e:
-            _swallow(_e, "core/dcc_log.py:88 _l")
+        except Exception:
+            pass
     print(m)
 '''
 
 
-# ガードを付けない時も、本体が «完了時刻の記録» で参照する名前は必要。
-# 記録先をその場限りの dict にして、何も残らないようにする。
-_NO_GUARD = ("import time as _mfm_time\n"
-             "_mfm_dup = False\n"
-             "_mfm_seen = {}\n"
-             "_mfm_busy = {}\n"
-             "_mfm_key = None\n")
+def new_op_id() -> str:
+    """1 操作に 1 個だけ発行する ID（r145）。"""
+    import uuid
+    return uuid.uuid4().hex
 
 
 def _wrap(code: str, action: str, path: str, logger: str, ns_expr: str,
-          guard: bool = False) -> str:
+          op_id: str = "") -> str:
     src = (logger
            + "_M = %r\n" % _messages(action, path)
            + "_CODE = %r\n" % code
-           + (_GUARD if guard else _NO_GUARD)
+           + "_OPID = %r\n" % (op_id or "")
            + _BODY)
     return "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_r'))[1])(%s)" % (src, ns_expr)
 
 
-def wrap_maya(code: str, action: str, path: str, guard: bool = False) -> str:
-    """Maya の commandPort へ送る式を、スクリプトエディタへのログ付きに包む。
+def wrap_maya(code: str, action: str, path: str, op_id: str = "") -> str:
+    """Maya の commandPort へ送る式を、ログ＋冪等化で包む。
 
-    guard=True で «直前に同じ操作が走っていたら実行しない» 栓を付ける（r119e）。
-    **「開く」「スクリプト実行」だけに付けること。** インポートやリファレンスは
-    同じファイルを続けて 2 回入れるのが正当な操作なので、塞いではいけない。
-    """
-    return _wrap(code, action, path, _MAYA_LOGGER, "{}", guard=guard)
+    op_id を渡すと «同じ ID の 2 通目» を Maya 側で捨てる（r145）。
+    ユーザーが続けて 2 回実行した時は ID が別なので、両方とも実行される。"""
+    return _wrap(code, action, path, _MAYA_LOGGER, "{}", op_id=op_id)
 
 
-def wrap_blender(code: str, action: str, path: str, guard: bool = False) -> str:
-    """Blender ブリッジへ送る式を、Info エディタへのログ付きに包む。
+def wrap_blender(code: str, action: str, path: str, op_id: str = "") -> str:
+    """Blender ブリッジへ送る式を、ログ＋冪等化で包む。
     ブリッジの名前空間（bpy / mfm_* ヘルパ）を引き継ぐため dict(globals())。"""
     return _wrap(code, action, path, _BLENDER_LOGGER, "dict(globals())",
-                 guard=guard)
+                 op_id=op_id)
 
 
 def maya_local(message: str, level: str = "info"):

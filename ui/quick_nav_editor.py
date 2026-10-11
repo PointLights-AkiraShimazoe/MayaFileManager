@@ -28,6 +28,7 @@ from core.compat import (
     QMenu, QMessageBox, QFileDialog, QInputDialog
 )
 from core.compat import QtCore as _QtCore
+from ui.dialog_util import pick_directory, pick_open_file  # r145
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +97,7 @@ class NavItemRow(QWidget):
     def _browse(self):
         # ネイティブダイアログはシェル拡張の読み込みで mayapy がクラッシュする
         # （r64）。アプリ属性 AA_DontUseNativeDialogs に加え、呼び出し側でも明示。
-        d = QFileDialog.getExistingDirectory(
+        d = pick_directory(
             self, "ディレクトリを選択", self._path_edit.text() or str(Path.home()),
             QFileDialog.ShowDirsOnly | QFileDialog.DontUseNativeDialog)
         if d:
@@ -330,8 +331,13 @@ class QuickNavPresetEditor(QDialog):
     # ------------------------------------------------------------------
     # 自動命名（プリセット毎。r119）
     #
-    # 共通設定（設定ダイアログの「自動命名」）はフォールバックとして残す。
-    # プリセットが «自前の設定を持つ» かどうかはチェックボックスで決める。
+    # r139: **共通設定へのフォールバックを廃止。**
+    # 従来は「このプリセット専用の自動命名を使う」で共通と切り替えていたが、
+    # それは «プリセット毎設定を後から足した際の後方互換» であって、
+    # ユーザー向けの意図は無かった（指摘 2026-10-08）。規則はフォルダに付くもの
+    # として全プリセット横断で解くので、切替の意味が消えた。
+    # 残っている旧「共通ルール」は、自前の設定を持たないプリセットを開いた時に
+    # 下書きとして持ち込み、保存でそのプリセットのものになる（消失させない）。
     # ------------------------------------------------------------------
 
     def _build_naming_tab(self):
@@ -341,17 +347,13 @@ class QuickNavPresetEditor(QDialog):
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(6)
 
-        self._naming_own_cb = QCheckBox(
-            tr("このプリセット専用の自動命名を使う",
-               "Use auto-naming settings specific to this preset"))
-        self._naming_own_cb.setToolTip(tr(
-            "OFF のときは設定ダイアログの «共通» 設定に従います。",
-            "When off, the shared settings from the Settings dialog apply."))
-        self._naming_own_cb.toggled.connect(self._on_naming_own_toggled)
-        lay.addWidget(self._naming_own_cb)
-
         self._naming_enabled_cb = QCheckBox(
             tr("自動命名を有効にする", "Enable auto naming"))
+        self._naming_enabled_cb.setToolTip(tr(
+            "ここの規則は、他のプリセットを選んでいても\n"
+            "指定したフォルダへ保存する限り効きます。",
+            "These rules apply whenever you save into the folder they name,\n"
+            "even while another preset is selected."))
         lay.addWidget(self._naming_enabled_cb)
 
         self._naming_container = QWidget()
@@ -371,11 +373,6 @@ class QuickNavPresetEditor(QDialog):
 
         self._naming_rows = []
         return w
-
-    def _on_naming_own_toggled(self, on):
-        for wdg in (self._naming_enabled_cb, self._naming_container,
-                    self._naming_add_btn):
-            wdg.setEnabled(bool(on))
 
     def _clear_naming_rows(self):
         for row in list(getattr(self, "_naming_rows", [])):
@@ -403,18 +400,18 @@ class QuickNavPresetEditor(QDialog):
         draft = self._naming_draft.get(preset)
         if draft is None:
             own = self._sm.has_auto_naming_for_preset(preset)
-            draft = {
-                "own": own,
-                "enabled": self._sm.get_auto_naming_enabled(preset if own else None),
-                "rules": dict(self._sm.get_auto_naming_rules(preset) if own else {}),
-            }
-        self._naming_own_cb.blockSignals(True)
-        self._naming_own_cb.setChecked(bool(draft["own"]))
-        self._naming_own_cb.blockSignals(False)
+            if own:
+                rules = dict(self._sm.get_auto_naming_rules(preset))
+                enabled = self._sm.get_auto_naming_enabled(preset)
+            else:
+                # r139: 自前の設定が無いプリセットには、廃止した旧「共通ルール」を
+                # 下書きとして持ち込む（見えないまま消えるのを防ぐ）。
+                rules = dict(self._sm.get_auto_naming_rules(None) or {})
+                enabled = bool(self._sm.get("auto_naming_enabled", True))
+            draft = {"enabled": enabled, "rules": rules}
         self._naming_enabled_cb.setChecked(bool(draft["enabled"]))
         for d, rule in (draft["rules"] or {}).items():
             self._add_naming_rule(d, rule)
-        self._on_naming_own_toggled(bool(draft["own"]))
 
     def _collect_naming(self):
         rules = {}
@@ -422,13 +419,12 @@ class QuickNavPresetEditor(QDialog):
             d, rule = row.get_data()
             if d:
                 rules[d] = rule
-        return {"own": self._naming_own_cb.isChecked(),
-                "enabled": self._naming_enabled_cb.isChecked(),
+        return {"enabled": self._naming_enabled_cb.isChecked(),
                 "rules": rules}
 
     def _stash_naming(self):
         """表示中のプリセットの編集内容を下書きへ退避する。"""
-        if self._current_preset and hasattr(self, "_naming_own_cb"):
+        if self._current_preset and hasattr(self, "_naming_enabled_cb"):
             self._naming_draft[self._current_preset] = self._collect_naming()
 
     def _load_presets(self):
@@ -633,14 +629,18 @@ class QuickNavPresetEditor(QDialog):
         for gone in self._deleted_presets:
             if gone not in self._presets:
                 self._sm.clear_auto_naming_for_preset(gone)
+        touched = False
         for name, draft in self._naming_draft.items():
             if name not in self._presets:
                 continue
-            if draft.get("own"):
-                self._sm.save_auto_naming_for_preset(
-                    name, draft.get("rules") or {},
-                    enabled=bool(draft.get("enabled", True)))
-            else:
-                self._sm.clear_auto_naming_for_preset(name)
+            # r139: 切替を廃止したので、各プリセットは常に自前の規則を持つ。
+            self._sm.save_auto_naming_for_preset(
+                name, draft.get("rules") or {},
+                enabled=bool(draft.get("enabled", True)))
+            touched = True
+        if touched and self._sm.get_auto_naming_rules(None):
+            # 旧「共通ルール」はプリセットへ引き継がれたので空にする。
+            # （残したままだと、見えない規則がいつまでも効き続ける）
+            self._sm.save_auto_naming_rules({})
         self.presets_saved.emit()
         self.accept()

@@ -76,6 +76,24 @@ def init(settings_manager=None):
         _lang = _detect_auto()
 
 
+def set_language(mode) -> str:
+    """言語を «今» 切り替える（r135）。
+
+    tr() は呼ばれた時点の言語を返すので、これだけでは
+    生成済みのウィジェットの文字は変わらない。入れ替えは呼び出し側が
+    UI を作り直すことで行う（MainWindow._relaunch_ui）。"""
+    global _lang, _mode
+    mode = str(mode or "auto")
+    _mode = mode
+    if mode == "ja":
+        _lang = "ja"
+    elif mode == "en":
+        _lang = "en"
+    else:
+        _lang = _detect_auto()
+    return _lang
+
+
 def current_lang() -> str:
     global _lang
     if _lang is None:

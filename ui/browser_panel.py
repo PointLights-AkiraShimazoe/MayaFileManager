@@ -44,6 +44,7 @@ from core.file_operations import (
 )
 from core.thumbnail_generator import ThumbnailManager
 
+from ui.dcc_header import glyph_icon, integration_icon  # r142: アイコン列を揃える
 from ui.browser_util import (  # noqa: F401  （再エクスポート）
     _cursor_over_maya_window, _cursor_over_dcc_window, _time_mod, _MFM_T0,
     _MFM_STARTUP_LOG, _MFM_FREEZE_LOG, _re_mod, _DRIVE_IN_LABEL_RE,
@@ -477,6 +478,7 @@ class BrowserPanel(QWidget):
             if not _INTEG_RESULT_CONNECTED:
                 _mgr.action_finished.connect(_on_integration_action_finished)
                 _INTEG_RESULT_CONNECTED = True
+            self._start_integration_auto_refresh(_mgr)
         except Exception as _e:
             # r121: **黙って無効にしない。** 以前はここで握り潰していたため、
             # EXE 版で core.integrations の import が失敗していること
@@ -1218,7 +1220,7 @@ class BrowserPanel(QWidget):
     def _follow_link(self, path: str):
         """
         リンク(symlink/ジャンクション)を実体ドライブへ飛ばさず、
-        リンクのパス(例: C:\\...\\MM-SA)のまま中身を表示する。
+        リンクのパス(例: C:\\...\\Projects\\Foo)のまま中身を表示する。
         通常フォルダのネイティブ列展開ではプロキシが子を返さないため、
         リンクは setRootIndex 方式の _navigate で開く（パスは維持される）。
         リンク先が未接続で到達不能な場合は _navigate 側がステータスに通知する。
@@ -1612,6 +1614,118 @@ class BrowserPanel(QWidget):
             except Exception as _e:
                 _swallow(_e, "ui/browser_panel.py:1395 _align_columns_right_edge")
 
+    # ------------------------------------------------------------------
+    # 連携状態の自動更新（r136）
+    # ------------------------------------------------------------------
+    # 従来は «表示時に 1 回、あとは手動更新» だった。そのほうが安いからだが、
+    # 他で p4 を触って戻ってきた時にバッジが古いままで、毎回更新を押すことになる
+    # （ユーザー指摘 2026-10-08）。
+    #
+    # 重いのは p4 fstat 等の «サーバ往復» なので、無制限には回さない。
+    #   ・対象は «今開いているカラムのフォルダ» だけ
+    #   ・有効期限（既定 60 秒）を超えたものだけ取り直す
+    #   ・窓が隠れている間は何もしない（見えていないもののために回すのは無駄）
+    #   ・設定 0 で従来どおり«表示時＋手動»へ戻せる
+
+    def _integrations(self):
+        """IntegrationManager。
+
+        r136: **これまで BrowserPanel 側に定義が無かった。** 平坦ビューの
+        状態要求（_request_flat_integration_status, r72）は self._integrations()
+        を呼んでいたが AttributeError になり、try/except に吞まれていた——
+        つまり平坦ビューのバッジと右クリックは直っていなかった。"""
+        return self._column_view._integrations()
+
+    INTEG_AUTO_KEY = "integrations_auto_refresh_sec"
+    INTEG_AUTO_DEFAULT = 60
+    _INTEG_TICK_MS = 5000
+
+    def _start_integration_auto_refresh(self, mgr):
+        sec = self._integration_auto_sec()
+        try:
+            mgr.set_ttl(sec)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _start_integration_auto_refresh")
+        t = QTimer(self)
+        t.setInterval(self._INTEG_TICK_MS)
+        t.timeout.connect(self._tick_integration_auto_refresh)
+        self._integ_auto_timer = t
+        if sec > 0:
+            t.start()
+
+    def _integration_auto_sec(self) -> int:
+        try:
+            return max(0, int(self._sm.get(self.INTEG_AUTO_KEY,
+                                           self.INTEG_AUTO_DEFAULT)))
+        except (TypeError, ValueError):
+            return self.INTEG_AUTO_DEFAULT
+
+    def apply_integration_auto_refresh(self):
+        """設定を読み直して自動更新の入/切を合わせる（設定画面から）。"""
+        t = getattr(self, "_integ_auto_timer", None)
+        sec = self._integration_auto_sec()
+        try:
+            self._integrations().set_ttl(sec)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py apply_integration_auto_refresh")
+        if t is None:
+            return
+        if sec > 0:
+            if not t.isActive():
+                t.start()
+        else:
+            t.stop()
+
+    def _auto_refresh_targets(self):
+        """自動更新の対象。
+
+        r136b: **ウィジェットを歩かない。** 当初は開いているカラムを
+        findChildren で集めていたが、QColumnView はカラムを非同期に
+        作っては捨てるので、タイマーがその最中に触ると落ちうる。
+        実機で test_preset_dirs が ACCESS_VIOLATION で死んだ（2026-10-08）。
+        «今見ているフォルダ» だけにすれば、安全な上に問い合わせも減る。"""
+        try:
+            cur = self.current_path()
+            return [cur] if cur else []
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _auto_refresh_targets")
+            return []
+
+    def _tick_integration_auto_refresh(self):
+        if self._integration_auto_sec() <= 0:
+            return
+        try:
+            if not self.isVisible():
+                return
+            win = self.window()
+            if win is not None and (win.isMinimized() or not win.isVisible()):
+                return
+        except RuntimeError:
+            return                      # パネルがもう無い
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _tick_integration_auto_refresh")
+            return
+        try:
+            mgr = self._integrations()
+            for d in self._auto_refresh_targets():
+                mgr.request_status(d)      # 期限切れのものだけ実際に走る
+        except Exception as e:
+            _mfm_log("integration auto refresh error: %r" % (e,))
+
+    def refresh_integrations_on_activate(self):
+        """窓が前面に戻った時の更新（r136）。
+
+        他アプリで p4 を触って戻ってくる«典型»なので、通常より短い
+        期限（5 秒）で見る。alt+tab の往復で叩かないため全部強制にはしない。"""
+        if self._integration_auto_sec() <= 0:
+            return
+        try:
+            mgr = self._integrations()
+            for d in self._auto_refresh_targets():
+                mgr.request_status(d, max_age=5.0)
+        except Exception as e:
+            _mfm_log("integration activate refresh error: %r" % (e,))
+
     def _request_flat_integration_status(self, cap: int = 300):
         """平坦ビューに並ぶファイルのフォルダの連携状態をワーカーへ要求（r72）。
         従来は createColumn（カラム表示）でしか要求しておらず、平坦ビューの
@@ -1956,26 +2070,26 @@ class BrowserPanel(QWidget):
         """カラムの空白（項目の無い所）の右クリックメニュー（r70）。"""
         menu = QMenu(self)
         # r73: 新規作成（作成後はそのまま名前変更モード）
-        nf = menu.addAction(tr("📁  新規フォルダ", "📁  New folder") + "\tCtrl+Shift+N")
+        nf = menu.addAction(glyph_icon("📁"), tr("新規フォルダ", "New folder") + "\tCtrl+Shift+N")
         nf.triggered.connect(lambda _c=False: self._create_new_item("folder", folder))
-        nt = menu.addAction(tr("📄  新規テキスト ドキュメント", "📄  New text document") + "\tCtrl+Shift+T")
+        nt = menu.addAction(glyph_icon("📄"), tr("新規テキスト ドキュメント", "New text document") + "\tCtrl+Shift+T")
         nt.triggered.connect(lambda _c=False: self._create_new_item("text", folder))
         menu.addSeparator()
         if self._add_dcc_save_actions(menu, folder):
             menu.addSeparator()
-        paste_act = menu.addAction(tr("📋  貼り付け", "📋  Paste") + "\tCtrl+V")
+        paste_act = menu.addAction(glyph_icon("📋"), tr("貼り付け", "Paste") + "\tCtrl+V")
         mime = QApplication.clipboard().mimeData()
         paste_act.setEnabled(bool(mime and mime.hasUrls()))
         paste_act.triggered.connect(lambda _c=False: self._clipboard_paste_into(folder))
         menu.addSeparator()
-        reveal_act = menu.addAction(tr("📁  エクスプローラーで表示", "📁  Show in Explorer"))
+        reveal_act = menu.addAction(glyph_icon("📁"), tr("エクスプローラーで表示", "Show in Explorer"))
         reveal_act.triggered.connect(lambda _c=False: reveal_in_explorer(folder))
-        copy_path_act = menu.addAction(tr("📋  フォルダパスをコピー", "📋  Copy folder path"))
+        copy_path_act = menu.addAction(glyph_icon("📋"), tr("フォルダパスをコピー", "Copy folder path"))
         copy_path_act.triggered.connect(lambda _c=False: self._copy_paths_to_clipboard([folder]))
         menu.addSeparator()
         # r116: カラムの空白を右クリック → そのカラムの表示名をまとめて編集。
         # カラム全体が対象なので、項目メニューよりこちらの方が自然な入口。
-        dn_act = menu.addAction(tr("🏷  表示名の変更...", "🏷  ChangeDisplayEdit..."))
+        dn_act = menu.addAction(glyph_icon("🏷"), tr("表示名の変更...", "ChangeDisplayEdit..."))
         dn_act.triggered.connect(
             lambda _c=False, d=folder: self._open_display_names(d))
         try:
@@ -2095,8 +2209,7 @@ class BrowserPanel(QWidget):
         # ── 複数フォルダの平坦結果表示（2つ以上フォルダ選択時） ─────────
         sel_dirs = [p for p in paths if os.path.isdir(p)]
         if len(sel_dirs) >= 2:
-            flat_act = menu.addAction(tr("▤  選択フォルダを平坦結果表示",
-                                         "▤  Show selection as flat list"))
+            flat_act = menu.addAction(glyph_icon("▤"), tr("選択フォルダを平坦結果表示", "Show selection as flat list"))
             flat_act.triggered.connect(lambda: self._on_flat_request(sel_dirs))
             menu.addSeparator()
 
@@ -2169,12 +2282,10 @@ class BrowserPanel(QWidget):
 
         # ── General actions ───────────────────────────────────────────
         if is_single:
-            open_ext_act = menu.addAction(tr("🖥  関連付けアプリで開く",
-                                             "🖥  Open with default app"))
+            open_ext_act = menu.addAction(glyph_icon("🖥"), tr("関連付けアプリで開く", "Open with default app"))
             open_ext_act.triggered.connect(lambda: open_with_default_app(paths[0]))
 
-            reveal_act = menu.addAction(tr("📁  エクスプローラーで表示",
-                                           "📁  Show in Explorer"))
+            reveal_act = menu.addAction(glyph_icon("📁"), tr("エクスプローラーで表示", "Show in Explorer"))
             reveal_act.triggered.connect(lambda: reveal_in_explorer(paths[0]))
             menu.addSeparator()
 
@@ -2186,8 +2297,11 @@ class BrowserPanel(QWidget):
         except Exception:
             groups = []
         if groups:
-            for label, acts in groups:
-                sub = menu.addMenu("⎇  " + label)
+            for grp in groups:
+                # r142: 第 3 要素はプロバイダの key（古い形式は 2 要素）
+                label, acts = grp[0], grp[1]
+                pkey = grp[2] if len(grp) > 2 else ""
+                sub = menu.addMenu(integration_icon(pkey), label)
                 sub.setToolTipsVisible(True)
                 for item in acts:
                     text, cb = item[0], item[1]
@@ -2206,34 +2320,32 @@ class BrowserPanel(QWidget):
                     a.triggered.connect(
                         lambda _c=False, f=cb, e=extra, l=label, ps=list(paths):
                         self._run_integration_action(f, e, l, ps))
-            refresh_act = menu.addAction(tr("🔄  連携状態を更新",
-                                            "🔄  Refresh integration status"))
+            refresh_act = menu.addAction(glyph_icon("🔄"), tr("連携状態を更新", "Refresh integration status"))
             refresh_act.triggered.connect(
                 lambda: self._refresh_integration_status(paths))
             menu.addSeparator()
 
         # ── パスをコピー（単数/複数対応） ─────────────────────────────
-        copy_path_act = menu.addAction(tr("📋  ファイルパスをコピー",
-                                          "📋  Copy file path"))
+        copy_path_act = menu.addAction(glyph_icon("📋"), tr("ファイルパスをコピー", "Copy file path"))
         copy_path_act.triggered.connect(lambda: self._copy_paths_to_clipboard(paths))
         menu.addSeparator()
 
         # ── Bookmark ─────────────────────────────────────────────────
-        bm_act = menu.addAction(tr("⭐  ブックマークに追加", "⭐  Add to bookmarks"))
+        bm_act = menu.addAction(glyph_icon("⭐"), tr("ブックマークに追加", "Add to bookmarks"))
         bm_act.triggered.connect(lambda: self._add_to_bookmarks(paths))
         menu.addSeparator()
 
         # ── File ops ─────────────────────────────────────────────────
-        copy_act = menu.addAction(tr("📋  コピー...", "📋  Copy..."))
+        copy_act = menu.addAction(glyph_icon("📋"), tr("コピー...", "Copy..."))
         copy_act.triggered.connect(lambda: self._copy_dialog(paths))
 
-        move_act = menu.addAction(tr("✂  移動...", "✂  Move..."))
+        move_act = menu.addAction(glyph_icon("✂"), tr("移動...", "Move..."))
         move_act.triggered.connect(lambda: self._move_dialog(paths))
 
-        dup_act = menu.addAction(tr("⧉  複製...", "⧉  Duplicate...") + "\tCtrl+D")
+        dup_act = menu.addAction(glyph_icon("⧉"), tr("複製...", "Duplicate...") + "\tCtrl+D")
         dup_act.triggered.connect(lambda _c=False: self._duplicate_selected(list(paths)))
 
-        rename_act = menu.addAction(tr("✏  名前変更", "✏  Rename") + "\tF2")
+        rename_act = menu.addAction(glyph_icon("✏"), tr("名前変更", "Rename") + "\tF2")
         rename_act.triggered.connect(
             lambda _c=False: self._rename_inline(paths[0]) if paths else None)
         rename_act.setEnabled(is_single)
@@ -2241,20 +2353,20 @@ class BrowserPanel(QWidget):
         # r101: 選択したものだけをバッチリネームの対象にする
         # （ツールメニューからだと «現在の選択» を拾い直すため、右クリックした
         #  対象と食い違うことがあった）
-        batch_act = menu.addAction(tr("✏✏  バッチリネーム...", "✏✏  Batch Rename..."))
+        batch_act = menu.addAction(glyph_icon("✏"), tr("バッチリネーム...", "Batch Rename..."))
         batch_act.triggered.connect(
             lambda _c=False, ps=list(paths): self.batch_rename_requested.emit(ps))
 
         # r115: 表示名（実体名はそのままで、カラムへ出す名前だけ変える）
         dn_dir = self._display_name_target(paths)
-        dn_act = menu.addAction(tr("🏷  表示名の変更...", "🏷  ChangeDisplayEdit..."))
+        dn_act = menu.addAction(glyph_icon("🏷"), tr("表示名の変更...", "ChangeDisplayEdit..."))
         dn_act.triggered.connect(
             lambda _c=False, d=dn_dir: self._open_display_names(d))
         dn_act.setEnabled(bool(dn_dir))
 
         menu.addSeparator()
 
-        del_act = menu.addAction(tr("🗑  削除", "🗑  Delete"))
+        del_act = menu.addAction(glyph_icon("🗑"), tr("削除", "Delete"))
         del_act.triggered.connect(lambda: self._delete_confirm(paths))
         # r124: setShortcut は «本物のショートカット登録» なので使わない
         # （メニューを開くたびに Delete が増え、本体の Delete と衝突した）。
@@ -2265,7 +2377,9 @@ class BrowserPanel(QWidget):
 
         # ── Properties ───────────────────────────────────────────────
         # r124: 複数選択でも出す（読み取り専用の変更だけは複数でも行える）。
-        prop_act = menu.addAction(tr("ℹ  プロパティ" + cnt, "ℹ  Properties" + cnt_en))
+        prop_act = menu.addAction(glyph_icon("ℹ"),
+                                  tr("プロパティ" + cnt,
+                                     "Properties" + cnt_en))
         prop_act.triggered.connect(lambda _c=False, ps=list(paths):
                                    self._show_properties(ps))
 
@@ -2308,13 +2422,13 @@ class BrowserPanel(QWidget):
     _DIR_DLG_OPTS = QFileDialog.ShowDirsOnly | QFileDialog.DontUseNativeDialog
 
     def _copy_dialog(self, paths: List[str]):
-        dst = QFileDialog.getExistingDirectory(self, tr("コピー先を選択", "Select a destination"), self._current_path,
+        dst = pick_directory(self, tr("コピー先を選択", "Select a destination"), self._current_path,
                                                self._DIR_DLG_OPTS)
         if dst:
             self._transfer_with_progress(paths, dst, False, "コピー")
 
     def _move_dialog(self, paths: List[str]):
-        dst = QFileDialog.getExistingDirectory(self, tr("移動先を選択", "Select a destination"), self._current_path,
+        dst = pick_directory(self, tr("移動先を選択", "Select a destination"), self._current_path,
                                                self._DIR_DLG_OPTS)
         if dst:
             self._transfer_with_progress(paths, dst, True, "移動")
@@ -2423,9 +2537,16 @@ class BrowserPanel(QWidget):
                             _swallow(_e, "ui/browser_panel.py:2123 _release_fs_handles")
                         break
             if level <= 1:
+                # r128: 一度 «空» を挙げて、これまでに fetch した子フォルダの
+                # 監視を落としてから親へ逃がす。そのまま親を挙げるだけだと
+                # 古い監視が残る（＝Windows でハンドルを握ったまま）。
+                try:
+                    self._fs_model.setRootPath("")
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_panel.py:2425 _release_fs_handles")
                 if parent and os.path.isdir(parent):
                     self._fs_model.setRootPath(parent)
-                QApplication.processEvents()
+                self._flush_deleted()
                 return
             self._recreate_fs_model(parent)
         except Exception as e:
@@ -2472,13 +2593,35 @@ class BrowserPanel(QWidget):
             old.fileRenamed.disconnect()
         except Exception as _e:
             _swallow(_e, "ui/browser_panel.py:2174 _recreate_fs_model")
+        # r128: 監視スレッド（QFileInfoGatherer）に «もう何も見るな» と伝えてから
+        # 捨てる。rootPath を空にすると Qt 側の監視対象が外れる。
+        try:
+            old.setRootPath("")
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py:2178 _recreate_fs_model")
         try:
             old.setParent(None)
             old.deleteLater()
         except Exception as _e:
             _swallow(_e, "ui/browser_panel.py:2179 _recreate_fs_model")
-        QApplication.processEvents()
+        # r128: **ここが肝。** processEvents() は DeferredDelete を流さないので、
+        # 従来は old が «捨てたつもりで生きたまま» だった＝監視ハンドルを握った
+        # ままで、Windows の [WinError 5] が解けなかった。
+        self._flush_deleted()
         _mfm_log("fs model recreated (root_hint=%s)" % (root_hint,))
+
+    @staticmethod
+    def _flush_deleted():
+        """deleteLater() を «今» 実行させる（r128）。
+
+        QApplication.processEvents() は DeferredDelete を流さない。
+        監視ハンドルを手放すには、捨てた QObject が本当に消える必要がある。"""
+        try:
+            QApplication.processEvents()
+            QApplication.sendPostedEvents(None, _QtCore.QEvent.DeferredDelete)
+            QApplication.processEvents()
+        except Exception as e:
+            _mfm_log("flush_deleted error: %r" % (e,))
 
     @staticmethod
     def nearest_existing_dir(path: str) -> str:
@@ -2854,34 +2997,81 @@ class BrowserPanel(QWidget):
         # ワーカー＋進捗ダイアログ。キャンセル時も完了分は Undo 記録に残す。
         from core.undo_stack import delete_to_work_trash, make_delete_op
         pairs = []
+        done_direct = []
 
-        def work(cb):
-            return delete_to_work_trash(paths, progress_cb=cb, pairs=pairs)
+        # r144: «Manager 自身が掴んでいる» フォルダは Windows では消せない
+        # （QFileSystemModel の監視スレッドがハンドルを握る）。削除を始める前に
+        # 手放しておく。ワーカースレッドからは Qt を触れないので «前» にやる。
+        self._release_fs_handles_for(paths, level=1)
 
-        def done(res, cancelled, err):
-            failed, direct = [], []
-            if res is not None:
-                _op, failed, direct = res
-            op = make_delete_op(pairs)
-            if op is not None:
-                self._undo_stack().push(op)
-            if err:
-                QMessageBox.critical(self, tr("削除", "Delete"), err)
-            elif failed:
-                QMessageBox.warning(self, tr("削除エラー", "Delete Error"),
-                                    tr("%d 件の削除に失敗しました:\n",
-                                       "Failed to delete %d item(s):\n") % len(failed) +
-                                    "\n".join(failed))
-            elif cancelled:
-                self.status_message.emit(
-                    tr("削除をキャンセルしました（完了 %d 件）",
-                       "Delete cancelled (%d done)") % (len(pairs) + len(direct)))
-            else:
-                hint = "（Ctrl+Z で元に戻せます）" if op is not None else ""
-                self.status_message.emit(
-                    tr("%d 件を削除しました%s", "Deleted %d item(s)%s")
-                    % (len(paths), hint))
-        self._run_file_op("削除", work, done, total=len(paths))
+        def _run(targets, retried):
+            failed_paths = []
+
+            def work(cb):
+                return delete_to_work_trash(targets, progress_cb=cb, pairs=pairs,
+                                            failed_paths=failed_paths)
+
+            def done(res, cancelled, err):
+                failed, direct = [], []
+                if res is not None:
+                    _op, failed, direct = res
+                done_direct.extend(direct)
+                # まだ掴まれている → モデルごと作り直して «一度だけ» 再試行する。
+                if failed_paths and not retried and not cancelled and not err:
+                    self._release_fs_handles_for(failed_paths, level=2)
+                    _run(list(failed_paths), True)
+                    return
+                op = make_delete_op(pairs)
+                if op is not None:
+                    self._undo_stack().push(op)
+                if err:
+                    QMessageBox.critical(self, tr("削除", "Delete"), err)
+                elif failed:
+                    QMessageBox.warning(self, tr("削除エラー", "Delete Error"),
+                                        tr("%d 件の削除に失敗しました:\n",
+                                           "Failed to delete %d item(s):\n") % len(failed) +
+                                        "\n".join(failed))
+                elif cancelled:
+                    self.status_message.emit(
+                        tr("削除をキャンセルしました（完了 %d 件）",
+                           "Delete cancelled (%d done)") % (len(pairs) + len(done_direct)))
+                else:
+                    hint = "（Ctrl+Z で元に戻せます）" if op is not None else ""
+                    self.status_message.emit(
+                        tr("%d 件を削除しました%s", "Deleted %d item(s)%s")
+                        % (len(paths), hint))
+                self._check_current_gone_async()
+            self._run_file_op("削除", work, done, total=len(targets))
+
+        _run(list(paths), False)
+
+    def _release_fs_handles_for(self, paths, level: int = 1):
+        """paths に含まれるフォルダの監視ハンドルを手放す（r144）。
+
+        リネーム／移動では昔からやっていたが、削除では抜けていて
+        «使用中または権限なし» で弾かれていた（ユーザー報告 2026-10-08:
+        «managerを閉じてエクスプローラーで消すと消えました»）。"""
+        try:
+            targets = [p for p in (paths or []) if p and os.path.isdir(p)]
+            if not targets:
+                # ファイルだけでも、親フォルダの監視が邪魔をすることがある
+                targets = [os.path.dirname(p.rstrip("/\\")) for p in (paths or []) if p]
+                targets = [t for t in targets if t and os.path.isdir(t)]
+            if not targets:
+                return
+            if level >= 2:
+                # モデルごと作り直す＝全部のハンドルが落ちるので 1 回で足りる
+                self._release_fs_handles(targets[0], level=2)
+                return
+            seen = set()
+            for t in targets:
+                k = os.path.normcase(os.path.abspath(t))
+                if k in seen:
+                    continue
+                seen.add(k)
+                self._release_fs_handles(t, level=1)
+        except Exception as e:
+            _mfm_log("release_fs_handles_for error: %r" % (e,))
 
     # ------------------------------------------------------------------
     # プロパティ（r124）
@@ -2890,8 +3080,11 @@ class BrowserPanel(QWidget):
     def _readonly_targets(paths, recursive: bool):
         """読み取り専用を付け外しする実体の一覧。
 
-        フォルダ自身には «付けない»（Windows は無視する）。recursive=True の時は
-        選択フォルダ配下のファイルを全部対象にする（ユーザー指示 2026-10-06）。"""
+        r144: 選んだものは «フォルダでも» それ自身が対象（ユーザー指摘
+        2026-10-08）。Windows はフォルダにも FILE_ATTRIBUTE_READONLY を持たせる
+        ので、属性としては確かに «付く／付いている»。中身を保護する効果は無いが、
+        状態として出さない／触らせないのは筋が通らない。
+        recursive=True の時は配下のフォルダとファイルも全部対象にする。"""
         out, seen = [], set()
         def _add(p):
             k = os.path.normcase(os.path.abspath(p))
@@ -2903,12 +3096,12 @@ class BrowserPanel(QWidget):
                 is_dir = os.path.isdir(p)
             except OSError:
                 continue
-            if not is_dir:
-                _add(p)
+            _add(p)
+            if not (is_dir and recursive):
                 continue
-            if not recursive:
-                continue
-            for root, _dirs, files in os.walk(p):
+            for root, dirs, files in os.walk(p):
+                for d in dirs:
+                    _add(os.path.join(root, d))
                 for f in files:
                     _add(os.path.join(root, f))
         return out
@@ -2987,23 +3180,29 @@ class BrowserPanel(QWidget):
             return self._readonly_targets(paths, rec_cb.isChecked())
 
         def _refresh_state():
+            # r144: フォルダ自身も対象なので «対象なし» は基本起きない。
+            # 一部だけ読み取り専用の時は中間状態で見せる（クリックで ON）。
             tg = _targets()
             ro = [p for p in tg if is_read_only(p)]
             cb.blockSignals(True)
             cb.setEnabled(bool(tg))
-            cb.setChecked(bool(tg) and len(ro) == len(tg))
+            if not tg:
+                cb.setCheckState(Qt.Unchecked)
+            elif len(ro) == len(tg):
+                cb.setCheckState(Qt.Checked)
+            elif ro:
+                cb.setCheckState(Qt.PartiallyChecked)
+            else:
+                cb.setCheckState(Qt.Unchecked)
             cb.blockSignals(False)
             if not tg:
-                state_lb.setText(tr("対象のファイルがありません"
-                                    "（フォルダの読み取り専用属性は OS が無視します）。",
-                                    "No files to change (Windows ignores the "
-                                    "read-only attribute on folders)."))
+                state_lb.setText(tr("対象がありません。", "Nothing to change."))
             elif len(ro) in (0, len(tg)):
-                state_lb.setText(tr("対象ファイル %d 件。", "%d file(s) affected.")
+                state_lb.setText(tr("対象 %d 件。", "%d item(s) affected.")
                                  % len(tg))
             else:
-                state_lb.setText(tr("対象ファイル %d 件（うち読み取り専用 %d 件）。",
-                                    "%d file(s) affected (%d currently read-only).")
+                state_lb.setText(tr("対象 %d 件（うち読み取り専用 %d 件）。",
+                                    "%d item(s) affected (%d currently read-only).")
                                  % (len(tg), len(ro)))
 
         def _apply(on):
@@ -3014,8 +3213,8 @@ class BrowserPanel(QWidget):
             if len(tg) > 200:
                 ret = QMessageBox.question(
                     dlg, tr("読み取り専用", "Read-only"),
-                    tr("%d 件のファイルの読み取り専用属性を変更します。よろしいですか？",
-                       "Change the read-only attribute of %d file(s)?") % len(tg),
+                    tr("%d 件の読み取り専用属性を変更します。よろしいですか？",
+                       "Change the read-only attribute of %d item(s)?") % len(tg),
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
                 if ret != QMessageBox.Yes:
                     _refresh_state()
@@ -3034,21 +3233,30 @@ class BrowserPanel(QWidget):
                     tr("%d 件は変更できませんでした:\n%s",
                        "Could not change %d file(s):\n%s") % (len(fails), detail))
             self.status_message.emit(
-                (tr("読み取り専用にしました: %d 件", "Set read-only: %d file(s)") if on
+                (tr("読み取り専用にしました: %d 件", "Set read-only: %d item(s)") if on
                  else tr("読み取り専用を外しました: %d 件",
-                         "Cleared read-only: %d file(s)")) % done)
+                         "Cleared read-only: %d item(s)")) % done)
             _refresh_state()
             try:
                 self._column_view.viewport().update()
             except Exception as _e:
                 _swallow(_e, "ui/browser_panel.py _show_properties")
 
-        cb.toggled.connect(_apply)
+        # r144: 中間状態を自前で入れるので toggled ではなく clicked で拾う。
+        cb.clicked.connect(lambda on: _apply(on))
         rec_cb.toggled.connect(lambda _on: _refresh_state())
         lay.addWidget(cb)
         if has_dir:
             lay.addWidget(rec_cb)
         lay.addWidget(state_lb)
+        if has_dir:
+            note = QLabel(tr("※ フォルダの読み取り専用属性は、Windows では中身の"
+                             "保護には使われません（属性自体は設定されます）。",
+                             "Note: Windows does not use a folder's read-only "
+                             "attribute to protect its contents."), dlg)
+            note.setWordWrap(True)
+            note.setEnabled(False)
+            lay.addWidget(note)
         _refresh_state()
 
         row = QHBoxLayout()
@@ -3061,7 +3269,7 @@ class BrowserPanel(QWidget):
         # r124: 非モーダル（原則どおり Manager を止めない）。属性を見ながら
         # カラムを触れた方が都合が良い。対象は «開いた時の選択» なので
         # reuse=False で毎回作り直す。
-        from ui.dialog_util import show_tool_window
+        from ui.dialog_util import show_tool_window, pick_directory, pick_open_file
         show_tool_window(self, "_props_dlg", lambda: dlg, reuse=False)
 
     # ------------------------------------------------------------------
@@ -3481,13 +3689,9 @@ class BrowserPanel(QWidget):
         # r98: «Manager で開いているフォルダ» は監視ハンドルのせいで Windows では
         # 移動できない。フォルダが対象に含まれる移動の前に手放しておく。
         if move:
-            try:
-                for pth in paths:
-                    if os.path.isdir(pth):
-                        self._release_fs_handles(pth, level=1)
-                        break
-            except Exception as _e:
-                _swallow(_e, "ui/browser_panel.py:2996 _transfer_with_progress")
+            # r144: 1 件目のフォルダだけでなく «対象に含まれるフォルダ全部» を
+            # 手放す（削除と同じ理由。掴みっぱなしが 1 つでもあると弾かれる）。
+            self._release_fs_handles_for(paths, level=1)
 
         def work(cb):
             fn(paths, target, progress_cb=cb, results=results)

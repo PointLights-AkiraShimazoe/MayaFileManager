@@ -55,10 +55,14 @@ def s1():
     assert bv._launchable_exe(Path(exe)) == Path(exe)     # 通常インストールはそのまま
     print("blender detection via explicit path / version from dir: OK")
 
-    # 2) 展開リストは項目の文字幅・項目数に合わせる（本体は固定幅のまま）
+    # 2) 展開リストは項目の文字幅・項目数に合わせる
+    #    r145: 本体は «上限つきの可変幅»（狭い窓で詰まる）。上限は従来どおり 196。
     hdr = DccHeader("maya"); hdr.show()
     c = hdr.maya_conn
-    assert isinstance(c, _PopupCombo) and c.width() == 196
+    assert isinstance(c, _PopupCombo), c
+    assert c.maximumWidth() == 196, c.maximumWidth()
+    assert 0 < c.minimumWidth() < 196, c.minimumWidth()
+    assert c.width() <= 196, c.width()
     long = "Maya 2027 — some_really_long_scene_name_v012_final.ma (:20261)"
     c.addItem(long, 20261)
     c.addItem("Maya 2026 — b.ma (:20262)", 20262)
@@ -69,7 +73,7 @@ def s1():
     assert v.minimumWidth() >= need + 40 and v.minimumWidth() > c.width(), (v.minimumWidth(), need)
     assert v.minimumHeight() >= 2 * 22, v.minimumHeight()
     c.hidePopup()
-    assert c.width() == 196, "本体の幅が変わった"
+    assert c.width() <= 196, "本体の幅が上限を超えた"
     # r79: exe からアイコンが取れなくてもユーザー提供の resources/icons/app_blender.png を使う
     hdr.set_app_icons(None, r"C:\Program Files\WindowsApps\x\blender.exe")
     assert not hdr.blender_badge.icon().isNull() and hdr.blender_badge.text() == "", "app_blender.png not used"

@@ -133,7 +133,7 @@ def _apply_theme_from_settings(app):
     try:
         from core.settings_manager import SettingsManager
         mode = SettingsManager().get("theme", "dark")
-        if mode not in ("dark", "light"):
+        if mode not in ("dark", "light", "system"):   # r134: system を許容
             mode = "dark"
     except Exception as _e:
         _swallow(_e, "main.py:137 _apply_theme_from_settings")
@@ -243,9 +243,13 @@ def run_standalone(skip_launcher: bool = True):
         _report_window_error(e)
         sys.exit(1)
 
+    register_main_window(_win)
+
     if _single is not None:
         # 2 つ目が起動したら、この窓を前に出す（最小化されていても戻す）
-        def _raise_existing(w=_win):
+        # r135: 捕捉した窓ではなく «今生きている窓» を見る。
+        def _raise_existing(_w=None):
+            w = active_main_window() or _win
             try:
                 from core.compat import Qt as _Qt
                 w.setWindowState((w.windowState() & ~_Qt.WindowMinimized)
@@ -276,6 +280,23 @@ def _open_main_window(settings_manager, maya_installation=None):
 
 _maya_window_instance = None
 _crash_log_handle = None
+# r135: テーマ/言語の変更で MainWindow を作り直すので、«今生きている窓» を
+# ここで持つ。単一起動ガードの «2 つ目が来たら前面に出す» が古い窓を
+# 指したままになるのを防ぐ。
+_active_main_window = None
+
+
+def register_main_window(win, in_maya=False):
+    """作り直した MainWindow を登録する（r135）。"""
+    global _active_main_window, _maya_window_instance
+    _active_main_window = win
+    if in_maya:
+        _maya_window_instance = win
+    return win
+
+
+def active_main_window():
+    return _active_main_window
 
 
 def show_in_maya():

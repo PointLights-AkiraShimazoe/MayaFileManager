@@ -59,11 +59,38 @@ def s1():
         "通りすがり（予約時間前）でサイズスライダーが出てしまっている"
     hover = getattr(btn, "_mfm_size_hover", None)
     assert hover is not None, "▦ のホバーフィルタが付いていない"
+    # r128: QTest.mouseMove は OS のカーソルを実際には動かさないので、
+    # _open_now() の «まだボタンの上に居るか» 判定は実機で必ず False になる。
+    # ここの関心は «乗せ続けたら開く» 側なので、カーソル判定だけを差し替える。
+    #（«離れていたら開かない» 側は test_size_bar_hover_delay.py で見ている）
+    hover._cursor_on_button = lambda: True
     hover._open_now()                      # 乗せ続けて予約が切れた時と同じ
     _settle(200)
     # r102: ホバーで «全体の表示サイズ» スライダーが実際に出ること
     assert popup.isVisible(), "マウスオーバーでサイズスライダーが出ない"
     assert popup._slider.maximum() > popup._slider.minimum()
+    # r129: ボタンと «同じ高さの右» に出ていること（ユーザー指示 2026-10-08）。
+    # 真下だと切替のツールチップと重なる。
+    bg = bp.QRect(b._column_view.mapFromGlobal(btn.mapToGlobal(bp.QPoint(0, 0))),
+                  btn.size())
+    pg = popup.geometry()
+    assert pg.top() < bg.bottom() and pg.bottom() > bg.top(), \
+        ("サイズバーがボタンと同じ高さに無い", bg, pg)
+    # «真横» であること（ボタンに重ならない）。右に場所が無い時は左へ回る。
+    assert pg.left() >= bg.right() or pg.right() <= bg.left(), \
+        ("サイズバーがボタンの真横に無い", bg, pg)
+    # 右に入る幅があるなら «必ず右»。無いなら左へ逃げる。
+    room_right = b._column_view.width() - bg.right() - 8 >= pg.width()
+    if room_right:
+        assert pg.left() >= bg.right(), \
+            ("右に入るのに右に出ていない", bg, pg, b._column_view.width())
+    else:
+        assert pg.right() <= bg.left(), \
+            ("右に入らないのに左へ逃げていない", bg, pg, b._column_view.width())
+    # r129: バーが出ている間はボタンの説明ツールチップを出さない
+    #（実機で 2 重に被っていた）
+    assert btn.toolTip() == "", \
+        ("バー表示中なのにツールチップが生きている", btn.toolTip())
     # 親の中に収まっている（はみ出すと子ウィジェットはクリップされて見えない）
     g = popup.geometry()
     assert g.left() >= 0 and g.top() >= 0 \
@@ -92,6 +119,12 @@ def s1():
     _settle(600)
     assert cvw.viewMode() == QListView.ListMode, "リスト表示へ戻らない"
     print("clicking again switches back to list: OK")
+
+    # r129: バーを閉じたら説明ツールチップは元に戻る（消しっぱなしにしない）
+    popup.hide()
+    _settle(100)
+    assert btn.toolTip(), "バーを閉じてもツールチップが戻っていない"
+    print("tooltip comes back after the bar closes: OK")
     finish(True)
 
 

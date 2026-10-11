@@ -15,6 +15,7 @@
   3) 時間内に離れたら開かない（予約は取り消される）
   4) ▦ を押した時は予約を捨てる（モード切替の邪魔をしない）
   5) 予約が切れた時にカーソルが乗っていなければ開かない
+  6) 逆に、乗せ続けて予約が切れた時には開く
 """
 from _common import *  # noqa: F401,F403
 from _common import finish, app
@@ -90,12 +91,27 @@ check(h._timer.isActive(), "前提: 予約が入っている")
 h.eventFilter(btn, ev(QtCore.QEvent.MouseButtonPress))
 check(not h._timer.isActive(), "▦ を押したら予約を捨てる（モード切替の邪魔をしない）")
 
-# ── 4) 予約が切れてもカーソルが乗っていなければ開かない ───────────────
+# ── 4) 予約が切れてもカーソルが乗っていなければ開かない ───────
+# r128: 判定を _cursor_on_button() に切り出したので、「表示されていない」
+# という別の理由で止まっているだけ…という偽の合格にならないよう、
+# ボタンを表示した上でカーソル判定だけを差し替えて見る。
+btn.show()
+app.processEvents()
 before = owner.popup.shown
-h._open_now()            # カーソルはボタンの上にない（オフスクリーン）
+h._cursor_on_button = lambda: False
+h._open_now()
 app.processEvents()
 check(owner.popup.shown == before,
-      "予約が切れてもカーソルが乗っていなければ開かない（%d → %d）"
+      u"予約が切れてもカーソルが乗っていなければ開かない（%d → %d）"
+      % (before, owner.popup.shown))
+
+# ── 5) 乗せ続けて予約が切れたら開く ────────────────────
+before = owner.popup.shown
+h._cursor_on_button = lambda: True
+h._open_now()
+app.processEvents()
+check(owner.popup.shown == before + 1,
+      u"乗せ続けて予約が切れたら開く（%d → %d）"
       % (before, owner.popup.shown))
 
 finish(not fails)

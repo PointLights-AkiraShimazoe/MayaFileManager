@@ -49,10 +49,15 @@ except Exception:
 bad = 0
 for t in tests:
     t0 = time.time()
+    rc = None
     try:
-        p = subprocess.run([sys.executable, t], capture_output=True, timeout=180, env=env,
-                           cwd=os.path.dirname(t))
+        # r128: -u （非バッファ）を忘れないこと。パイプ出力は既定で
+        # ブロックバッファなので、子がクラッシュ（segfault/abort）すると
+        # それまでの print が丸ごと消え、「FAIL なのに何も出ていない」になる。
+        p = subprocess.run([sys.executable, "-u", t], capture_output=True, timeout=180,
+                           env=env, cwd=os.path.dirname(t))
         out = p.stdout.decode("utf-8", "replace") + p.stderr.decode("utf-8", "replace")
+        rc = p.returncode
     except subprocess.TimeoutExpired:
         out = "TIMEOUT"
     # r124: 判定は «テスト本体が ALL OK を出すまで» の範囲で行う。
@@ -63,7 +68,25 @@ for t in tests:
     bad += 0 if ok else 1
     say("%-40s %s (%.1fs)" % (os.path.basename(t), "PASS" if ok else "FAIL", time.time() - t0))
     if not ok:
-        say("\n".join("    " + l for l in out.strip().splitlines()[-40:]))
+        # r128: «出力が空っぽの FAIL» の正体を見分けられるよう、
+        # 終了コードを必ず残す（負値＝シグナル、大きな正値＝クラッシュ）。
+        if rc is not None:
+            say("    exit code: %d%s" % (rc, "" if "ALL OK" in out else "  (ALL OK 未出力)"))
+        # r145: «末尾 40 行» だけだと、Qt のオフスクリーン警告が大量に出た時に
+        # 肝心の FAIL 行が押し出されて «出力が空の FAIL» に見える
+        # （実機 2026-10-10: test_always_on_top_and_compact がまさにこれ）。
+        # 無関係な警告を落としてから、多めに残す。
+        _NOISE = (
+            "does not support raise()",
+            "does not support propagateSizeHints()",
+            "does not support grabbing the keyboard",
+            "QFontDatabase: Cannot find font directory",
+            "Note that Qt no longer ships fonts",
+            "QFont::setPointSizeF: Point size",
+        )
+        shown = [l for l in out.strip().splitlines()
+                 if not any(n in l for n in _NOISE)]
+        say("\n".join("    " + l for l in shown[-120:]) or "    (出力なし)")
 say("=== %d/%d passed" % (len(tests) - bad, len(tests)))
 try:
     with open(LOG, "w", encoding="utf-8") as f:

@@ -74,10 +74,51 @@ def load_tokens(force_reload=False):
     return _cached_tokens
 
 
+def system_mode() -> str:
+    """OS の外観設定から "dark" / "light" を返す（r134）。
+
+    Windows はレジストリの AppsUseLightTheme（1=ライト）が正解。
+    それ以外の OS・読めない時は Qt のパレットの明るさで判定し、
+    それも無理なら従来通り "dark"。"""
+    import os as _os
+    if _os.name == "nt":
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            try:
+                val, _t = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            finally:
+                winreg.CloseKey(key)
+            return "light" if int(val) == 1 else "dark"
+        except Exception:
+            pass
+    try:
+        from core.compat import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            c = app.palette().color(app.palette().Window)
+            # 知覚的な明度（単純な平均より見た目に近い）
+            lum = (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue())
+            return "light" if lum >= 128 else "dark"
+    except Exception:
+        pass
+    return "dark"
+
+
+def resolve_mode(pref) -> str:
+    """設定値（"system" / "dark" / "light"）を実際のモードへ解く（r134）。"""
+    pref = str(pref or "dark")
+    if pref == "system":
+        return system_mode()
+    return pref if pref in ("dark", "light") else "dark"
+
+
 def get_colors(mode="dark"):
     """解決済みの sys カラーロール辞書を返す。"""
     tokens = load_tokens()
-    return tokens["sys"][mode]
+    return tokens["sys"][resolve_mode(mode)]
 
 
 def current_mode() -> str:
@@ -90,7 +131,7 @@ def set_mode(mode: str) -> str:
     Maya 内起動では Maya 全体の見た目を壊さないよう apply_theme を呼ばないが、
     ウィジェット個別のスタイル（qss_vars）は設定に合わせる必要があるため使う。"""
     global _current_mode
-    _current_mode = mode if mode in ("dark", "light") else "dark"
+    _current_mode = resolve_mode(mode)
     return _current_mode
 
 
@@ -250,6 +291,7 @@ def _check_png(color: str, glyph: str = "check") -> str:
 
 def build_qss(mode="dark"):
     """トークンからアプリ全体の QSS 文字列を生成する。"""
+    mode = resolve_mode(mode)         # r134
     t = load_tokens()
     c = t["sys"][mode]
     shape = t["shape"]
@@ -279,6 +321,9 @@ def build_qss(mode="dark"):
         "error": c["error"],
         "selection": c["selection"],
         "on_selection": c["on_selection"],
+        # r144: 下階層を表示中の項目（＝フォーカスの無いカラムの選択）
+        "selection_open": c.get("selection_open", c["selection"]),
+        "on_selection_open": c.get("on_selection_open", c["on_selection"]),
         "hover": c["state_hover"],
         "pressed": c["state_pressed"],
         "focus": c["state_focus"],
@@ -444,6 +489,15 @@ QTreeView::item:selected, QListView::item:selected, QTableView::item:selected,
 QListWidget::item:selected, QTreeWidget::item:selected {{
     background-color: {selection};
     color: {on_selection};
+}}
+/* r144: «下階層を表示中» の印（親カラムの選択＝フォーカスの無い列）。
+   ユーザー指摘 2026-10-08「ハイライト表示があまりにも見えづらい」。
+   操作中の選択より一段弱く、でも面からははっきり浮く明度にする。 */
+QTreeView::item:selected:!active, QListView::item:selected:!active,
+QTableView::item:selected:!active, QListWidget::item:selected:!active,
+QTreeWidget::item:selected:!active {{
+    background-color: {selection_open};
+    color: {on_selection_open};
 }}
 QHeaderView::section {{
     background-color: {surface_low};
@@ -746,6 +800,7 @@ def apply_theme(app, mode="dark"):
     from core.compat import QPalette, QColor
 
     global _current_mode
+    mode = resolve_mode(mode)         # r134: "system" をここで解く
     _current_mode = mode
     c = get_colors(mode)
 

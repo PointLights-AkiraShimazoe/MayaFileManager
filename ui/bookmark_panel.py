@@ -13,7 +13,8 @@ Features
 * Emits navigate_requested(path) for the browser to pick up
 """
 from core.diag import swallow as _swallow  # r112
-from core.i18n import tr  # r118
+from core.i18n import tr
+from ui.dcc_header import glyph_icon  # r142: アイコン列を揃える
 
 from pathlib import Path
 from typing import List, Optional
@@ -172,14 +173,23 @@ class BookmarkPanel(QWidget):
     import_requested    = Signal(str)
     reference_requested = Signal(str)
 
-    def __init__(self, bookmark_manager: BookmarkManager, parent=None):
+    # r133: フォルダの開閉を覚える。«閉じているフォルダの id» を持つ。
+    # 開いている側を持つと、新しく作ったフォルダがたたむ状態で現れる。
+    # 従来の振る舞い（expandAll）を既定にしたいので閉じたものだけ記録する。
+    EXPAND_KEY = "bookmark_collapsed_ids"
+
+    def __init__(self, bookmark_manager: BookmarkManager, parent=None,
+                 settings_manager=None):
         super().__init__(parent)
         self._bm = bookmark_manager
+        self._sm = settings_manager
         self._bm.register_on_change(self._on_bookmarks_changed)
         # 表示用の状態（永続データには手を加えない）
         self._sort_on = False        # ソート表示のOn/Off（元の並びは保持）
         self._sort_desc = False      # 降順フラグ
         self._filter_text = ""       # フィルタ文字列
+        self._collapsed = set()      # r133: 閉じているフォルダの id
+        self._load_expand_state()
         self._build_ui()
         self._populate()
 
@@ -260,6 +270,9 @@ class BookmarkPanel(QWidget):
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._show_context_menu)
         self._tree.setAcceptDrops(True)
+        # r133: フォルダの開閉を覚える
+        self._tree.itemExpanded.connect(self._on_item_expand_changed)
+        self._tree.itemCollapsed.connect(self._on_item_expand_changed)
         layout.addWidget(self._tree)
 
         # Drag-drop from external (file paths)
@@ -278,8 +291,59 @@ class BookmarkPanel(QWidget):
         for node in self._ordered_filtered_tree():
             item = self._build_item(node)
             self._tree.addTopLevelItem(item)
-        self._tree.expandAll()
+        if self._filter_text:
+            # 絞り込み中は全開く（閉じたフォルダの中の一致が見えないと困る）。
+            # この時の開閉は «意思» では無いので記録しない。
+            self._tree.expandAll()
+        else:
+            self._apply_expand_state()
         self._tree.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # フォルダの開閉を覚える（r133）
+    # ------------------------------------------------------------------
+
+    def _load_expand_state(self):
+        if self._sm is None:
+            return
+        try:
+            ids = self._sm.get(self.EXPAND_KEY, [])
+            if isinstance(ids, list):
+                self._collapsed = set(str(x) for x in ids if x)
+        except Exception as _e:
+            _swallow(_e, "ui/bookmark_panel.py _load_expand_state")
+
+    def _apply_expand_state(self):
+        """閉じていたと記録されているフォルダだけたたむ。残りは開く。"""
+        def walk(item):
+            if item.childCount():
+                bid = item.data(0, ROLE_ID)
+                item.setExpanded(str(bid) not in self._collapsed)
+            for i in range(item.childCount()):
+                walk(item.child(i))
+        for i in range(self._tree.topLevelItemCount()):
+            walk(self._tree.topLevelItem(i))
+
+    def _on_item_expand_changed(self, item):
+        if self._filter_text:
+            return                  # 絞り込み中の開閉は覚えない
+        bid = item.data(0, ROLE_ID)
+        if not bid:
+            return
+        bid = str(bid)
+        if item.isExpanded():
+            self._collapsed.discard(bid)
+        else:
+            self._collapsed.add(bid)
+        self._save_expand_state()
+
+    def _save_expand_state(self):
+        if self._sm is None:
+            return
+        try:
+            self._sm.set(self.EXPAND_KEY, sorted(self._collapsed))
+        except Exception as _e:
+            _swallow(_e, "ui/bookmark_panel.py _save_expand_state")
 
     # ------------------------------------------------------------------
     # Sort / Filter （表示のみ。永続データは変更しない）
@@ -467,21 +531,23 @@ class BookmarkPanel(QWidget):
             bid   = item.data(0, ROLE_ID)
 
             if path:
-                nav_act = menu.addAction(tr("🗂  ここへ移動", "🗂  Go here"))
+                nav_act = menu.addAction(glyph_icon("🗂"), tr("ここへ移動", "Go here"))
                 nav_act.triggered.connect(lambda: self.navigate_requested.emit(path))
 
             if btype in ("file",) and path:
                 menu.addSeparator()
-                open_act = menu.addAction(tr("🎬  Maya で開く", "🎬  Open in Maya"))
+                # r142: 送り先の DCC はアイコンで示す（ブラウザの右クリックと合わせる）
+                _ic = self._dcc_icon_for(path)
+                open_act = menu.addAction(_ic, tr("開く", "Open"))
                 open_act.triggered.connect(lambda: self.open_requested.emit(path))
-                imp_act = menu.addAction(tr("⬇  インポート", "⬇  Import"))
+                imp_act = menu.addAction(_ic, tr("インポート", "Import"))
                 imp_act.triggered.connect(lambda: self.import_requested.emit(path))
-                ref_act = menu.addAction(tr("🔗  リファレンス", "🔗  Reference"))
+                ref_act = menu.addAction(_ic, tr("リファレンス", "Reference"))
                 ref_act.triggered.connect(lambda: self.reference_requested.emit(path))
 
             menu.addSeparator()
 
-            ren_act = menu.addAction(tr("✏  名前変更...", "✏  Rename..."))
+            ren_act = menu.addAction(glyph_icon("✏"), tr("名前変更...", "Rename..."))
             ren_act.triggered.connect(lambda: self._rename_item(item, bid))
 
             color_menu = menu.addMenu(tr("🎨  色を設定", "🎨  Set color"))
@@ -494,11 +560,11 @@ class BookmarkPanel(QWidget):
                 act.triggered.connect(lambda checked=False, c=hex_color: self._bm.set_color(bid, c))
 
             menu.addSeparator()
-            del_act = menu.addAction(tr("🗑  削除", "🗑  Delete"))
+            del_act = menu.addAction(glyph_icon("🗑"), tr("削除", "Delete"))
             del_act.triggered.connect(lambda: self._remove_item(bid))
 
         menu.addSeparator()
-        add_folder_act = menu.addAction(tr("📁  新しいフォルダ...", "📁  New folder..."))
+        add_folder_act = menu.addAction(glyph_icon("📁"), tr("新しいフォルダ...", "New folder..."))
         add_folder_act.triggered.connect(self._add_folder)
 
         menu.exec_(self._tree.viewport().mapToGlobal(pos))
