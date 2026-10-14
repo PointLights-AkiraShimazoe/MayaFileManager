@@ -521,6 +521,17 @@ QDockWidget::title {{
 QSplitter::handle {{ background-color: {hairline}; }}
 QSplitter::handle:horizontal {{ width: 1px; }}
 QSplitter::handle:vertical {{ height: 1px; }}
+/* アドレス欄の «ディレクトリ｜ファイル名» のバーは掴めないと意味が無いので、
+   1px ではなく当たり判定のある幅を持たせる（r146、ユーザー指示 2026-10-14）。*/
+QSplitter#mfmAddressSplit::handle:horizontal {{
+    width: 7px;
+    background-color: transparent;
+    border-left: 1px solid {outline_variant};
+    margin: 3px 0px;
+}}
+QSplitter#mfmAddressSplit::handle:horizontal:hover {{
+    border-left: 1px solid {primary};
+}}
 
 /* ---------- Tabs ---------- */
 QTabWidget::pane {{

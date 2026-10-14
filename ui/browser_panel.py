@@ -211,7 +211,8 @@ class BrowserPanel(QWidget):
         # （setText / text / returnPressed）は今までと同じなので、
         # 既存の 10 箇所以上の setText はそのまま動く。
         from ui.address_bar import AddressBar
-        self._addr_bar = AddressBar()
+        # 設定を渡すのは «ディレクトリ｜ファイル名» の分割位置を覚えるため。
+        self._addr_bar = AddressBar(settings_manager=self._sm)
         self._addr_bar.returnPressed.connect(
             lambda: self._navigate(self._addr_bar.text()))
         self._addr_bar.copied.connect(

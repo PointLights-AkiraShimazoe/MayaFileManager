@@ -152,8 +152,10 @@ def s_resize():
         if len(cols) >= 2:
             cv.set_column_width_for_view(cols[-2], 420)
             cv.set_column_width_for_view(cols[0], 160)
-        settle(lambda: (check("after resize"), s_done()))
-    QTimer.singleShot(600, lambda: settle(do))
+        # 幅を変えた直後も、カラムの再配置と hbar の上限は遅れて落ち着く
+        # （実機 2026-10-14: hmax=2466 exp=2446 の 20px ずれで落ちた）。
+        settle(lambda: (check("after resize"), s_done()), tries=60, min_n=25)
+    QTimer.singleShot(600, lambda: settle(do, tries=60, min_n=25))
 
 
 def s_done():

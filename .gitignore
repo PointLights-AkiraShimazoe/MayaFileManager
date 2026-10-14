@@ -70,3 +70,6 @@ _fbx_probe_*.fbx
 .run_tests_done
 .run_tests_only
 mfm_tests_sel.log
+.run_git_request
+.run_git_done
+.run_git_out.log
