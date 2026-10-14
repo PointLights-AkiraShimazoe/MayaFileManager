@@ -110,4 +110,48 @@ check(data.get("env") == "A=1" and data.get("wrapper") == "w.bat",
 check(hasattr(dlg, "_common_env"), "共通の環境変数の欄がある")
 dlg.deleteLater()
 
+# ── r146（ユーザー指示 2026-10-14）: ラッパーはファイル選択できること ──
+def _wrapper_browse_check():
+    """「この場合はファイル指定のはずなので、ファイル指定をするような
+    アイコンをください。」"""
+    from ui.maya_launch_dialog import _ProfileRow
+    import ui.dialog_util as _du
+    from core.compat import QToolButton
+
+    row = _ProfileRow(["2027"],
+                      {"version": "2027", "label": "x",
+                       "wrapper": "D:/tools/run.bat {exe} en_EN {file}"})
+    app.processEvents()
+    assert isinstance(getattr(row, "wrapper_browse", None), QToolButton), \
+        "ラッパー欄にファイル選択のボタンが無い"
+    assert row.wrapper_browse.toolTip(), "ボタンの説明が無い"
+
+    # 選んだら «場所だけ» 差し替わり、プレースホルダ付きの引数は残る
+    orig = _du.pick_open_file
+    try:
+        _du.pick_open_file = lambda *a, **k: ("D:\\other\\go.bat", "")
+        row._browse_wrapper()
+    finally:
+        _du.pick_open_file = orig
+    got = row.wrapper.text()
+    assert got.startswith("D:\\other\\go.bat"), got
+    assert "{exe}" in got and "{file}" in got and "en_EN" in got, \
+        ("引数が消えている", got)
+    print("wrapper: ファイル選択ボタンが場所だけ差し替える: OK (%s)" % got)
+
+    # 空欄から選んだ時はそのパスだけ
+    row.wrapper.setText("")
+    try:
+        _du.pick_open_file = lambda *a, **k: ("D:\\x y\\run.bat", "")
+        row._browse_wrapper()
+    finally:
+        _du.pick_open_file = orig
+    assert row.wrapper.text() == '"D:\\x y\\run.bat"', row.wrapper.text()
+    print("wrapper: 空白を含む場所は引用符で囲む: OK")
+    row.close()
+
+
+_wrapper_browse_check()
+
+
 finish(not fails)

@@ -207,20 +207,17 @@ class _Puck(QWidget):
             "border-radius:5px;}" % v)
 
 
-    def event(self, e):
-        """タスクバーのボタンから起こされたら開く（r146）。
-
-        マウスを乗せる以外の «戻し方» がこれしかないので、
-        ウィンドウがアクティブになった時点で開く。ただし **畳んだ直後は
-        見送る**。畳んだ拍子に回ってきたアクティブ化で開いてしまうと、
-        カーソルは窓の外にいるのですぐまた畳まれ、点滅し続ける。"""
-        try:
-            if e.type() == QtCore.QEvent.WindowActivate \
-                    and self.controller.accepts_activation():
-                QTimer.singleShot(0, self.controller.expand)
-        except Exception as _e:
-            _swallow(_e, "ui/compact_mode.py _Puck.event")
-        return super().event(e)
+    # r146 後半（ユーザー報告 2026-10-14）:
+    #   「つまみをクリックしたらドラッグ出来ずに通常ウィンドウが開きます。」
+    #
+    # ここには «ウィンドウがアクティブになったら開く» があった。
+    # パックにタスクバーのボタンを出していた頃、そのボタンから戻す唯一の
+    # 道だったため。**その前提はもう無い**（ボタンは本体のものだけにした）。
+    # 残したままだと、つまみを掴もうとして押した瞬間にパックがアクティブに
+    # なり、ドラッグが始まる前に開いてしまう＝パックを動かせない。
+    # 戻す道は «アイコンに乗せる / アイコンを押す / ファイルを落とす /
+    # 右クリックのメニュー / 本体のタスクバーのボタン» で足りている。
+    # **パックのアクティブ化では開かない。**
 
     # ── ドラッグしてきた時（r146）───────────────────────────────
     @staticmethod
@@ -326,6 +323,8 @@ class CompactController(QObject):
         self._prev_foreground = 0    # 開く前に前にいたウィンドウ（返す先）
         self._mouse_busy_since = 0.0  # «ボタンが押されている» が続き始めた時刻
         self._tool_windows = []      # 畳む時に一緒に隠した道具窓
+        self._win_rect = None        # 畳む前の本体の «中身の矩形»
+        self._puck_anchor = None     # その時のパックの位置（差分の起点）
         self._timer = QTimer(self)
         self._timer.setInterval(self.POLL_MS)
         self._timer.timeout.connect(self._tick)
@@ -356,17 +355,12 @@ class CompactController(QObject):
             self._timer.stop()
             # 畳んだ状態から抜ける時は «パックのいた場所» に開く。
             # 開いたまま抜ける時はその場に残す（関係性は保たれている）。
-            target = (self._window_pos_for_puck()
-                      if (not self._expanded and self._puck is not None)
-                      else None)
+            reopen = (not self._expanded and self._puck is not None)
             self._expanded = False
             w = self._win
-            if target is not None:
+            if reopen:
                 # 出してから動かすと «前の場所に白い枠» が一瞬見える（r146）
-                try:
-                    w.move(self._clamp(target, w.frameGeometry().size()))
-                except Exception as _e:
-                    _swallow(_e, "ui/compact_mode.py set_active(move)")
+                self._restore_window_at_puck()
             try:
                 w.setAttribute(Qt.WA_ShowWithoutActivating, False)
             except Exception as _e:
@@ -577,6 +571,29 @@ class CompactController(QObject):
         return self._top_left_for(wc, getattr(g, pc)(),
                                   self._win.frameGeometry().size())
 
+    def _restore_window_at_puck(self):
+        """畳む前に覚えた «中身の矩形» へ本体を戻す（r146 後半）。
+
+        パックを動かされていたら、その差分だけずらして戻す。
+        覚えていない時（起動直後にコンパクトを復元した等）だけ、
+        従来どおり角を合わせる計算に落ちる。"""
+        w = self._win
+        rect = getattr(self, "_win_rect", None)
+        anchor = getattr(self, "_puck_anchor", None)
+        puck = self._puck
+        try:
+            if rect is not None and anchor is not None and puck is not None:
+                d = puck.pos() - anchor
+                tl = QPoint(rect.left() + d.x(), rect.top() + d.y())
+                tl = self._clamp(tl, rect.size())
+                w.setGeometry(QRect(tl, rect.size()))
+                return
+            target = self._clamp(self._window_pos_for_puck(),
+                                 w.frameGeometry().size())
+            w.move(target)
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _restore_window_at_puck")
+
     # ── 畳む／開く ───────────────────────────────────────────────
     def collapse(self):
         """本体を «左上の角» へ畳んでパックだけにする。
@@ -594,6 +611,23 @@ class CompactController(QObject):
         # 本体がまだ見えているうちに、対応するパックの位置を決める
         if self._win.isVisible():
             puck.move(self._clamp(self._puck_pos_for_window(), puck.size()))
+        # r146 後半（ユーザー報告 2026-10-14）:
+        #   「コンパクト⇔通常を繰り返すだけで、どんどん UI が左上に
+        #     上がっていきます。閉じる起点と開く起点が合っていない証拠では
+        #     ないでしょうか。」
+        # そのとおり。原因は «枠» と «中身» の取り違えで、しかもこの 2 つの
+        # 対応は Qt の版と «今見えているか» で意味が変わる（move() が枠の
+        # 位置を指すか中身の位置を指すかが揺れる）。**変換に頼らない。**
+        # 畳む時に «中身の矩形» をそのまま覚え、開く時はそれを戻す。
+        # パックを動かされていたら、その差分だけずらす。
+        # これなら枠の厚みが何 px でも 1 px もずれない。
+        try:
+            self._win_rect = QRect(self._win.geometry())
+            self._puck_anchor = QPoint(puck.pos())
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py collapse(remember)")
+            self._win_rect = None
+            self._puck_anchor = None
         self._expanded = False
         self._hide_tool_windows()
         self._park_window()
@@ -780,21 +814,8 @@ class CompactController(QObject):
         self._expanded = True
         puck = self._ensure_puck()
         w = self._win
-        target = self._clamp(self._window_pos_for_puck(),
-                             w.frameGeometry().size())
-        # 1) 隠れているうちに置き場所を決める（出してから動かさない）
-        #    r146 後半: 畳んでいる間は «最小化» なので、move() だけでは
-        #    効かないことがある（Windows は «戻した時の位置» を別に持つ）。
-        #    WINDOWPLACEMENT の rcNormalPosition を書き替える。
-        try:
-            w.move(target)
-        except Exception as _e:
-            _swallow(_e, "ui/compact_mode.py expand(move)")
-        try:
-            from core.win_topmost import set_restore_pos
-            set_restore_pos(w, target.x(), target.y())
-        except Exception as _e:
-            _swallow(_e, "ui/compact_mode.py expand(restore pos)")
+        # 1) 出す前に置き場所を決める（出してから動かさない）
+        self._restore_window_at_puck()
         # r146（ユーザー報告 2026-10-13）:
         #   「Premiere でスペースを押しても効かず、Manager を閉じたら
         #     反応するようになりました。アクティブではないとユーザーが

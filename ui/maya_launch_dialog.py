@@ -119,10 +119,52 @@ class _ProfileRow(QFrame):
             "Without placeholders the wrapper is called as “wrapper maya.exe”.\n"
             "Note: the bridge only works if the wrapper forwards its arguments "
             "to maya.exe."))
-        g.addWidget(self.wrapper, 3, 1, 1, 4)
+        g.addWidget(self.wrapper, 3, 1, 1, 3)
+        # r146（ユーザー指示 2026-10-14）: ここは «ファイルの場所» を書く欄
+        # なので、手で打たせずに選べるようにする。
+        self.wrapper_browse = QToolButton()
+        self.wrapper_browse.setObjectName("mfmWrapperBrowse")
+        self.wrapper_browse.setText("\u2026")
+        self.wrapper_browse.setToolTip(tr("ラッパーのファイルを選ぶ",
+                                          "Choose the wrapper file"))
+        self.wrapper_browse.clicked.connect(
+            lambda _c=False: self._browse_wrapper())
+        g.addWidget(self.wrapper_browse, 3, 4)
 
         g.setColumnStretch(1, 1)
         g.setColumnStretch(3, 2)
+
+    def _browse_wrapper(self):
+        """ラッパーの .bat / .exe を選ぶ（r146）。
+
+        既に書いてある場合はそのフォルダから開く。選んでも «プレース
+        ホルダ付きの書き方»（run.bat {exe} {file}）は壊さないよう、
+        **ファイルの場所だけ** を差し替える。"""
+        cur = self.wrapper.text().strip()
+        head, tail = "", ""
+        if cur:
+            # 「D:/x/run.bat {exe} en_EN {file}」のような書き方に備えて、
+            # 先頭のファイルの場所と、その後ろの引数を分けて持つ。
+            import shlex
+            try:
+                parts = shlex.split(cur, posix=False)
+            except ValueError:
+                parts = [cur]
+            if parts:
+                head = parts[0].strip('"')
+                tail = cur[cur.find(parts[0]) + len(parts[0]):]
+        start = os.path.dirname(head) if head else ""
+        from ui.dialog_util import pick_open_file
+        picked, _filt = pick_open_file(
+            self, tr("ラッパーを選ぶ", "Choose the wrapper"), start,
+            tr("実行できるもの (*.bat *.cmd *.exe);;すべてのファイル (*)",
+               "Executables (*.bat *.cmd *.exe);;All files (*)"))
+        if not picked:
+            return ""
+        picked = os.path.normpath(picked)
+        quoted = '"%s"' % picked if " " in picked else picked
+        self.wrapper.setText((quoted + tail) if tail else quoted)
+        return picked
 
     def _remove(self):
         if callable(self._on_remove):
