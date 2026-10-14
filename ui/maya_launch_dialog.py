@@ -6,7 +6,10 @@
   検出されたバージョンを並べ、行を追加でき、バージョンはプルダウンで選ぶ。
   マネージャーのプルダウンに出す «表示名» も決められるようにする。
 
-1 行 = 1 プロファイル = （バージョン, 表示名, 追加引数）。
+1 行 = 1 プロファイル = （バージョン, 表示名, 追加引数, 環境変数, ラッパー）。
+r146（ユーザー指示 2026-10-13）: bat で組んでいた起動手順を取り込めるように
+«環境変数» と «ラッパー» を追加した。UI 言語のように Maya が起動時に読む
+設定は引数では渡せず、それが理由で bat が必要になっていたため。
 プロファイルが 1 つも無ければ、従来どおり «検出されたバージョンそのまま»
 ＋ 共通の追加引数（設定の maya_extra_args）で動く。
 """
@@ -74,7 +77,50 @@ class _ProfileRow(QFrame):
         self.args = QLineEdit(data.get("args", ""))
         self.args.setPlaceholderText(
             tr("-batch など（スペース区切り）", "e.g. -batch (space separated)"))
+        self.args.setToolTip(tr(
+            "maya.exe にそのまま渡す引数。\n"
+            "開くファイルは選択中のものが自動で渡るので書きません。",
+            "Passed straight to maya.exe.\n"
+            "The file to open is supplied automatically; do not add it here."))
         g.addWidget(self.args, 1, 1, 1, 4)
+
+        # r146（ユーザー指示 2026-10-13）: bat で組んでいた起動を取り込めるように。
+        g.addWidget(QLabel(tr("環境変数:", "Environment:")), 2, 0)
+        self.env = QLineEdit(data.get("env", ""))
+        self.env.setPlaceholderText(
+            "MAYA_UI_LANGUAGE=en_US; MAYA_MODULE_PATH=D:/path/to/modules")
+        self.env.setToolTip(tr(
+            "起動時に足す環境変数。KEY=VALUE を ; か改行で区切ります。\n"
+            "bat の «SET KEY=VALUE» をそのまま貼っても通ります。\n"
+            "UI 言語のように «Maya が起動時に読む» ものは引数では渡せないので、\n"
+            "ここに書きます（例: MAYA_UI_LANGUAGE=en_US）。",
+            "Environment variables added at launch. KEY=VALUE separated by ; "
+            "or newlines.\n"
+            "A bat-style “SET KEY=VALUE” line is accepted as well.\n"
+            "Things Maya reads at startup (such as the UI language) cannot be "
+            "passed as arguments; put them here."))
+        g.addWidget(self.env, 2, 1, 1, 4)
+
+        g.addWidget(QLabel(tr("ラッパー:", "Wrapper:")), 3, 0)
+        self.wrapper = QLineEdit(data.get("wrapper", ""))
+        self.wrapper.setPlaceholderText(
+            tr("（空欄＝ maya.exe を直接起動）  D:/path/to/run.bat {exe} en_EN {file}",
+               "(empty = launch maya.exe directly)  D:/path/to/run.bat {exe} en_EN {file}"))
+        self.wrapper.setToolTip(tr(
+            "maya.exe の代わりに走らせる .bat / .exe。\n"
+            "{exe} {file} {port} はそれぞれ Maya の実行ファイル・開くファイル・\n"
+            "連携ポートに置き換わります。\n"
+            "プレースホルダを書かない場合は «ラッパー maya.exe» の順で繋ぎます。\n"
+            "注意: 連携（開く／インポート／リファレンス）は、ラッパーが\n"
+            "引数をそのまま maya.exe へ渡す作りになっている必要があります。",
+            "A .bat / .exe to run instead of maya.exe.\n"
+            "{exe} {file} {port} are replaced with the Maya executable, the "
+            "file to open and the bridge port.\n"
+            "Without placeholders the wrapper is called as “wrapper maya.exe”.\n"
+            "Note: the bridge only works if the wrapper forwards its arguments "
+            "to maya.exe."))
+        g.addWidget(self.wrapper, 3, 1, 1, 4)
+
         g.setColumnStretch(1, 1)
         g.setColumnStretch(3, 2)
 
@@ -88,6 +134,8 @@ class _ProfileRow(QFrame):
             "version": self.ver.currentData() or "",
             "label": self.label.text().strip(),
             "args": self.args.text().strip(),
+            "env": self.env.text().strip(),
+            "wrapper": self.wrapper.text().strip(),
         }
 
 
@@ -96,11 +144,13 @@ class MayaLaunchDialog(QDialog):
 
     def __init__(self, settings_manager, versions, parent=None):
         super().__init__(parent)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
         self._sm = settings_manager
         self._versions = [str(v) for v in versions]
         self._rows = []
         self.setWindowTitle(tr("Maya の起動設定", "Maya Launch Settings"))
-        self.setMinimumSize(720, 460)
+        self.setMinimumSize(760, 520)
         self._apply_theme()
         self._build_ui()
         self._load()
@@ -126,13 +176,16 @@ class MayaLaunchDialog(QDialog):
         lay.setSpacing(8)
 
         hint = QLabel(tr(
-            "起動するバージョンと追加引数の組み合わせを並べます。\n"
-            "同じバージョンを何行でも置けるので、引数違いを使い分けられます。\n"
-            "表示名はマネージャーのプルダウンにそのまま出ます。",
-            "List the version / extra-argument combinations to launch.\n"
+            "起動するバージョンと引数・環境変数の組み合わせを並べます。\n"
+            "同じバージョンを何行でも置けるので、使い分けられます。\n"
+            "表示名はマネージャーのプルダウンにそのまま出ます。\n"
+            "UI 言語のように «Maya が起動時に読む» 設定は引数では渡せません。\n"
+            "«環境変数» に書いてください（例: MAYA_UI_LANGUAGE=en_US）。",
+            "List the version / argument / environment combinations to launch.\n"
             "The same version can appear on several rows, so you can keep\n"
-            "variants with different arguments. The display name is what the\n"
-            "manager's dropdown shows."))
+            "variants. The display name is what the manager's dropdown shows.\n"
+            "Settings Maya reads at startup (such as the UI language) cannot "
+            "be passed as arguments — put them in “Environment”."))
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -148,6 +201,20 @@ class MayaLaunchDialog(QDialog):
             "Placed before each row's own extra arguments."))
         row.addWidget(self._common_args, 1)
         lay.addLayout(row)
+
+        # r146: 共通の環境変数（全ての起動に載せる）
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel(tr("共通の環境変数:", "Shared environment:")), 0)
+        self._common_env = QLineEdit()
+        self._common_env.setPlaceholderText(
+            "MAYA_UI_LANGUAGE=en_US; MAYA_MODULE_PATH=D:/path/to/modules")
+        self._common_env.setToolTip(tr(
+            "全ての起動に載せる環境変数。各行の «環境変数» が同じ名前を\n"
+            "持っていたら、そちらが勝ちます。",
+            "Applied to every launch. A row's own value wins when the same "
+            "name appears in both."))
+        row2.addWidget(self._common_env, 1)
+        lay.addLayout(row2)
 
         self._body = QWidget()
         self._body_lay = QVBoxLayout(self._body)
@@ -188,6 +255,7 @@ class MayaLaunchDialog(QDialog):
     # ------------------------------------------------------------------
     def _load(self):
         self._common_args.setText(str(self._sm.get("maya_extra_args", "") or ""))
+        self._common_env.setText(str(self._sm.get("maya_extra_env", "") or ""))
         for data in self._sm.get_maya_launch_profiles():
             self.add_row(data)
         self._update_note()
@@ -222,6 +290,8 @@ class MayaLaunchDialog(QDialog):
 
     def _save(self):
         self._sm.set("maya_extra_args", self._common_args.text().strip(),
+                     save=False)
+        self._sm.set("maya_extra_env", self._common_env.text().strip(),
                      save=False)
         self._sm.save_maya_launch_profiles(self.profiles())
         self.accept()

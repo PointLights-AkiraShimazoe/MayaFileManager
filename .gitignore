@@ -62,3 +62,11 @@ selfcheck.txt
 # 書き戻しの経由ファイル（接続フォルダでは削除できないので無視する）
 _mfm_*.tgz
 _fbx_probe_*.fbx
+
+# ── テスト自動実行（r146 の watcher 運用）の合図ファイル ────────────
+# tools\mfm_test_watcher.ps1 が見張る。中身は一時的なものなので残さない。
+.run_tests_request
+.run_tests_running
+.run_tests_done
+.run_tests_only
+mfm_tests_sel.log

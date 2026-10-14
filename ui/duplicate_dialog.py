@@ -22,12 +22,19 @@ from core.file_operations import default_copy_name, apply_replace_name
 
 
 class DuplicateDialog(QDialog):
-    def __init__(self, paths: List[str], parent=None):
+    def __init__(self, paths: List[str], parent=None, dest_dir: str = ""):
+        """dest_dir を渡すと «別フォルダへの高度なコピー» になる（r146）。
+
+        D&D の «高度なコピー» から使う。落とし先には同名が無いのが普通なので、
+        その時は «_Copy» を足さず元の名前のまま置く（足すのは衝突した時だけ）。"""
         super().__init__(parent)
         self._paths = [p for p in paths if p]
-        self.setWindowTitle(tr("複製", "Duplicate"))
+        self._dest_dir = os.path.normpath(dest_dir) if dest_dir else ""
+        self.setWindowTitle(tr("高度なコピー", "Advanced Copy") if self._dest_dir
+                            else tr("複製", "Duplicate"))
         self.setMinimumWidth(520)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
         self._build()
         self._update_preview()
 
@@ -59,7 +66,11 @@ class DuplicateDialog(QDialog):
         self._name_label = QLabel(tr("複製物の名前:", "Name:"))
         self._name_edit = QLineEdit()
         if n == 1:
-            self._name_edit.setText(default_copy_name(self._paths[0]))
+            # r146: 別フォルダへの «高度なコピー» は、落とし先に同名が無ければ
+            # 元の名前のまま置く（_Copy を足す理由が無い）。ここを既定の
+            # default_copy_name のままにしていたので、名前欄の値が優先されて
+            # «_Copy» が付いたままだった（回帰スイート 2026-10-13）。
+            self._name_edit.setText(self._plain_name(self._paths[0], set()))
         else:
             self._name_edit.setText(tr("（複数選択: 各項目に _Copy を付けます）",
                                        "(multiple: _Copy is appended to each)"))
@@ -131,18 +142,40 @@ class DuplicateDialog(QDialog):
         replace_mode = self._mode_btn.isChecked()
         search, repl = self._search_edit.text(), self._replace_edit.text()
         for p in self._paths:
-            parent, name = os.path.dirname(p), os.path.basename(p.rstrip("/\\"))
+            parent = self._dest_dir or os.path.dirname(p)
+            name = os.path.basename(p.rstrip("/\\"))
             if replace_mode:
                 new = apply_replace_name(name, search, repl) if search else \
-                    default_copy_name(p, taken)
-                if new == name:               # 置換対象なし → _Copy に退避
-                    new = default_copy_name(p, taken)
+                    self._plain_name(p, taken)
+                if new == name:               # 置換対象なし → 既定の名前へ
+                    new = self._plain_name(p, taken)
             elif len(self._paths) == 1:
-                new = self._name_edit.text().strip() or default_copy_name(p, taken)
+                new = self._name_edit.text().strip() or self._plain_name(p, taken)
             else:
-                new = default_copy_name(p, taken)
+                new = self._plain_name(p, taken)
+            new = self._free_name(parent, new, taken)
             taken.add(new)
             out.append((p, os.path.join(parent, new)))
+        return out
+
+    def _plain_name(self, p, taken):
+        """既定の名前。別フォルダ宛なら «元の名前» のまま（r146）。"""
+        name = os.path.basename(p.rstrip("/\\"))
+        if self._dest_dir and name not in taken \
+                and not os.path.lexists(os.path.join(self._dest_dir, name)):
+            return name
+        return default_copy_name(p, taken)
+
+    @staticmethod
+    def _free_name(parent, name, taken):
+        """その場所で空いている名前にする（_Copy, _Copy2, … と足す）。"""
+        stem, ext = os.path.splitext(name)
+        i, out = 1, name
+        while out in taken or os.path.lexists(os.path.join(parent, out)):
+            i += 1
+            out = "%s_Copy%s%s" % (stem, "" if i == 2 else i, ext)
+            if i > 999:
+                break
         return out
 
     def rename_inside(self):

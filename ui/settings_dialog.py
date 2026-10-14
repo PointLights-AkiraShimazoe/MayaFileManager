@@ -246,10 +246,23 @@ class AutoNamingRuleRow(QFrame):
         levels = self._levels_edit.text()
         filename = self._file_edit.text()
         names = _an.level_vars(levels)
+        # r146: 同じ変数を 2 段で使う書き方（{Section}/…/SK_{Section}_{Chara}）は
+        # 正しいのに «変数: Section, Category, Section, Chara, Flow» と重複表示
+        # されていて、壊れているように見えていた（ユーザー報告 2026-10-11）。
+        uniq, seen = [], set()
+        for n in names:
+            if n not in seen:
+                seen.add(n)
+                uniq.append(n)
+        dup = [n for n in uniq if names.count(n) > 1]
         miss = _an.missing_vars({"levels": levels, "filename": filename})
         parts = []
-        if names:
-            parts.append(tr("変数: %s", "Variables: %s") % ", ".join(names))
+        if uniq:
+            parts.append(tr("変数: %s", "Variables: %s") % ", ".join(uniq))
+        if dup:
+            parts.append(tr("同じ変数を複数の段で使用: %s（同じ値になります）",
+                            "Used on several levels: %s (same value)")
+                         % ", ".join(dup))
         if miss:
             parts.append(tr("⚠ 対象階層に無い変数: %s",
                             "⚠ Not defined in the levels: %s") % ", ".join(miss))
@@ -295,7 +308,8 @@ class SettingsDialog(QDialog):
         self._sm = settings_manager
         self.setWindowTitle(tr("設定", "Settings"))
         self.setMinimumSize(640, 520)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
         self._build_ui()
         self._load_values()
 
@@ -438,6 +452,23 @@ class SettingsDialog(QDialog):
             "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
         _slide_note.setWordWrap(True)
         layout.addRow("", _slide_note)
+
+        # r146: D&D の «落とした時にどうするか»（ユーザー指示・持ち越し）
+        self._drop_menu_cb = QCheckBox(tr(
+            "ドラッグ＆ドロップで «移動 / コピー / 高度なコピー» を選ぶ",
+            "Ask move / copy / advanced copy on drag-and-drop"))
+        layout.addRow("", self._drop_menu_cb)
+        _drop_note = QLabel(tr(
+            "Unreal Engine と同じで、落とした場所にメニューが出ます。\n"
+            "Ctrl を押しながら落とせばコピー、Shift なら移動で、メニューは出ません。\n"
+            "切ると従来どおり «落としたら移動»（Ctrl でコピー）になります。",
+            "A menu appears where you drop, as in Unreal Engine.\n"
+            "Hold Ctrl to copy or Shift to move without the menu.\n"
+            "When off, dropping moves straight away (Ctrl copies)."))
+        _drop_note.setStyleSheet(
+            "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
+        _drop_note.setWordWrap(True)
+        layout.addRow("", _drop_note)
 
         layout.addRow(_HLine())
         layout.addRow(_SectionLabel("サムネイル"))
@@ -601,6 +632,7 @@ class SettingsDialog(QDialog):
             double_map.get(sm.get("double_click_action", "open"), 0))
 
         self._show_hidden_cb.setChecked(sm.get("show_hidden_files", False))
+        self._drop_menu_cb.setChecked(bool(sm.get("drop_action_menu", True)))
 
         # ブラウザ
         self._col_depth_spin.setValue(sm.get("column_max_depth", 4))
@@ -647,6 +679,7 @@ class SettingsDialog(QDialog):
                double_map.get(self._double_click_combo.currentIndex(), "open"),
                save=False)
         sm.set("show_hidden_files", self._show_hidden_cb.isChecked(), save=False)
+        sm.set("drop_action_menu", self._drop_menu_cb.isChecked(), save=False)
 
         # ブラウザ
         sm.set("column_max_depth", self._col_depth_spin.value(), save=False)

@@ -31,6 +31,8 @@ class DisplayNameDialog(QDialog):
 
     def __init__(self, directory: str, parent=None):
         super().__init__(parent)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
         self._dir = directory
         self._rows = []            # [(実体名, QLineEdit)]
 

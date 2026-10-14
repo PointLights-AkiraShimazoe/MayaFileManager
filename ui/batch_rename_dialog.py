@@ -23,7 +23,8 @@ from core.compat import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QMessageBox, QColor
 )
-from core.file_operations import RenameRule, batch_rename
+from core.file_operations import RenameRule, batch_rename, rename_path
+import os
 
 
 # ---------------------------------------------------------------------------
@@ -100,10 +101,15 @@ class BatchRenameDialog(QDialog):
         super().__init__(parent)
         self._paths = list(paths)
         self._current_results: List[Tuple] = []
+        # r146（ユーザー指示 2026-10-13）:
+        #   「バッチリネームが選択しているフォルダが有る場合に階層下も
+        #     出来るように、「サブフォルダにも適用」ボタンをください。」
+        self._has_dirs = any(os.path.isdir(p) for p in self._paths)
 
         self.setWindowTitle(tr("バッチリネーム", "Batch Rename"))
         self.setMinimumSize(720, 560)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
 
         self._build_ui()
         self._update_preview()
@@ -194,6 +200,22 @@ class BatchRenameDialog(QDialog):
         self._case_combo.currentIndexChanged.connect(self._update_preview)
         case_row.addWidget(QLabel(tr("大文字小文字:", "Letter case:")))
         case_row.addWidget(self._case_combo)
+        case_row.addSpacing(16)
+
+        # r146: 選択にフォルダが含まれている時だけ出す。
+        from core.compat import QCheckBox
+        self._recursive_cb = QCheckBox(tr("サブフォルダにも適用",
+                                          "Apply to subfolders"))
+        self._recursive_cb.setToolTip(tr(
+            "選んだフォルダの中身（さらにその下も）を対象に加えます。\n"
+            "実行は «深いものから» 行うので、親フォルダの名前が変わっても\n"
+            "中身の処理が外れません。",
+            "Also include everything inside the selected folders.\n"
+            "Renaming runs deepest-first, so renaming a parent folder does "
+            "not break the children."))
+        self._recursive_cb.setVisible(self._has_dirs)
+        self._recursive_cb.toggled.connect(lambda _v=False: self._update_preview())
+        case_row.addWidget(self._recursive_cb)
         case_row.addStretch()
         root.addLayout(case_row)
 
@@ -311,9 +333,42 @@ class BatchRenameDialog(QDialog):
             return stem + Path(name).suffix
         return name
 
+    def _targets(self) -> List[str]:
+        """リネーム対象（r146: «サブフォルダにも適用» を反映）。
+
+        並びは «選んだ順 → その中身を上から» のまま。連番モードの番号が
+        見た目どおりになるようにするため。実行時だけ深い順に並べ替える。"""
+        cb = getattr(self, "_recursive_cb", None)   # 構築途中でも落ちない
+        if not (self._has_dirs and cb is not None and cb.isChecked()):
+            return list(self._paths)
+        out, seen = [], set()
+
+        def _add(p):
+            k = os.path.normcase(os.path.abspath(p))
+            if k not in seen:
+                seen.add(k)
+                out.append(p)
+        for p in self._paths:
+            _add(p)
+            if not os.path.isdir(p):
+                continue
+            try:
+                for root, dirs, files in os.walk(p):
+                    for n in sorted(dirs) + sorted(files):
+                        _add(os.path.join(root, n))
+            except OSError:
+                continue
+        return out
+
+    @staticmethod
+    def _deepest_first(pairs):
+        """親より先に子をリネームする（親を先に変えると子のパスが迷子になる）。"""
+        return sorted(pairs, key=lambda t: len(os.path.normpath(t[0]).split(os.sep)),
+                      reverse=True)
+
     def _update_preview(self):
         rule = self._build_rule()
-        results = batch_rename(self._paths, rule, dry_run=True)
+        results = batch_rename(self._targets(), rule, dry_run=True)
 
         # Apply case transform to new names
         case_results = []
@@ -350,6 +405,18 @@ class BatchRenameDialog(QDialog):
                                        "There are no files to rename."))
             return
 
+        # r146: 走っているコピー／移動／削除の対象は触らせない
+        from core.file_locks import conflicts
+        bad = conflicts([o for o, _n in ok_paths])
+        if bad:
+            QMessageBox.information(
+                self, tr("バッチリネーム", "Batch Rename"),
+                tr("処理中のため、いまリネームできない項目があります:\n%s",
+                   "Some items are busy and cannot be renamed right now:\n%s")
+                % "\n".join("  " + os.path.basename(r.rstrip("/\\"))
+                            for r, _l in bad[:10]))
+            return
+
         ret = QMessageBox.question(
             self, tr("実行確認", "Confirm"),
             tr("%d 件のファイルをリネームしますか？",
@@ -359,8 +426,18 @@ class BatchRenameDialog(QDialog):
         if ret != QMessageBox.Yes:
             return
 
-        rule = self._build_rule()
-        results = batch_rename(self._paths, rule, dry_run=False)
+        # r146: プレビューで出した «変換後» をそのまま使う。
+        # ここで batch_rename を呼び直すと、サブフォルダ対応の時に
+        # «親を先に変えて子のパスが迷子になる» ことが起きる。
+        results = []
+        for old_p, new_p in self._deepest_first(ok_paths):
+            if os.path.lexists(new_p) and os.path.normcase(new_p) != \
+                    os.path.normcase(old_p):
+                results.append((old_p, new_p,
+                                tr("同名が既にあります", "Target already exists")))
+                continue
+            ok, err = rename_path(old_p, new_p)
+            results.append((old_p, new_p, None if ok else str(err)))
 
         failed = [(o, n, e) for o, n, e in results if e]
         if failed:

@@ -45,6 +45,9 @@ from core.blender_version import (BlenderInstallation, find_installed_blender_ve
                                   launch_blender)
 from core import blender_bridge as _bl
 from core.file_operations import dcc_for_path
+# r146: メニューの «開く / インポート / リファレンス» が NameError で
+# 無反応だった（r145 でネイティブダイアログをやめた時の取りこぼし）。
+from ui.dialog_util import pick_open_file, pick_directory  # noqa: F401
 from core.i18n import tr
 def _tv():
     """テーマトークン（色・形状・書体）。**遅延 import** すること。
@@ -132,6 +135,12 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         # ウィンドウが作り直されるため、先にやると復元した位置が飛ぶ）。
         if bool(self._sm.get(self.ALWAYS_ON_TOP_KEY, False)):
             QTimer.singleShot(0, lambda: self.set_always_on_top(True))
+        # r146（ユーザー報告 2026-10-13）: コンパクトのまま終了すると、次の起動で
+        # «本体も出ない・パックも出ない» になっていた。ACTIVE_KEY を保存する
+        # だけで読み戻していなかったため。ここで復元する（本体を見せてからに
+        # する。先に畳むと復元したジオメトリが確定しない）。
+        if bool(self._sm.get("compact_mode", False)):
+            QTimer.singleShot(0, self._restore_compact_mode)
 
     # ------------------------------------------------------------------
     # UI Construction
@@ -863,11 +872,36 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         # 対象は «開いた時点の選択» なので、後ろで選択が変わっても影響しない。
         def _make(ps=list(paths)):
             d = BatchRenameDialog(ps, parent=self)
-            d.renamed.connect(lambda results: self.statusBar().showMessage(
-                tr("%d 件リネーム完了", "Renamed %d item(s)") % len(results)))
+            d.renamed.connect(self._on_batch_renamed)
             return d
         # reuse=False: 対象は «呼んだ時の選択» なので使い回してはいけない
         self._show_tool_window("_batch_rename_dlg", _make, reuse=False)
+
+    def _on_batch_renamed(self, results):
+        """バッチリネームの後始末（r146、ユーザー報告 2026-10-13）。
+
+        r145 まではステータスバーに件数を出すだけで、**ブラウザを一切
+        更新していなかった**。os.rename は QFileSystemModel の外で起きるため、
+        取りこぼすと «古い名前が残ったまま新しい名前が増える»＝新規作成された
+        ように見える。変更があったフォルダを読み直させる。"""
+        try:
+            self.statusBar().showMessage(
+                tr("%d 件リネーム完了", "Renamed %d item(s)") % len(results))
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _on_batch_renamed(status)")
+        try:
+            import os as _os
+            dirs, seen = [], set()
+            for old_p, _new_p in results or []:
+                d = _os.path.dirname(_os.path.normpath(old_p))
+                k = _os.path.normcase(d)
+                if d and k not in seen:
+                    seen.add(k)
+                    dirs.append(d)
+            for d in dirs[:8]:          # 深い階層を丸ごと変えた時の暴発止め
+                self._browser._resync_dir(d)
+        except Exception as e:
+            self._log_quiet("batch rename refresh failed: %r" % (e,))
 
     def _open_reference_editor(self):
         """リファレンスエディタ（r119: 非モーダル）。
@@ -1191,36 +1225,53 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
     # ------------------------------------------------------------------
     ALWAYS_ON_TOP_KEY = "always_on_top"
 
-    def set_always_on_top(self, on: bool):
-        """すべてのウィンドウの上に出す／やめる。
+    def is_always_on_top(self) -> bool:
+        return bool(getattr(self, "_on_top", False))
 
-        Windows ではフラグを変えると一度ウィンドウが作り直されるので、
-        位置と大きさを自分で持ち越す（放っておくと左上へ飛ぶ）。"""
+    def set_always_on_top(self, on: bool):
+        """すべてのウィンドウの上に出す／やめる（r146 で実装を入れ替え）。
+
+        r145 までは ``setWindowFlag(Qt.WindowStaysOnTopHint)`` でやっていたが、
+        これには看過できない副作用が 3 つあった（ユーザー報告 2026-10-11）。
+
+        1. タイトルバーの ✕ / 最小化 / 最大化 が付かなくなる。Qt の
+           ``adjustFlags()`` は «カスタマイズ系のヒントが 1 つでも立っていたら
+           既定の部品を足さない» ので、最前面表示を入れた瞬間に ✕ が灰色の
+           «押せないボタン» になる。
+        2. ウィンドウが作り直されるので、切り替えのたびに白い枠が一瞬見える。
+        3. **子ダイアログが本体の裏に回る。** Windows の TOPMOST は «TOPMOST
+           でない窓は絶対に上に来られない» という規則なので、確認ダイアログや
+           保存ダイアログが本体の裏で開く。モーダルなら入力はそこで止まるので、
+           ユーザーから見ると «削除もエクスプローラー表示も保存も無反応»。
+
+        r146 は Win32 の SetWindowPos を直接呼ぶ（core/win_topmost.py）。
+        Qt のフラグを触らないので 1・2 は起きない。3 は TopmostKeeper が
+        «新しく出た窓も一緒に最前面へ上げる» ことで消す。"""
         on = bool(on)
+        self._on_top = on
         try:
             self._sm.set(self.ALWAYS_ON_TOP_KEY, on)
         except Exception as _e:
             _swallow(_e, "ui/main_window.py set_always_on_top(save)")
         try:
-            if bool(self.windowFlags() & Qt.WindowStaysOnTopHint) == on:
-                return
-            geo = self.geometry()
-            visible = self.isVisible()
-            self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
-            self.setGeometry(geo)
-            if visible:
-                self.show()
-                self.raise_()
+            from core.win_topmost import set_topmost
+            set_topmost(self, on)
+            self._topmost_keeper().set_active(on)
         except Exception as e:
-            try:
-                from ui.browser_panel import _mfm_log
-                _mfm_log("always_on_top failed: %r" % (e,))
-            except Exception:
-                pass
+            self._log_quiet("always_on_top failed: %r" % (e,))
         try:
             self._lead_blk.set_always_on_top(on)
         except Exception as _e:
             _swallow(_e, "ui/main_window.py set_always_on_top(ui)")
+
+    def _topmost_keeper(self):
+        """最前面表示の «お守り役»（遅延生成）。"""
+        k = getattr(self, "_topmost_keep", None)
+        if k is None:
+            from ui.topmost_keeper import TopmostKeeper
+            k = TopmostKeeper(self)
+            self._topmost_keep = k
+        return k
 
     def _compact(self):
         """コンパクトモードの制御（遅延生成）。"""
@@ -1232,12 +1283,18 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         return c
 
     def set_compact_mode(self, on: bool):
-        """コンパクトモードの入り切り（r145）。
+        """コンパクトモードの入り切り（r145 / r146 で方針変更）。
 
-        入る時は最前面表示も一緒に入れる。そうしないとパックが Maya の裏に
-        回ってしまい «乗せる» ことができない。"""
-        if bool(on):
-            self.set_always_on_top(True)
+        r145 は «入る時に最前面表示も一緒に入れる» ことでパックが Maya の裏へ
+        回るのを防いでいた。r146 でこれをやめる（ユーザー指示 2026-10-11:
+        «常に最前面にしていない時に、どこに行ったかがわからなくなります»）。
+        最前面表示は **ユーザーが決めるもの** で、コンパクトモードが勝手に
+        触ってよいものではない。代わりに
+
+          * パック自身を «常に手前» の小窓にする（本体の設定とは無関係）
+          * パックを **タスクバーに出す**（Qt.Tool をやめて Qt.Window に）
+
+        の 2 つで «見失わない» を担保する。"""
         self._compact().set_active(bool(on))
 
     def enter_compact_mode(self):
@@ -1256,6 +1313,23 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             self._lead_blk.set_open_dir(self._compact().open_dir())
         except Exception as _e:
             _swallow(_e, "ui/main_window.py set_compact_open_dir")
+
+    def _restore_compact_mode(self):
+        """起動時にコンパクトモードを復元する（r146）。
+
+        «見失わない» ことを最優先にする。パックを出せなかった場合は
+        コンパクトを諦めて通常表示に戻す（CompactController 側で面倒を見る）。"""
+        try:
+            if not self.isVisible():
+                self.show()           # ジオメトリを確定させてから畳む
+            self._compact().restore_from_settings()
+        except Exception as e:
+            self._log_quiet("compact restore failed: %r" % (e,))
+            try:
+                self._compact().set_active(False)
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py _restore_compact_mode")
+        self.sync_compact_button()
 
     def sync_compact_button(self):
         """ヘッダのボタンの «光っている/いない» を今の状態に合わせる。"""

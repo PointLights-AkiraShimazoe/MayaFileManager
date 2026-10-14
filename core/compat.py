@@ -95,3 +95,26 @@ def exec_app(app):
         return app.exec()
     else:
         return app.exec_()
+
+
+# ---------------------------------------------------------------------------
+# C++ 側が生きているか（r146）
+# ---------------------------------------------------------------------------
+def is_alive(obj) -> bool:
+    """その Python ラッパーが指す C++ オブジェクトがまだ生きているか。
+
+    Qt の destroyed は «C++ のデストラクタの中» から飛ぶ。その中で別の
+    オブジェクトを触ると、同時に捨てられている最中のものを叩いて
+    ACCESS_VIOLATION で落ちる。触る前にここで確かめる。
+    shiboken が無い環境では «生きている» 扱いにして従来どおり動かす。
+    """
+    if obj is None:
+        return False
+    try:
+        if PYSIDE_VERSION == 6:
+            from shiboken6 import isValid
+        else:
+            from shiboken2 import isValid
+        return bool(isValid(obj))
+    except Exception:
+        return True

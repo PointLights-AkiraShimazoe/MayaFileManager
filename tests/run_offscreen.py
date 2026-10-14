@@ -11,6 +11,34 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 LOG = os.path.join(ROOT, "mfm_tests.log")
 tests = sorted(glob.glob(os.path.join(HERE, "offscreen", "test_*.py")))
+# r146: 絞り込み（python tests/run_offscreen.py 語 語 ...）。
+#   全部で 7 分かかるので、落ちた数本だけ回したい時に使う。語はファイル名の
+#   部分一致。結果の書き出し先は絞り込み時だけ mfm_tests_sel.log に分ける
+#   （全体の結果 mfm_tests.log を部分実行で上書きしないため）。
+_ARGS = [a for a in sys.argv[1:] if not a.startswith("-")]
+_ENV_ARGS = {}
+# 「KEY=VALUE」の語は «子プロセスの環境変数» として渡す（r146）。
+# 切り分け用の殺しスイッチを、watcher 経由でも入れられるようにするため。
+for _a in list(_ARGS):
+    if "=" in _a and not os.path.exists(_a):
+        k, v = _a.split("=", 1)
+        if k and k.replace("_", "").isalnum():
+            _ENV_ARGS[k] = v
+            _ARGS.remove(_a)
+# 「x5」のような語は «選んだものを 5 回ずつ回す» の指定（断続クラッシュの
+# 再現率を上げるため。r146）
+REPEAT = 1
+for _a in list(_ARGS):
+    if len(_a) > 1 and _a[0] in "xX" and _a[1:].isdigit():
+        REPEAT = max(1, int(_a[1:]))
+        _ARGS.remove(_a)
+PICK = _ARGS
+if PICK:
+    tests = [t for t in tests
+             if any(k.lower() in os.path.basename(t).lower() for k in PICK)]
+    LOG = os.path.join(ROOT, "mfm_tests_sel.log")
+    if REPEAT > 1:
+        tests = [t for t in tests for _ in range(REPEAT)]
 env = dict(os.environ); env.setdefault("QT_QPA_PLATFORM", "offscreen")
 # r124: mayapy は起動時に «ユーザーの» userSetup.py を全部実行する。第三者ツール
 # （Bonjolt 等）がそこで例外を出すと、その Traceback がテストの出力に混ざって
@@ -21,6 +49,12 @@ env.setdefault("MAYA_SKIP_USERSETUP_PY", "1")
 # «◆◆◆» に化け、cp932 に無い文字（絵文字）では子側が UnicodeEncodeError で
 # 落ちていた（実機 2026-10-06）。
 env.setdefault("PYTHONIOENCODING", "utf-8")
+# r146: C++ 側で落ちた時（Windows の ACCESS_VIOLATION 3221225477）に、
+# せめて Python のスタックを出させる。子の «起動時» から有効にしたいので
+# 環境変数で入れる（テストの中で faulthandler.enable() を呼ぶのでは、
+# Maya が先に入れた例外ハンドラに負けて何も出ないことがある）。
+env.setdefault("PYTHONFAULTHANDLER", "1")
+env.update(_ENV_ARGS)
 lines = []
 
 
@@ -35,7 +69,10 @@ def say(s=""):
     lines.append(s)
 
 
-say("=== MayaFileManager 回帰スイート %s ===" % datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+say("=== MayaFileManager 回帰スイート %s ===%s" % (
+    datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    ("  [絞り込み: %s / %d 本 / x%d]"
+     % (" ".join(PICK), len(tests), REPEAT)) if PICK else ""))
 say("python=%s exe=%s os=%s" % (platform.python_version(), sys.executable, platform.platform()))
 try:
     import PySide6  # noqa
@@ -83,6 +120,8 @@ for t in tests:
             "QFontDatabase: Cannot find font directory",
             "Note that Qt no longer ships fonts",
             "QFont::setPointSizeF: Point size",
+            # r146: これが数十行続くと肝心の FAIL 行が押し出される
+            "index from wrong model passed to mapToSource",
         )
         shown = [l for l in out.strip().splitlines()
                  if not any(n in l for n in _NOISE)]

@@ -497,11 +497,16 @@ class P4Provider(Provider):
             out.append(p.rstrip("\\/") + "/..." if is_dir else p)
         return out
 
-    def _cli(self, args, cwd, what):
+    def _cli(self, args, cwd, what, file_from: int = None):
         """actions() 用: 実行結果を report() で UI へ返す（r58）。
-        r122: 接続引数は «そのフォルダのワークスペース» で組む。"""
+        r122: 接続引数は «そのフォルダのワークスペース» で組む。
+        r146: file_from に «args の中でファイル群が始まる位置» を渡すと、
+        コマンドラインが長すぎる時に分割して実行する（平坦ビューで数百件を
+        選ぶと上限 32767 文字を超え、一部しか実行されなかった）。"""
         conn = self.conn_args_for(cwd)
-        return lambda: self.run_cli_async([self.p4] + conn + args, cwd, what)
+        cmd = [self.p4] + conn + args
+        fixed = None if file_from is None else (1 + len(conn) + file_from)
+        return lambda: self.run_cli_async(cmd, cwd, what, fixed_len=fixed)
 
     def _vc(self, command, paths):
         return lambda: spawn([self.p4vc, command] + list(paths))
@@ -543,18 +548,20 @@ class P4Provider(Provider):
         cwd = os.path.dirname(paths[0]) if paths else root
         rpaths = self.recurse(paths)      # r121: フォルダは «その下すべて»
         co = (tr("チェックアウト（p4 edit）", "Checkout (p4 edit)"),
-              self._cli(["edit"] + rpaths, cwd, tr("チェックアウト", "Checkout")))
+              self._cli(["edit"] + rpaths, cwd, tr("チェックアウト", "Checkout"),
+                        file_from=1))
         extra = self._checkout_precheck(paths)
         if extra:
             co = co + (extra,)
         acts = [
             co,
             (tr("追加（p4 add）", "Add (p4 add)"),
-             self._cli(["add"] + rpaths, cwd, tr("追加", "Add"))),
+             self._cli(["add"] + rpaths, cwd, tr("追加", "Add"), file_from=1)),
             (tr("最新を取得（p4 sync）", "Get latest (p4 sync)"),
-             self._cli(["sync"] + rpaths, cwd, tr("最新を取得", "Sync"))),
+             self._cli(["sync"] + rpaths, cwd, tr("最新を取得", "Sync"), file_from=1)),
             (tr("変更を元に戻す（p4 revert）", "Revert (p4 revert)"),
-             self._cli(["revert"] + rpaths, cwd, tr("変更を元に戻す", "Revert")),
+             self._cli(["revert"] + rpaths, cwd, tr("変更を元に戻す", "Revert"),
+                        file_from=1),
              {"confirm": tr("%d 件のローカル変更を破棄して元に戻します。よろしいですか？"
                             % len(paths),
                             "Discard local changes of %d file(s) and revert?"

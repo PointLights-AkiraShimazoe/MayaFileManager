@@ -311,6 +311,8 @@ class ReferencePresetEditor(QDialog):
 
     def __init__(self, settings_manager, parent=None, bridge_cb=None):
         super().__init__(parent)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
         self._sm = settings_manager
         self._presets: Dict[str, Any] = self._sm.get_reference_presets()
         self._current_name: Optional[str] = None

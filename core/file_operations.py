@@ -688,18 +688,45 @@ def _parse_lnk_target(path: str) -> Optional[str]:
 
 
 def reveal_in_explorer(path: str):
-    """Show the file in the platform file manager."""
+    """エクスプローラー（Finder / ファイルマネージャ）でその場所を開く。
+
+    r146（ユーザー報告 2026-10-11「エクスプローラーで開くも効きません」）:
+
+    * ``["explorer", "/select,", str(p)]`` は **間違い**。subprocess は
+      引数を空白で繋ぐので実際には ``explorer /select, C:\path`` となり、
+      エクスプローラーはカンマの後の空白で切ってしまい «ドキュメント» が
+      開くだけで終わる（何も起きないように見える）。正しくは
+      ``/select,"C:\path"`` と **1 つの引数** にする。
+    * 存在しない時に黙って return していたので «押しても無反応» だった。
+      親フォルダが生きていればそこを開き、それも無ければ理由を投げる。
+    """
     system = platform.system()
     p = Path(path)
-    if not p.exists():
-        return
+    select = p.exists()
+    if not select:
+        # 消えた直後・クラウドの実体なし等。親だけでも開く方が親切。
+        if not p.parent.exists():
+            raise FileOperationError(
+                "Cannot reveal %s: path not found" % path)
     try:
         if system == "Windows":
-            subprocess.Popen(["explorer", "/select,", str(p)])
+            target = os.path.normpath(str(p if select else p.parent))
+            # ドライブ直下（D:\）のように末尾が \ だと、"D:\" の \" が
+            # エスケープ扱いになって引用が壊れる。重ねて逃がす。
+            if target.endswith("\\"):
+                target += "\\"
+            if select:
+                # 1 引数として渡す（リストにすると空白が入って壊れる）
+                subprocess.Popen('explorer /select,"%s"' % target)
+            else:
+                subprocess.Popen('explorer "%s"' % target)
         elif system == "Darwin":
-            subprocess.Popen(["open", "-R", str(p)])
+            if select:
+                subprocess.Popen(["open", "-R", str(p)])
+            else:
+                subprocess.Popen(["open", str(p.parent)])
         else:
-            subprocess.Popen(["xdg-open", str(p.parent)])
+            subprocess.Popen(["xdg-open", str(p if p.is_dir() else p.parent)])
     except Exception as e:
         raise FileOperationError(f"Cannot reveal {path}: {e}") from e
 

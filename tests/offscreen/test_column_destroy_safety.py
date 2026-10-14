@@ -7,13 +7,17 @@ C++ のデストラクタの中から飛ぶ。そこで台帳の全カラムを�
 呼ぶ）していたため、同時に捨てられている列を叩いてプロセスごと落ちていた。
 
 確認すること:
-  1) destroyed ハンドラは «本人を台帳から外す» だけで、走査しない
+  1) destroyed ハンドラは **何も触らない**（走査も台帳の組み替えもしない）
   2) 走査・再描画は次のイベントループで行われる
   3) 台帳から確実に消える（破棄後に古いカラムが残らない）
+  4) r146: destroyed を lambda でつながない。lambda には持ち主が無いので、
+     この QColumnView が先に捨てられた後でも呼ばれ、解放済みメモリを触る
 """
 import os
 from _common import *  # noqa: F401,F403
 from _common import app, finish, tmpdir, make_panel
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 fails = []
 _keep = []
@@ -39,9 +43,31 @@ class _Dummy:
 
 d1, d2 = _Dummy(), _Dummy()
 cv._mfm_columns = [d1, d2]
-cv._on_column_destroyed(id(d1))
+cv._on_column_destroyed()
 check(not scanned, "destroyed の中では走査しない（%r）" % (scanned,))
-check(cv._mfm_columns == [d2], "死んだ本人だけ台帳から外れる（%r）" % (cv._mfm_columns,))
+# r146: 台帳の組み替えも «デストラクタの中ではやらない» に変えた。
+# 死んだものを外すのは次のループの _live_columns（RuntimeError で落とす）。
+# デストラクタの中でリストを作り直すと、同時に捨てられている最中の
+# ラッパーに触れてしまう。
+check(cv._mfm_columns == [d1, d2],
+      "destroyed の中では台帳も触らない（%r）" % (cv._mfm_columns,))
+
+# r146: lambda ではなく «束縛メソッド» でつなぐこと。
+# lambda には持ち主が無いので、この QColumnView が先に捨てられた後でも
+# 呼ばれてしまい、解放済みメモリを触って 3221225477 で落ちる。
+import ast, io as _io, os as _os
+_src = _io.open(_os.path.join(ROOT, "ui", "browser_column_view.py"),
+                encoding="utf-8").read()
+_fn = [n for n in ast.walk(ast.parse(_src))
+       if isinstance(n, ast.FunctionDef) and n.name == "_track_column"][0]
+_lambda_connects = []
+for n in ast.walk(_fn):
+    if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+            and n.func.attr == "connect":
+        if any(isinstance(a, ast.Lambda) for a in n.args):
+            _lambda_connects.append(n.lineno)
+check(not _lambda_connects,
+      "destroyed を lambda でつながない（%r）" % (_lambda_connects,))
 
 # 2) 走査は次のイベントループで行われる
 cv._mfm_columns = []

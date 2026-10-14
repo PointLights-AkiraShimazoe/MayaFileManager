@@ -117,7 +117,8 @@ class ReferenceEditor(QDialog):
             title += f"  —  {Path(ma_file_path).name}"
         self.setWindowTitle(title)
         self.setMinimumSize(900, 560)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
 
         self._build_ui()
         self._load_references()

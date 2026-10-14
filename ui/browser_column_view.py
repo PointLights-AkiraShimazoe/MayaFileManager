@@ -3,7 +3,8 @@
 
 CappedColumnView: 深さ上限つき QColumnView。選択・D&D・カラム幅・
 表示モード切替など、カラム上の操作はすべてここに集約する。"""
-from core.diag import swallow as _swallow  # r112
+from core.diag import swallow as _swallow
+from core.diag import diag_off as _diag_off  # r146 切り分け用
 from core.i18n import tr  # r118
 
 import os
@@ -18,6 +19,7 @@ from core.compat import (
     QFontMetrics, QTimer, QDrag, QCursor,
 )
 from core.compat import QtCore as _QtCore
+from core.compat import is_alive
 try:  # PySide6: QtGui / PySide2: QtWidgets
     from core.compat import QIcon
 except ImportError:  # pragma: no cover
@@ -656,6 +658,8 @@ class CappedColumnView(QColumnView):
                 # 渡したところ、アプリ既定のスタイルが proxy の持ち物になり、
                 # ビューが丸ごと壊れた（カラムに項目が出なくなった）。
                 # 引数なしなら «その時のアプリのスタイル» を所有せずに包む。
+                if _diag_off("no_noanim_style"):
+                    return
                 st = _NoAnimationStyle()
                 st.setParent(self)             # 参照を保って GC を防ぐ
                 self._noanim_style = st
@@ -787,21 +791,31 @@ class CappedColumnView(QColumnView):
             # 他のカラムのメソッドを呼ぶと、QColumnView が同時に捨てている
             # «死にかけのカラム» を叩いて ACCESS_VIOLATION で落ちる
             # （test_preset_dirs の断続クラッシュ 3221225477 の正体）。
-            # ここでは «死んだ本人を自分の台帳から外す» だけにして、
-            # 走査と再描画は次のイベントループへ逃がす。
-            view.destroyed.connect(
-                lambda *_a, _i=id(view): self._on_column_destroyed(_i))
+            #
+            # r146: さらに **lambda でつないではいけない**。
+            # PySide はスロットが «束縛メソッド» の時だけ、その持ち主を
+            # 受け手（receiver）として覚え、持ち主が死んだら自動で切る。
+            # lambda には持ち主が無いので、**この QColumnView 自身が先に
+            # 捨てられた後でも呼ばれてしまう**。中で self を触れば解放済み
+            # メモリへのアクセスになり、ランダムなテストが 3221225477 で
+            # 落ちる（2026-10-14 の断続クラッシュ。毎回違うテストで出て
+            # faulthandler にも残らないのは、Python ではなく C++ 側で
+            # 落ちているため）。束縛メソッドを直接つなぐ。
+            if not _diag_off("no_destroy_hook"):
+                view.destroyed.connect(self._on_column_destroyed)
         except Exception as _e:
             _swallow(_e, "ui/browser_column_view.py:598 _track_column")
         QTimer.singleShot(0, self._repaint_columns)
 
-    def _on_column_destroyed(self, dead_id=None):
-        """破棄通知（デストラクタの中）。ここでは一切カラムを触らない。"""
-        if dead_id is not None:
-            # id() は «リストが参照を持っている間» 一意（解放されない）
-            self._mfm_columns = [c for c in self._mfm_columns
-                                 if id(c) != dead_id]
-        self._invalidate_expanded_cache()
+    def _on_column_destroyed(self, *_a):
+        """破棄通知（デストラクタの中）。**ここでは一切カラムを触らない。**
+
+        死んだ本人を台帳から外すのも «次のループ» でやる（_live_columns が
+        RuntimeError で落ちたものを捨てるので、ここで id を突き合わせる
+        必要は無い）。デストラクタの中でリストを組み替えると、同時に
+        捨てられている途中のラッパーに触れてしまう。"""
+        if not is_alive(self):
+            return
         try:
             QTimer.singleShot(0, self._after_column_destroyed)
         except Exception as _e:
@@ -809,6 +823,8 @@ class CappedColumnView(QColumnView):
 
     def _after_column_destroyed(self):
         """破棄が終わってから走査・再描画する（r144）。"""
+        if not is_alive(self):
+            return
         self._live_columns()
         self._invalidate_expanded_cache()
         self._repaint_columns()
@@ -816,6 +832,8 @@ class CappedColumnView(QColumnView):
     def _live_columns(self):
         alive = []
         for c in self._mfm_columns:
+            if not is_alive(c):
+                continue            # r146: 触る前に C++ 側の生死を見る
             try:
                 c.rootIndex()
                 alive.append(c)
@@ -927,9 +945,13 @@ class CappedColumnView(QColumnView):
         # ハンドルはビューポートの子（カラムの子ではない）なので、カラム破棄時に
         # 一緒に消す
         _h = view._mfm_resize_handle
-        # r144: これもデストラクタの中から飛ぶので、次のループへ逃がす
-        view.destroyed.connect(
-            lambda *_a, h=_h: QTimer.singleShot(0, lambda w=h: _safe_delete(w)))
+        # r144: これもデストラクタの中から飛ぶので、次のループへ逃がす。
+        # r146: タイマーの持ち主を «ハンドル自身» にする。持ち主を付けないと、
+        # アプリの後片付けが始まった後でも呼ばれて、解放済みのものを触りうる。
+        if not _diag_off("no_handle_hook"):
+            view.destroyed.connect(
+                lambda *_a, h=_h: QTimer.singleShot(
+                    0, lambda w=h: (_safe_delete(w) if is_alive(w) else None)))
         self._reposition_column_header(view)
         view.installEventFilter(self)
         view.viewport().installEventFilter(self)
@@ -1240,7 +1262,11 @@ class CappedColumnView(QColumnView):
         return mime
 
     def set_file_drop_callback(self, cb):
-        """カラムへのファイルドロップ cb(paths, dest_dir, move: bool)（r87）。"""
+        """カラムへのファイルドロップ（r87 / r146 で引数を拡張）。
+
+        cb(paths, dest_dir, forced, global_pos)
+          forced … "copy" / "move"（修飾キーで確定している）/ None（選ばせる）
+          global_pos … メニューを出す位置"""
         self._file_drop_cb = cb
 
     def set_thumb_prefetch_callback(self, cb):
@@ -2644,19 +2670,33 @@ class CappedColumnView(QColumnView):
                 except AttributeError:
                     pos = event.pos()
                 dest = self._drop_dir_for(view, pos)
-                # Ctrl 押下＝コピー、それ以外は移動（Explorer 準拠）
-                move = not bool(event.keyboardModifiers() & Qt.ControlModifier)
+                # r146（ユーザー指示・持ち越し）: UE のように «ここにコピー /
+                # ここに移動 / 高度なコピー» を選ばせる。修飾キーを押している
+                # 時は Explorer と同じで即実行（Ctrl=コピー / Shift=移動）。
+                mods = event.keyboardModifiers()
+                if mods & Qt.ControlModifier:
+                    forced = "copy"
+                elif mods & Qt.ShiftModifier:
+                    forced = "move"
+                else:
+                    forced = None
                 cb = self._file_drop_cb
-                _mfm_log("drop: n=%d dest=%r move=%s cb=%s"
-                         % (len(paths), dest, move, callable(cb)))
+                _mfm_log("drop: n=%d dest=%r forced=%s cb=%s"
+                         % (len(paths), dest, forced, callable(cb)))
                 if not dest or not callable(cb):
                     return False
-                event.setDropAction(Qt.MoveAction if move else Qt.CopyAction)
+                event.setDropAction(Qt.CopyAction if forced == "copy"
+                                    else Qt.MoveAction)
                 event.accept()
+                try:
+                    gpos = view.viewport().mapToGlobal(pos)
+                except Exception:
+                    from core.compat import QCursor as _QCur
+                    gpos = _QCur.pos()
                 # ドロップ処理中にビューを組み替えるとクラッシュするため、
                 # イベントを抜けてから実行する
-                QTimer.singleShot(0, lambda ps=list(paths), d=dest, mv=move:
-                                  cb(ps, d, mv))
+                QTimer.singleShot(0, lambda ps=list(paths), d=dest, f=forced,
+                                  g=gpos: self._call_drop_cb(cb, ps, d, f, g))
                 return True
             # DragEnter / DragMove: ファイルなら受け入れる
             event.setDropAction(Qt.MoveAction if not (
@@ -2666,6 +2706,23 @@ class CappedColumnView(QColumnView):
         except Exception as e:
             _mfm_log("drag/drop error: %r" % (e,))
             return False
+
+    @staticmethod
+    def _call_drop_cb(cb, paths, dest, forced, gpos):
+        """ドロップのコールバックを «受け取れる数» で呼ぶ（r146）。
+
+        r146 で引数を 3 → 4 に増やした（落とした位置をメニューに使うため）。
+        古い 3 引数のまま残った呼び先があると TypeError でドロップが
+        黙って消える。数を見て合わせ、足りない時は移動/コピーの真偽値へ
+        落として渡す（旧シグネチャの意味に合わせる）。"""
+        try:
+            cb(paths, dest, forced, gpos)
+            return
+        except TypeError as e:
+            if "positional argument" not in str(e):
+                raise
+        _mfm_log("drop: 旧シグネチャのコールバック（3 引数）へ落として呼ぶ")
+        cb(paths, dest, forced != "copy")
 
     @staticmethod
     def _same_column_selection(sm, idx):
@@ -2850,11 +2907,20 @@ class CappedColumnView(QColumnView):
             _mfm_log("dcc-drop notify error: %r" % (e,))
 
     def _path_of_index(self, idx):
-        """カラムビューのプロキシindex → ソースの実パス。"""
+        """index → ソースの実パス。
+
+        r146: **index が属するモデルから辿ること。** 以前は
+        ``self.model()`` を起点にしていたので、別のモデルを持つビュー
+        （カラム以外の QListView など）の index を渡されると
+        「QSortFilterProxyModel: index from wrong model passed to
+        mapToSource」を出した上で、中身の分からないポインタを辿っていた。
+        クリックのたびに何十回も出ていて、名前変更の Tab 送りでは実際に
+        ACCESS_VIOLATION まで行った（実機 2026-10-14）。"""
         try:
-            m = self.model()
+            if idx is None or not idx.isValid():
+                return ""
+            sm = idx.model()
             src = idx
-            sm = m
             while hasattr(sm, "mapToSource"):
                 src = sm.mapToSource(src)
                 sm = sm.sourceModel()

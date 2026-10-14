@@ -395,9 +395,16 @@ class SettingsManager:
         return [dict(x) for x in v if isinstance(x, dict) and x.get("version")]
 
     def save_maya_launch_profiles(self, profiles):
+        # r146: env / wrapper を追加（ユーザー指示 2026-10-13）。
+        #   env     … 起動時に足す環境変数（KEY=VALUE を改行か ; 区切り）。
+        #             MAYA_UI_LANGUAGE のように «起動前に決まっているべき» もの
+        #             は引数では渡せないため。
+        #   wrapper … maya.exe の代わりに走らせる .bat / .exe。
+        #             既存の run.bat 資産をそのまま使えるようにする。
         self._global_state["maya_launch_profiles"] = [
             {"id": str(p.get("id") or ""), "version": str(p.get("version") or ""),
-             "label": str(p.get("label") or ""), "args": str(p.get("args") or "")}
+             "label": str(p.get("label") or ""), "args": str(p.get("args") or ""),
+             "env": str(p.get("env") or ""), "wrapper": str(p.get("wrapper") or "")}
             for p in (profiles or []) if p.get("version")]
         self.save()
 

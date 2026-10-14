@@ -53,6 +53,8 @@ class MayaBridgeDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
         self.setWindowTitle(tr("Maya連携のセットアップ", "Set Up Maya Bridge"))
         self.setMinimumWidth(620)
         self._targets = []          # [(version or None, QCheckBox)]

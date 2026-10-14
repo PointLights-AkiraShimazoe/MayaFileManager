@@ -149,7 +149,8 @@ class QuickNavPresetEditor(QDialog):
 
         self.setWindowTitle(tr("クイックナビ プリセットエディタ", "Quick Nav Preset Editor"))
         self.setMinimumSize(820, 560)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
 
         self._build_ui()
         self._disable_auto_default()

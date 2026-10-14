@@ -56,7 +56,8 @@ class ConflictDialog(QDialog):
         self._dst = dst
         self.setWindowTitle(tr("同じ名前があります", "Name already exists"))
         self.setMinimumWidth(560)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)

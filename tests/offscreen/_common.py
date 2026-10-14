@@ -14,6 +14,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # SettingsManager は MFM_SETTINGS_ROOT を最優先で参照する。
 os.environ["MFM_SETTINGS_ROOT"] = tempfile.mkdtemp(prefix="mfm_test_settings_")
 
+# r146: ACCESS_VIOLATION（0xC0000005）で «出力なし» のまま落ちるテストが
+# 間欠的に出る（2026-10-14）。素の mayapy は落ちた場所を何も残さないので、
+# faulthandler で C 側のクラッシュ時にスタックを stderr へ吐かせる。
+# 回帰スイートは stderr も拾うので、落ちた行がログに残る。
+try:
+    import faulthandler as _fh
+    _fh.enable(file=sys.stderr, all_threads=True)
+except Exception:
+    pass
+
 from core.compat import QApplication, QTimer, Qt, QListView, QPoint  # noqa: E402
 
 app = QApplication.instance() or QApplication(sys.argv)

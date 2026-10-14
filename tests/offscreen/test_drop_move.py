@@ -2,7 +2,7 @@
 """r87: カラム間 D&D の移動と、同名時の «上書き / 名前を変えて / スキップ»。"""
 import os
 from _common import *  # noqa: F401,F403
-from _common import app, make_panel, tmpdir, finish, run, QTimer
+from _common import app, make_panel, tmpdir, finish, run, QTimer, QTest
 from core.file_operations import (move_items, CONFLICT_OVERWRITE,
                                   CONFLICT_RENAME, CONFLICT_SKIP)
 
@@ -99,8 +99,11 @@ def test_drop_event_reaches_callback():
     （オフスクリーンでは QApplication.sendEvent での D&D 合成が届かない）。"""
     from core.compat import Qt, QtCore, QtGui, QUrl, QMimeData, QListView
     got = []
+    # r146: コールバックは (paths, dest, forced, global_pos)。
+    # forced は "copy"/"move"（修飾キーで確定）または None（メニューで選ばせる）。
     b._column_view.set_file_drop_callback(
-        lambda paths, dest, move: got.append((list(paths), dest, move)))
+        lambda paths, dest, forced, gpos=None:
+        got.append((list(paths), dest, forced)))
     b.navigate_to(B)
     app.processEvents()
     # r125: カラムの生成は非同期（QFileSystemModel のロード待ち）。固定待ちだと
@@ -138,12 +141,44 @@ def _do_drop(got, view):
 
 def _check_drop(got):
     assert got, "ドロップがコールバックまで届いていない"
-    paths, dest, move = got[-1]
-    assert move is True, "既定が移動になっていない"
+    paths, dest, forced = got[-1]
+    # 修飾キー無し＝「落とした場所でメニューを出す」なので None。
+    # Ctrl/Shift を押した時だけ "copy"/"move" が確定して届く（r146）。
+    assert forced is None, ("修飾キー無しはメニューで選ばせる", forced)
     assert os.path.normcase(dest) == os.path.normcase(B), dest
     assert os.path.basename(paths[0]) == "keep.ma", paths
-    print("drop on a column reaches the handler (move by default): OK")
+    print("drop on a column reaches the handler: OK")
+    _check_modifier_drops(got)
+    print("Ctrl=copy / Shift=move are decided without the menu: OK")
     finish(True)
+
+
+def _check_modifier_drops(got):
+    """修飾キーを押していれば Explorer と同じで即実行（メニューを出さない）。"""
+    from core.compat import Qt, QtCore, QtGui, QUrl, QMimeData, QListView
+    view = None
+    for v in b._column_view.findChildren(QListView):
+        if not v.isVisible():
+            continue
+        p = b._column_view._path_for_index(v.rootIndex()) or ""
+        if p and os.path.normcase(os.path.normpath(p)) == \
+                os.path.normcase(os.path.normpath(B)):
+            view = v
+            break
+    assert view is not None, "B のカラムが見つからない"
+    for mod, want in ((Qt.ControlModifier, "copy"), (Qt.ShiftModifier, "move")):
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(os.path.join(A, "keep.ma"))])
+        pos = QtCore.QPointF(view.viewport().rect().center())
+        ev = QtGui.QDropEvent(pos, Qt.MoveAction, mime, Qt.LeftButton, mod,
+                              QtCore.QEvent.Drop)
+        n = len(got)
+        assert b._column_view.eventFilter(view.viewport(), ev)
+        app.processEvents()
+        QTest.qWait(80)
+        app.processEvents()
+        assert len(got) > n, ("修飾キー付きのドロップが届かない", want)
+        assert got[-1][2] == want, (got[-1][2], want)
 
 
 def step():

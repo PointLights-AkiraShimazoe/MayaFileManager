@@ -12,6 +12,14 @@ REM ============================================================
 setlocal
 cd /d "%~dp0"
 set "MAYAPY="
+REM r146: ".run_tests_only" lets Claude run just a few tests through the
+REM watcher (which cannot pass arguments). Keywords match test file names.
+REM The file is consumed (deleted) so the next run is a full one again.
+set "MFM_ONLY="
+if exist "%~dp0.run_tests_only" (
+    set /p MFM_ONLY=<"%~dp0.run_tests_only"
+    del "%~dp0.run_tests_only"
+)
 set "QT_QPA_PLATFORM=offscreen"
 
 if defined MFM_MAYA_VER (
@@ -32,11 +40,14 @@ if not defined MAYAPY (
 
 if defined MAYAPY (
     echo [info] using: %MAYAPY%
-    "%MAYAPY%" tests\run_offscreen.py
+    "%MAYAPY%" tests\run_offscreen.py %* %MFM_ONLY%
 ) else (
     echo [info] mayapy not found. Falling back to 'python' on PATH ^(requires PySide6^)...
-    python tests\run_offscreen.py
+    python tests\run_offscreen.py %* %MFM_ONLY%
 )
 echo.
+REM r146: the watcher runs this unattended. A pause would hang it forever,
+REM so skip it when MFM_NO_PAUSE is set (tools\mfm_test_watcher.ps1 sets it).
+if defined MFM_NO_PAUSE goto :eof
 echo ---- Finished. Result also in mfm_tests.log. Press any key to close. ----
 pause >nul

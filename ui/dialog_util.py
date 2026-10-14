@@ -127,3 +127,66 @@ def pick_open_file(parent, title: str, start: str = "", filt: str = "",
             pass
     return QFileDialog.getOpenFileName(parent, title, start or "", filt or "",
                                        sel, opt)
+
+
+# ---------------------------------------------------------------------------
+# タイトルバーの «閉じる» を必ず出す（r146、ユーザー指示 2026-10-11）
+# ---------------------------------------------------------------------------
+# 「各ウィンドウの右上の✕マークは、押せないなら完全に消してほしいです。
+#   消せないなら、✕は押せる様にすべきです。」
+#
+# Qt の仕様がここの落とし穴。QWidgetPrivate::adjustFlags() は
+# «カスタマイズ系のヒントが 1 つでも立っていたら、既定のタイトルバー部品を
+#   一切足さない» という作りになっている。カスタマイズ系には
+#   WindowStaysOnTopHint / WindowContextHelpButtonHint / FramelessWindowHint …
+# が含まれるので、
+#     setWindowFlags(flags & ~Qt.WindowContextHelpButtonHint)   ← ？ボタン消し
+#     setWindowFlag(Qt.WindowStaysOnTopHint, True)              ← 最前面表示
+# のどちらをやっても «その瞬間に ✕ / 最小化 / 最大化 が足されなくなる»。
+# 結果、Windows では ✕ が灰色のまま押せない窓になる。
+#
+# 対処は «触るなら、欲しい部品は自分で全部立てる»。
+_BUTTON_HINTS = ("WindowTitleHint", "WindowSystemMenuHint",
+                 "WindowCloseButtonHint")
+_MINMAX_HINTS = ("WindowMinimizeButtonHint", "WindowMaximizeButtonHint")
+
+
+def window_flags_with_buttons(flags, minmax: bool = False, on_top=None):
+    """flags に «タイトルバー部品» を立てて返す（？ボタンは落とす）。
+
+    minmax=True … 最小化／最大化も出す（メインウィンドウ向け）。
+    on_top=True/False … 最前面表示を同時に入切する（None なら今のまま）。
+    """
+    # r146: **int で組む。** PySide6 の世代によって Qt.WindowType（enum.Flag）
+    # の | と ~ の意味が変わり、6.8.3 では «足したはずの WindowCloseButtonHint が
+    # 立っていない» という形で実機だけ失敗した（回帰スイート 2026-10-13）。
+    # ビット演算は int でやって、最後に元の型へ戻すのが確実。
+    value = int(flags)
+    names = _BUTTON_HINTS + (_MINMAX_HINTS if minmax else ())
+    for name in names:
+        hint = getattr(Qt, name, None)
+        if hint is not None:
+            value |= int(hint)
+    help_hint = getattr(Qt, "WindowContextHelpButtonHint", None)
+    if help_hint is not None:
+        value &= ~int(help_hint)
+    top = getattr(Qt, "WindowStaysOnTopHint", None)
+    if on_top is not None and top is not None:
+        value = (value | int(top)) if on_top else (value & ~int(top))
+    for ctor in (type(flags), getattr(Qt, "WindowFlags", None),
+                 getattr(Qt, "WindowType", None)):
+        if ctor is None:
+            continue
+        try:
+            return ctor(value)
+        except Exception:
+            continue
+    return value
+
+
+def apply_window_buttons(win, minmax: bool = False):
+    """ダイアログ等に «押せる ✕» を用意する。__init__ の中で 1 回呼ぶ。"""
+    try:
+        win.setWindowFlags(window_flags_with_buttons(win.windowFlags(), minmax))
+    except Exception as _e:
+        _swallow(_e, "ui/dialog_util.py apply_window_buttons")

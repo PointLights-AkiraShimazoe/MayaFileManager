@@ -17,6 +17,12 @@ from _common import app, sm, finish, run, QTest
 from ui.main_window import MainWindow
 
 
+def step(msg):
+    """どこで落ちたかを «クラッシュしても» 追えるようにする（r146）。
+    C++ 側で落ちると Traceback が出ないので、印だけが手がかりになる。"""
+    print("[step] " + msg, flush=True)
+
+
 def _ratios(w):
     sizes = [int(x) for x in w._areas_split.sizes()]
     total = float(sum(sizes)) or 1.0
@@ -27,17 +33,20 @@ def s1():
     sm.set("browser_areas_state", None, save=False)
     sm.set(MainWindow.AREA_SIZES_KEY, None, save=False)
 
+    step("s1 start")
     w = MainWindow(settings_manager=sm)
     w.resize(1100, 1400)
     w.show()
     QTest.qWait(200)
     app.processEvents()
+    step("w1 shown")
 
     # エリアを 3 つにする
     w._on_area_add_below(w._areas[0])
     w._on_area_add_below(w._areas[1])
     app.processEvents()
     assert len(w._areas) == 3, len(w._areas)
+    step("3 areas")
 
     # 高さを «偏らせる»
     h = w._areas_split.height()
@@ -49,6 +58,7 @@ def s1():
     # エリアには最小高さがあるので «要求どおり» にはならないことがある。
     # 大事なのは «均等ではない» ことと «それが再現される» こと。
     assert max(before) - min(before) > 0.05, ("偏らせられていない", before)
+    step("sizes skewed")
     w._save_areas_state()
     saved = sm.get(MainWindow.AREA_SIZES_KEY)
     assert isinstance(saved, list) and len(saved) == 3, saved
@@ -56,15 +66,18 @@ def s1():
     assert all(isinstance(x, float) for x in saved), "割合（比率）で保存していない"
     w.close()
     app.processEvents()
+    step("w1 closed")
 
     # 再起動相当: 同じ設定から作り直す
     w2 = MainWindow(settings_manager=sm)
+    step("w2 built")
     w2.resize(1100, 1400)
     w2.show()
     QTest.qWait(300)
     app.processEvents()
     w2._restore_area_sizes()
     app.processEvents()
+    step("w2 restored")
     assert len(w2._areas) == 3, len(w2._areas)
     after = _ratios(w2)
     for a, b in zip(before, after):

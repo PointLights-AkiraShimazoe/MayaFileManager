@@ -19,6 +19,7 @@ Layout (default)
   └─────────────────────────────────────────────────────┘
 """
 from core.diag import swallow as _swallow  # r112
+from core.diag import diag_off as _diag_off  # r146 切り分け用
 
 import os
 from pathlib import Path
@@ -63,6 +64,18 @@ from ui.reference_editor import ReferenceEditor
 # ---------------------------------------------------------------------------
 # History Panel (inline – keeps it self-contained)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# フリーズ見張りの «プロセスに 1 つだけ» の持ち物（r146）
+#   ウィンドウごとに持つと、2 枚目を作った時に 1 枚目の file が回収され、
+#   faulthandler が閉じた fd を書きに行って落ちる。詳しくは
+#   _install_freeze_watchdog の docstring。
+# ---------------------------------------------------------------------------
+_FREEZE_BEAT = [0.0]          # 最後に UI スレッドが生きていた時刻
+_FREEZE_WD_INSTALLED = False  # 見張りを入れたか
+_FREEZE_WD_FILE = None        # faulthandler に渡した file（絶対に手放さない）
+_FREEZE_REARM = None          # ネイティブダンプの再武装（既定は None）
 
 
 
@@ -116,6 +129,11 @@ class MainWindowDccMixin:
                 tip = tr("Maya %s", "Maya %s") % prof.get("version")
                 if prof.get("args"):
                     tip += "\n" + prof["args"]
+                if prof.get("env"):
+                    tip += "\n" + tr("環境変数: ", "Env: ") + \
+                        " ".join(prof["env"].split())
+                if prof.get("wrapper"):
+                    tip += "\n" + tr("ラッパー: ", "Wrapper: ") + prof["wrapper"]
                 mc.setItemData(mc.count() - 1, tip, Qt.ToolTipRole)
                 self._maya_profiles.append(prof)
         else:
@@ -552,18 +570,44 @@ class MainWindowDccMixin:
             self._focus_connected_maya()
 
     def _install_freeze_watchdog(self):
-        """常時有効: UIスレッドが1.5秒以上止まったら、その瞬間のメインスレッドの
-        スタックを記録する（フリーズ原因の特定用）。
+        """UI スレッドが 1.5 秒以上止まったら、その瞬間のスタックを記録する。
 
         出力先は **ユーザープロファイル直下**（~/.maya_file_manager/logs）。
         r117: 以前はツールフォルダ直下に書いていたため、**ツールを置いた
         ドライブが無応答になると記録そのものがブロック**され、肝心な時に
-        何も残らなかった（2026-10-01、D: 無応答時に実際に発生）。"""
+        何も残らなかった（2026-10-01、D: 無応答時に実際に発生）。
+
+        r146（重要・2026-10-14 に実機で特定）
+        ------------------------------------
+        ここが **アプリをランダムに落としていた**。Windows + Maya の Python
+        3.13 で、回帰スイートが 3221225477（ACCESS_VIOLATION）で断続的に
+        落ちる件を追ったところ、犯人は faulthandler の
+        ``dump_traceback_later`` だった（これを止めると 2/6 → 6/6 合格）。
+        理由は 2 つ。
+
+        1. ``dump_traceback_later`` は **GIL を持たない C のスレッド**から
+           全スレッドのフレームを歩く。UI スレッドが «止まっている» ように
+           見えても、実際には C++ 側で Python のフレームを組み替えている
+           最中なので、歩いた先が解放済みになりうる。
+        2. 渡した file を **こちらが手放すと落ちる**。ウィンドウごとに
+           ``self._fh_file`` を開いていたので、2 枚目のウィンドウを作って
+           1 枚目が回収されると、faulthandler は閉じた fd を書きに行く。
+
+        対策:
+        * 仕掛けは **プロセスに 1 つだけ**（ウィンドウを何枚作っても 1 回）。
+        * file は **モジュール変数で持ち続ける**（回収させない）。
+        * ``dump_traceback_later`` は **既定で使わない**。本当に必要な時だけ
+          ``MFM_FREEZE_DUMP=1`` で入れる（調査用。製品では使わないこと）。
+          普段は Python 側の見張り（_current_frames）だけで記録する。
+        """
+        if _diag_off("no_freeze_watchdog"):
+            return
         import threading
         import time as _time
         import sys as _sys
         import traceback as _tb
         from ui.browser_panel import _mfm_log, _MFM_FREEZE_LOG
+        global _FREEZE_WD_INSTALLED, _FREEZE_WD_FILE, _FREEZE_REARM
         freeze_log = _MFM_FREEZE_LOG
 
         def _dump(text):
@@ -577,76 +621,76 @@ class MainWindowDccMixin:
                 pass
             _mfm_log(text)
 
-        beat = [_time.monotonic()]
-
-        # ── ネイティブ方式（GIL不要）: faulthandler の遅延ダンプを UI の
-        # ハートビート毎に再アームする。UIスレッドが1.5秒止まるとCレベルの
-        # 監視スレッドが «フリーズ最中の» 全スレッドのPythonスタックを書く。
-        # （Pythonスレッドのサンプラは PySide の C++呼び出し中はGILを取れず、
-        #  フリーズ終了後の位置しか記録できない＝真犯人の直前行しか見えない）
-        try:
-            import faulthandler
-            self._fh_file = open(freeze_log, "a", encoding="utf-8")
-            self._fh_file.write("\n[%s] === faulthandler 監視開始 ===\n"
-                                % __import__("datetime").datetime.now()
-                                .strftime("%H:%M:%S"))
-            self._fh_file.flush()
-            # クラッシュ（アクセス違反等）時にも Python スタックを同じログへ
-            # 書く（r64。ネイティブダイアログでのプロセス消滅の切り分け用）
+        if not _FREEZE_WD_INSTALLED:
+            _FREEZE_WD_INSTALLED = True
+            # ── クラッシュ時の記録（これは «落ちた時だけ» 走るので安全）──
             try:
-                faulthandler.enable(file=self._fh_file, all_threads=True)
+                import faulthandler
+                import datetime as _dt
+                # モジュール変数で持つ＝プロセスが終わるまで閉じない。
+                _FREEZE_WD_FILE = open(freeze_log, "a", encoding="utf-8")
+                _FREEZE_WD_FILE.write("\n[%s] === faulthandler 監視開始 ===\n"
+                                      % _dt.datetime.now().strftime("%H:%M:%S"))
+                _FREEZE_WD_FILE.flush()
+                faulthandler.enable(file=_FREEZE_WD_FILE, all_threads=True)
             except Exception as _e:
-                _swallow(_e, "ui/main_window.py:1077 _dump")
+                _swallow(_e, "ui/main_window_dcc.py faulthandler.enable")
 
-            def _rearm():
-                try:
-                    faulthandler.dump_traceback_later(
-                        1.5, repeat=False, file=self._fh_file, exit=False)
-                except Exception as _e:
-                    _swallow(_e, "ui/main_window.py:1084 _rearm")
-            _rearm()
-        except Exception:
-            _rearm = None
+            # ── «止まっている最中» のネイティブダンプ（既定は入れない）──
+            if os.environ.get("MFM_FREEZE_DUMP"):
+                def _rearm():
+                    try:
+                        import faulthandler
+                        faulthandler.dump_traceback_later(
+                            1.5, repeat=False, file=_FREEZE_WD_FILE, exit=False)
+                    except Exception as _e:
+                        _swallow(_e, "ui/main_window_dcc.py _rearm")
+                _FREEZE_REARM = _rearm
+                _rearm()
+
+            main_id = threading.get_ident()
+
+            def _watch():
+                last_dump = 0.0
+                while True:
+                    _time.sleep(0.5)
+                    now = _time.monotonic()
+                    stalled = now - _FREEZE_BEAT[0]
+                    if stalled > 1.5 and now - last_dump > 5.0:
+                        # r108: ドラッグ等 «意図して UI スレッドを握っている»
+                        # 区間は記録しない（本物のフリーズが埋もれるため）
+                        try:
+                            from ui.browser_panel import mfm_blocking_reason
+                            if mfm_blocking_reason():
+                                continue
+                        except Exception as _e:
+                            _swallow(_e, "ui/main_window_dcc.py _watch")
+                        last_dump = now
+                        try:
+                            frm = _sys._current_frames().get(main_id)
+                            if frm is not None:
+                                _dump("=== UIフリーズ検出 (%.1f秒停止) "
+                                      "メインスレッド ===\n%s"
+                                      % (stalled, "".join(_tb.format_stack(frm))))
+                        except Exception as _e:
+                            _swallow(_e, "ui/main_window_dcc.py _watch(dump)")
+
+            threading.Thread(target=_watch, daemon=True,
+                             name="mfm-freeze-watchdog").start()
+
+        # ── 脈拍はウィンドウごとに打つ（見張りはプロセスに 1 つ）──────
+        _FREEZE_BEAT[0] = _time.monotonic()
 
         def _heartbeat():
-            beat[0] = _time.monotonic()
-            if _rearm is not None:
-                _rearm()
+            _FREEZE_BEAT[0] = _time.monotonic()
+            if _FREEZE_REARM is not None:
+                _FREEZE_REARM()
 
         t = QTimer(self)
         t.setInterval(200)
         t.timeout.connect(_heartbeat)
         t.start()
         self._wd_timer = t
-        main_id = threading.get_ident()
-
-        def _watch():
-            last_dump = 0.0
-            while True:
-                _time.sleep(0.5)
-                now = _time.monotonic()
-                stalled = now - beat[0]
-                if stalled > 1.5 and now - last_dump > 5.0:
-                    # r108: ドラッグ等 «意図して UI スレッドを握っている» 区間は
-                    # 記録しない（本物のフリーズが埋もれるため）
-                    try:
-                        from ui.browser_panel import mfm_blocking_reason
-                        if mfm_blocking_reason():
-                            continue
-                    except Exception as _e:
-                        _swallow(_e, "ui/main_window.py:1115 _watch")
-                    last_dump = now
-                    try:
-                        frm = _sys._current_frames().get(main_id)
-                        if frm is not None:
-                            _dump(
-                                "=== UIフリーズ検出 (%.1f秒停止) メインスレッド ===\n%s"
-                                % (stalled, "".join(_tb.format_stack(frm))))
-                    except Exception as _e:
-                        _swallow(_e, "ui/main_window.py:1124 _watch")
-
-        threading.Thread(target=_watch, daemon=True,
-                         name="mfm-freeze-watchdog").start()
 
     BRIDGE_PROMPT_KEY = "maya_bridge_prompt"      # "" / "later" / "never" / "done"
     # 場所の食い違いを聞くのは 1 セッションに 1 回だけ（クラス属性＝既定値）
@@ -1737,9 +1781,17 @@ class MainWindowDccMixin:
             folder, initial = target, ""
         else:
             folder, initial = os.path.dirname(target), os.path.basename(target)
+        # r146（ユーザー報告 2026-10-11「命名ルールが意味がわからない壊れ方」）:
+        # ここで «接続中の Maya のシーン名» を初期値に入れていたせいで、
+        # 保存ダイアログ側が «ユーザーがファイルを選んでいる» と誤解し、
+        # 自動命名が一度も働かなかった（r140 の仕様は «何も選ばずに保存» なら
+        # 自動命名、«選んでいる» ならその名前、というもの）。
+        # 選択由来かどうかを明示して渡す。
+        picked = bool(initial)
         if not initial and mode == "save":
             initial = self._connected_scene_name(dcc)
-        dlg = SaveDialog(dcc, mode, folder, initial, self._sm, parent=self.window())
+        dlg = SaveDialog(dcc, mode, folder, initial, self._sm,
+                         parent=self.window(), initial_is_selection=picked)
         # モーダルのまま（例外）: 決まった保存先を使って直後に DCC へ
         # 保存/書き出しを送る。返り値を待たないと処理が組めない。
         try:
@@ -1885,6 +1937,23 @@ class MainWindowDccMixin:
             _swallow(_e, "ui/main_window_dcc.py _current_maya_profile")
         return None
 
+    def _maya_launch_env(self):
+        """起動時に足す環境変数（r146）。共通 → プロファイル個別の順に重ねる。
+
+        MAYA_UI_LANGUAGE のように «Maya が起動時に読む» ものは引数では渡せない
+        ので、ここで環境に載せる（ユーザー指示 2026-10-13）。"""
+        from core.maya_version import parse_env_text
+        out = {}
+        for text in (str(self._sm.get("maya_extra_env", "") or ""),
+                     str((self._current_maya_profile() or {}).get("env", ""))):
+            if text.strip():
+                out.update(parse_env_text(text))
+        return out
+
+    def _maya_launch_wrapper(self):
+        """maya.exe の代わりに走らせる .bat / .exe（r146）。無ければ ""。"""
+        return str((self._current_maya_profile() or {}).get("wrapper", "")).strip()
+
     def _maya_launch_args(self):
         """起動に渡す追加引数。共通引数 → プロファイル個別の順に並べる。"""
         import shlex
@@ -1928,7 +1997,9 @@ class MainWindowDccMixin:
             # レンジ内の空きポートを割り当て、起動したMayaへ接続先を切り替える。
             port = find_free_port()
             extra = self._maya_launch_args()
-            launch_maya(inst, extra_args=extra or None, command_port=port)
+            launch_maya(inst, extra_args=extra or None, command_port=port,
+                        env_extra=self._maya_launch_env() or None,
+                        wrapper=self._maya_launch_wrapper())
             self._bridge.set_port(port)
             self._sm.set("maya_command_port", int(port), save=False)
             # r138: 起動中のこの Maya へ接続を向けておく（待たない）

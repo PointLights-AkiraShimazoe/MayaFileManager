@@ -406,6 +406,10 @@ class FlatColumn(QWidget):
         if (mode == "thumb") == (self._view_mode == "thumb"):
             self._apply_view_mode()
 
+    def _is_dir_index(self, index) -> bool:
+        """バッジ描画用（I/O なし）。平坦ビューはファイルだけ並ぶ。"""
+        return False
+
     def _apply_view_mode(self):
         from ui.browser_delegates import ThumbnailDelegate
         px = self.item_size()
@@ -426,9 +430,15 @@ class FlatColumn(QWidget):
                 v.setWrapping(False)
                 v.setSpacing(0)
                 v.setGridSize(QSize())
-                # 既定の描画へ戻す（None を渡すのは PySide 版により不安定）
-                from core.compat import QStyledItemDelegate
-                v.setItemDelegate(QStyledItemDelegate(v))
+                # r146（ユーザー報告 2026-10-13）:
+                #   「平坦モードに P4V やクラウドストレージのアイコンが
+                #     つかないのも同様にお願いします。」
+                # ここが素の QStyledItemDelegate だったので、平坦ビューには
+                # 連携バッジが **一度も出ていなかった**（カラム側は r58 から
+                # StatusBadgeDelegate を使っている）。同じものを使う。
+                from ui.browser_delegates import StatusBadgeDelegate
+                v.setItemDelegate(StatusBadgeDelegate(
+                    self._path_of, v, is_dir_of_index=self._is_dir_index))
             v.doItemsLayout()
             v.viewport().update()
         except Exception as _e:

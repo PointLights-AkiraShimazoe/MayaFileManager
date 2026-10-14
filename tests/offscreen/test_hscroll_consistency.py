@@ -70,12 +70,19 @@ def click(name):
     QTest.mouseClick(c.viewport(), Qt.LeftButton, Qt.NoModifier, rect.center())
 
 
-def settle(then, tries=40):
+def settle(then, tries=40, min_n=0):
     """カラムのレイアウトが «落ち着く» まで待ってから then() を呼ぶ。
 
     スライドアニメーションとカラム生成が終わるまで hbar.maximum は動く。
     固定待ちで測ると、遅いマシンでは «途中の値» を見て落ちる（実機 2026-10-06:
-    hmax=1310 exp=1010）。2 回続けて同じ値になったら完了とみなす。"""
+    hmax=1310 exp=1010）。2 回続けて同じ値になったら完了とみなす。
+
+    r146: «落ち着いて見えても、まだ動く» 場面がある。カラムの可視化
+    （_ensure_current_column_visible）は 260 / 700 / 1300 / 2200ms の 4 回に
+    分けて追い直すので、200ms 止まっただけで «完了» とすると、その後の
+    追い直しで位置が変わる（実機 2026-10-14: navigate mid-anim と back が
+    たまに «current col not visible» で落ちていた）。追い直しが終わる時刻を
+    またぐ必要がある場面では min_n で «最低これだけは待つ» を指定する。"""
     state = {"prev": None, "same": 0, "n": 0}
 
     def tick():
@@ -86,7 +93,8 @@ def settle(then, tries=40):
             state["same"] = 0
         state["prev"] = cur
         state["n"] += 1
-        if state["same"] >= 2 or state["n"] >= tries:
+        if (state["same"] >= 2 and state["n"] >= min_n) \
+                or state["n"] >= tries:
             then()
         else:
             QTimer.singleShot(100, tick)
@@ -118,8 +126,10 @@ def s_navigate_mid_anim():
     #    直後（アニメ中）にさらに深いパスへ navigate_to して再構築を重ねる。
     b.navigate_to(other)
     QTimer.singleShot(40, lambda: b.navigate_to(chain[4]))
+    # 可視化の追い直しは 2200ms まで続く。そこを越えてから測る。
     QTimer.singleShot(900, lambda: settle(lambda: (check("navigate mid-anim"),
-                                                   s_click_after())))
+                                                   s_click_after()),
+                                          tries=60, min_n=25))
 
 
 def s_click_after():
@@ -130,7 +140,8 @@ def s_click_after():
 def s_back():
     # 3) 戻る（履歴）→ 再構築
     b.go_back() if hasattr(b, "go_back") else b.navigate_to(other)
-    QTimer.singleShot(600, lambda: settle(lambda: (check("back"), s_resize())))
+    QTimer.singleShot(600, lambda: settle(lambda: (check("back"), s_resize()),
+                                          tries=60, min_n=25))
 
 
 def s_resize():

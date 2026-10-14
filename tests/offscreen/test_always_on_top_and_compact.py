@@ -78,8 +78,18 @@ def s1():
     before = w.geometry()
     lead.top_btn.click()
     _settle(200)
-    check(bool(w.windowFlags() & Qt.WindowStaysOnTopHint),
-          "最前面フラグが立つ")
+    # r146: 最前面表示は Qt のフラグではなく Win32 の SetWindowPos で行う
+    # （フラグを触ると ✕ が押せなくなる／ウィンドウが作り直される／子ダイアログ
+    #   が裏に回る、の 3 つが起きる）。状態は本体が持つ。
+    check(w.is_always_on_top(), "最前面表示が入る")
+    # Qt のフラグを触らないのは **Windows の実装**（SetWindowPos）の話。
+    # Windows 以外は Qt のフラグへ落とすのが正しい動作なので、そこは見ない。
+    import sys as _sys
+    if _sys.platform.startswith("win"):
+        check(not (w.windowFlags() & Qt.WindowStaysOnTopHint),
+              "Qt のフラグは触らない（✕ が消えない・作り直しが起きない）")
+    else:
+        check(True, "Windows 以外は Qt のフラグへ落とす（確認は Windows で）")
     check(bool(sm.get(MainWindow.ALWAYS_ON_TOP_KEY, False)),
           "設定に残る")
     after = w.geometry()
@@ -90,7 +100,7 @@ def s1():
           "位置が飛ばない（%r → %r）" % (before.topLeft(), after.topLeft()))
     lead.top_btn.click()
     _settle(200)
-    check(not (w.windowFlags() & Qt.WindowStaysOnTopHint), "もう一度押すと解除")
+    check(not w.is_always_on_top(), "もう一度押すと解除")
     check(not bool(sm.get(MainWindow.ALWAYS_ON_TOP_KEY, True)), "解除も残る")
 
     # ── 4) コンパクトへ ─────────────────────────────────────────────
@@ -102,8 +112,18 @@ def s1():
     check(not w.isVisible(), "本体が隠れる")
     check(puck is not None and puck.isVisible(), "パックが出る")
     check(lead.compact_btn.isChecked(), "ヘッダのボタンが光る（状態が分かる）")
-    check(bool(w.windowFlags() & Qt.WindowStaysOnTopHint),
-          "Maya の上に置けるよう最前面になる")
+    # r146（ユーザー指示 2026-10-11）: コンパクトモードは最前面表示を
+    # 勝手に触らない。«どこへ行ったか» はパック自身で担保する
+    #   - パックは常に手前（本体の設定とは無関係）
+    #   - パックはタスクバーに出る（Qt.Tool をやめた）
+    check(not w.is_always_on_top(),
+          "コンパクトに入っても最前面表示を勝手に入れない")
+    check(bool(puck.windowFlags() & Qt.WindowStaysOnTopHint),
+          "パック自身は常に手前")
+    check((puck.windowFlags() & Qt.WindowType_Mask) != Qt.Tool,
+          "パックはタスクバーに出る（Qt.Tool ではない）")
+    check(bool(puck.windowTitle()),
+          "タスクバーに出る名前を持っている")
     # 位置の検証中は «外に出たら畳む» 監視を黙らせる。オフスクリーンでは
     # カーソルが (0,0) 固定なので、開いた直後に畳まれてしまう。
     # （実機では開いた窓の角がパックの位置なので、カーソルは窓の中にいる）

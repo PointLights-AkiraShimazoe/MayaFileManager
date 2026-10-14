@@ -23,6 +23,7 @@ from core.compat import (
     QModelIndex, QSize, QRect, QPixmap, QDir, QFileInfo, QUrl, QMimeData, QPoint,
     QTimer, QKeySequence, QDrag, )
 from core.compat import QtCore as _QtCore
+from core.compat import is_alive
 try:  # PySide6: QtGui / PySide2: QtWidgets
     from core.compat import QIcon
 except ImportError:  # pragma: no cover
@@ -35,6 +36,10 @@ except ImportError:
     except ImportError:
         from PySide2.QtWidgets import QFileIconProvider
 from core.path_guard import PathProber, DriveScanner, invalidate_cache
+# r146: ここを «メソッドの中だけ» で import していたため、_copy_dialog /
+# _move_dialog が NameError で無反応になっていた（r145 の取りこぼし）。
+# 共通ダイアログのヘルパはモジュール先頭で取り込む。
+from ui.dialog_util import pick_directory, pick_open_file  # noqa: F401
 from core.file_operations import (
     open_with_default_app, reveal_in_explorer,
     copy_items, move_items, get_file_type_category, format_size,
@@ -201,10 +206,18 @@ class BrowserPanel(QWidget):
         self._refresh_drives()
 
         # Address bar
-        self._addr_bar = QLineEdit()
-        self._addr_bar.setPlaceholderText(tr("パスを入力...", "Enter a path..."))
-        self._addr_bar.returnPressed.connect(lambda: self._navigate(self._addr_bar.text()))
-        tb_layout.addWidget(self._addr_bar)
+        # r146（ユーザー指示 2026-10-14）: ディレクトリとファイル名を別の欄に分け、
+        # 右端にフルパスのコピーボタンを置く。呼び出し側から見た顔
+        # （setText / text / returnPressed）は今までと同じなので、
+        # 既存の 10 箇所以上の setText はそのまま動く。
+        from ui.address_bar import AddressBar
+        self._addr_bar = AddressBar()
+        self._addr_bar.returnPressed.connect(
+            lambda: self._navigate(self._addr_bar.text()))
+        self._addr_bar.copied.connect(
+            lambda full: self.status_message.emit(
+                tr("フルパスをコピー: %s", "Copied the full path: %s") % full))
+        tb_layout.addWidget(self._addr_bar, 1)
 
         # 旧グローバルの「フィルター入力／カラム(ビューモード)／名前(ソート)」は
         # カラム別フィルタ・ソート・表示切替へ移行したため撤去。
@@ -443,6 +456,9 @@ class BrowserPanel(QWidget):
         self._gone_watch.timeout.connect(self._check_current_gone_async)
         self._gone_watch.start()
         self._gone_probe_busy = False
+        # r146: «その中身がドライブ最上位から列挙できない» と分かったリンク。
+        # ここに入ったものだけ、そのリンクをカラムのルートにする（退避路）。
+        self._link_own_root = set()
         self._gone_result.connect(self._on_gone_result)
 
         self._history: List[str] = []
@@ -687,6 +703,14 @@ class BrowserPanel(QWidget):
         self._thumb_view.setRootIndex(
             self._proxy.mapFromSource(self._fs_model.index(target_dir)))
 
+        # r146: リンクの中身がカラムに出たかを確かめる。
+        # 実機の Windows ではジャンクションの配下がドライブ最上位ルートからは
+        # 列挙されないことが分かった（回帰スイート 2026-10-14: linkdir の中身が
+        # 出ずに Temp の中身が並んだ）。確認を «クリックで辿った時» だけに
+        # 掛けていたのが誤りで、アドレス欄・ブックマーク・履歴から入ると
+        # 中身が出ないままだった。移動のたびに確かめる。
+        self._verify_link_listing(path)
+
         if is_dir:
             self.directory_changed.emit(path)
 
@@ -749,9 +773,22 @@ class BrowserPanel(QWidget):
             self._select_in_columns(parent)
 
     def _column_root_for(self, path: str) -> str:
-        """カラムビューのルートを決める。パス途中(または自身)に symlink/ジャンクションが
-        あると、その配下はドライブ最上位ルートでは列挙できない環境があるため、
-        最上位のリンク祖先をルートにする。リンクが無ければドライブ最上位。"""
+        """カラムビューのルートを決める。
+
+        r146（ユーザー報告 2026-10-13）:
+          「シンボリックリンクやジャンクションを入ると、遷移前のカラムが
+            消えていて、カラムを左に移動出来なくなっています。」
+
+        r145 までは «経路にリンクが 1 つでもあれば、その最上位リンクをルートに
+        する» という作りだった。QColumnView のルートより左にはカラムが作れない
+        ので、ジャンクションへ入った瞬間に **その親から上のカラムが全部消え、
+        左へ戻る手段が無くなる**。構造上の行き止まりで、仕様として許容できない。
+
+        r146 は **既定でドライブ最上位をルートにする**。リンクの中身が本当に
+        列挙できなかった時だけ、そのリンクをルートにする退避路へ落ちる
+        （_note_link_needs_own_root。古い docstring が言っていた «列挙できない
+        環境» のための道で、普段は通らない）。
+        """
         p = os.path.normpath(os.path.abspath(path))
         drive = os.path.splitdrive(p)[0]
         top = (drive + os.sep) if drive else os.sep
@@ -765,6 +802,9 @@ class BrowserPanel(QWidget):
             cur = parent
         comps.reverse()
         for comp in comps:
+            # 退避路に登録されたリンクだけ、そこをルートにする（既定は通らない）
+            if self._norm(comp) not in getattr(self, "_link_own_root", ()):
+                continue
             try:
                 # 注意: os.path.isdir はリンクを «辿る» ため、ネットワーク先の
                 # ジャンクションが経路にあるとUIスレッドがブロックする
@@ -779,6 +819,79 @@ class BrowserPanel(QWidget):
             except OSError:
                 pass
         return top
+
+    # ── リンクの中身が出なかった時の退避路（r146）──────────────────
+    #
+    # 【前提】普通の Windows のジャンクション／シンボリックリンクは、
+    # ドライブ最上位をルートにしたままでも中身がちゃんとカラムに出る
+    # （2026-10-14 に実機で確認済み）。この退避路は «出ない環境» のための
+    # 保険であって、**普段は絶対に通ってはいけない道**。
+    #
+    # ここが誤爆すると、リンクをカラムのルートにしてしまい、
+    # «リンクへ入ると左のカラムが消えて戻れない» という、本来直したかった
+    # 不具合そのものに戻る。だから判定は «疑わしきは何もしない» で組む。
+    LINK_VERIFY_MS = 900          # 1 回目の確認までの待ち
+    LINK_VERIFY_TRIES = 6         # これだけ連続で «空» なら初めて退避する
+                                  #（900ms × 6 ＝ 約 5 秒。経路に数千件の
+                                  #  フォルダがあると読み込みはこれくらい
+                                  #  平気でかかる。実機の Temp は 3,484 件）
+
+    def _deepest_link_in(self, path: str) -> str:
+        """path の経路にあるリンクのうち、いちばん深いもの（無ければ ""）。"""
+        p = os.path.normpath(os.path.abspath(path or ""))
+        while p:
+            try:
+                if self._is_symlink_or_junction(p):
+                    return p
+            except OSError:
+                pass
+            parent = os.path.dirname(p)
+            if not parent or parent == p:
+                break
+            p = parent
+        return ""
+
+    def _verify_link_listing(self, path: str, tries: int = 0):
+        """リンクへ入った後、その中身がカラムに出ているかを確かめる（r146）。
+
+        何度確かめても出なければ «ドライブ最上位からは列挙できない» 環境と
+        みなし、そのリンクをルートにして開き直す。登録はこのセッションの間
+        だけ覚える。判定の条件は厳しめ（下のコメント参照）。"""
+        link = self._deepest_link_in(path)
+        if not link or self._norm(link) in getattr(self, "_link_own_root", set()):
+            return
+
+        def _check():
+            try:
+                if self._norm(self._current_path or "") != self._norm(path):
+                    return                     # もう別の場所にいる
+                try:
+                    real = [n for n in os.listdir(link)]
+                except OSError:
+                    return                     # 読めない＝リンク切れ。別の話
+                if not real:
+                    return                     # 空フォルダなら出なくて当然
+                src = self._fs_model.index(link)
+                # まだモデルに «その節» が無い＝読み込みがそこまで来ていない
+                # だけ。出ていない証拠にはならない。
+                if not src.isValid():
+                    return self._verify_link_listing(path, tries + 1)
+                if self._fs_model.rowCount(src) > 0:
+                    return                     # 出ている＝退避路は要らない
+                # canFetchMore が立っている＝これから読む。待てば出る。
+                if self._fs_model.canFetchMore(src):
+                    return self._verify_link_listing(path, tries + 1)
+                if tries + 1 < self.LINK_VERIFY_TRIES:
+                    return self._verify_link_listing(path, tries + 1)
+                self._link_own_root.add(self._norm(link))
+                _mfm_log("link: ドライブ最上位から列挙できないのでリンクを"
+                         "ルートにして開き直す %r" % (link,))
+                self._navigate_now(path, add_to_history=False)
+            except Exception as e:
+                _mfm_log("link verify error: %r" % (e,))
+        if tries >= self.LINK_VERIFY_TRIES:
+            return
+        QTimer.singleShot(self.LINK_VERIFY_MS, _check)
 
     def _select_in_columns(self, path: str):
         """ルートは _column_root_for で決め、currentIndex を path に移す。
@@ -1224,6 +1337,10 @@ class BrowserPanel(QWidget):
         通常フォルダのネイティブ列展開ではプロキシが子を返さないため、
         リンクは setRootIndex 方式の _navigate で開く（パスは維持される）。
         リンク先が未接続で到達不能な場合は _navigate 側がステータスに通知する。
+
+        r146: ルートはドライブ最上位のままにして «左のカラム» を残す。
+        中身が出ない環境だった時だけ、後からリンクをルートにして開き直す
+        （確認は _navigate_now が «移動のたび» に行う）。
         """
         self._navigate(path)
 
@@ -1726,6 +1843,31 @@ class BrowserPanel(QWidget):
         except Exception as e:
             _mfm_log("integration activate refresh error: %r" % (e,))
 
+    def _ensure_flat_badge_refresh(self):
+        """連携状態が届いたら平坦ビューも描き直す（r146）。
+
+        カラム側は CappedColumnView が status_updated を受けて再描画して
+        いたが、平坦ビューは誰も受けていなかった。状態を取りに行っていても
+        «届いた時に描き直す» 人がいないので、バッジは出ないままだった。"""
+        if getattr(self, "_flat_badge_hooked", False):
+            return
+        try:
+            mgr = self._integrations()
+            mgr.status_updated.connect(self._on_flat_integration_status)
+            self._flat_badge_hooked = True
+        except Exception as e:
+            _mfm_log("flat badge hook error: %r" % (e,))
+
+    def _on_flat_integration_status(self, _directory: str):
+        try:
+            fc = self._flat_col
+            if fc.isVisible():
+                fc._view.viewport().update()
+        except RuntimeError:
+            pass
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _on_flat_integration_status")
+
     def _request_flat_integration_status(self, cap: int = 300):
         """平坦ビューに並ぶファイルのフォルダの連携状態をワーカーへ要求（r72）。
         従来は createColumn（カラム表示）でしか要求しておらず、平坦ビューの
@@ -1743,6 +1885,7 @@ class BrowserPanel(QWidget):
                     dirs.append(d)
                     if len(dirs) >= cap:
                         break
+            self._ensure_flat_badge_refresh()
             mgr = self._integrations()
             for d in dirs:
                 mgr.request_status(d)
@@ -2083,7 +2226,7 @@ class BrowserPanel(QWidget):
         paste_act.triggered.connect(lambda _c=False: self._clipboard_paste_into(folder))
         menu.addSeparator()
         reveal_act = menu.addAction(glyph_icon("📁"), tr("エクスプローラーで表示", "Show in Explorer"))
-        reveal_act.triggered.connect(lambda _c=False: reveal_in_explorer(folder))
+        reveal_act.triggered.connect(lambda _c=False, t=folder: self._reveal_path(t))
         copy_path_act = menu.addAction(glyph_icon("📋"), tr("フォルダパスをコピー", "Copy folder path"))
         copy_path_act.triggered.connect(lambda _c=False: self._copy_paths_to_clipboard([folder]))
         menu.addSeparator()
@@ -2286,7 +2429,7 @@ class BrowserPanel(QWidget):
             open_ext_act.triggered.connect(lambda: open_with_default_app(paths[0]))
 
             reveal_act = menu.addAction(glyph_icon("📁"), tr("エクスプローラーで表示", "Show in Explorer"))
-            reveal_act.triggered.connect(lambda: reveal_in_explorer(paths[0]))
+            reveal_act.triggered.connect(lambda _c=False, t=paths[0]: self._reveal_path(t))
             menu.addSeparator()
 
         # ── 外部サービス連携（該当ワークスペースのプロバイダだけ表示） ────
@@ -2673,6 +2816,9 @@ class BrowserPanel(QWidget):
     def _on_gone_result(self, checked_path: str, dest: str):
         """ワーカーの判定結果を UI スレッドで受ける（r107）。"""
         self._gone_probe_busy = False
+        # r146: «その中身がドライブ最上位から列挙できない» と分かったリンク。
+        # ここに入ったものだけ、そのリンクをカラムのルートにする（退避路）。
+        self._link_own_root = set()
         if not dest:
             return
         if (self._current_path or "") != checked_path:
@@ -2874,6 +3020,9 @@ class BrowserPanel(QWidget):
                                        "An item with that name already exists:\n%s")
                                     % new_name)
                 return
+            # r146: 走っているコピー／移動／削除の対象は触らせない
+            if not self._busy_guard([path, new_path], tr("名前変更", "Rename")):
+                return
             from core.undo_stack import RenameOp
             ok, err = self._rename_path(path, new_path)
             if not ok:
@@ -2891,13 +3040,34 @@ class BrowserPanel(QWidget):
 
         # Tab / Shift+Tab: 確定して同じカラムの次／前の項目の名前変更へ（r67）
         def _neighbor_path(step: int):
+            """確定前に «同じカラムの隣» の項目を調べる。
+
+            r146（実機 2026-10-14、faulthandler のスタックで特定）:
+              ここが ACCESS_VIOLATION（3221225477）で落ちていた。
+              捕まえた ``idx`` は «エディタを開いた時の» index で、その後に
+              カラムが組み替わると、ビューのモデルも index も別物になる。
+              **違うモデルの index を rowCount に渡す** と、Qt は
+              「index from wrong model passed to mapToSource」を出した上で
+              中身の分からないポインタを辿り、運が悪いとプロセスごと落ちる。
+              毎回 «今のビューのモデル» で引き直し、食い違っていたら何も
+              しない（Tab での移動を諦めるだけで、落ちるよりずっとよい）。
+            """
             try:
-                m = view.model()
-                row = idx.row() + step
-                if row < 0 or row >= m.rowCount(idx.parent()):
+                if not is_alive(view):
                     return None
-                return self._resolve_path(m.index(row, 0, idx.parent()))
-            except Exception:
+                m = view.model()
+                if m is None or not is_alive(m):
+                    return None
+                cur = self._column_view._proxy_index_for_path(path)
+                if not cur.isValid() or cur.model() is not m:
+                    return None
+                parent = cur.parent()
+                row = cur.row() + step
+                if row < 0 or row >= m.rowCount(parent):
+                    return None
+                return self._resolve_path(m.index(row, 0, parent))
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py _neighbor_path")
                 return None
 
         def _commit_and_move(step: int):
@@ -2955,8 +3125,57 @@ class BrowserPanel(QWidget):
                 return
             # r98: リネーム後は «新しい名前の項目» を選択状態にする
             self._select_when_visible(os.path.join(folder, new_name))
+            # r146（ユーザー報告 2026-10-13）:
+            #   「リネームしたら元のファイル名が表示されたまま
+            #     新しいファイルの様に結果がでてきます。」
+            # QFileSystemModel は «自分が知らないところで起きた rename» を
+            # 取りこぼすことがある（監視を手放した直後・ネットワーク/クラウド
+            # ドライブ・短時間に連続した変更）。取りこぼすと古い名前の項目が
+            # 残ったまま新しい名前が増えるので «新規作成されたように» 見える。
+            # 見えている結果を正としてモデル側を確かめ、ずれていたら読み直す。
+            self._verify_rename_applied(folder, old_name, new_name)
         except Exception as _e:
             _swallow(_e, "ui/browser_panel.py:2509 _on_fs_file_renamed")
+
+    RENAME_VERIFY_MS = 250
+
+    def _verify_rename_applied(self, folder: str, old_name: str, new_name: str):
+        """モデルに古い名前が残っていないか確かめ、残っていたら読み直す（r146）。"""
+        def _check():
+            try:
+                old_p = os.path.join(folder, old_name)
+                if os.path.lexists(old_p):
+                    return            # 実際にまだある（別物）＝ここの出番ではない
+                m = self._fs_model
+                idx = m.index(old_p)
+                stale = bool(idx.isValid())
+                if not stale:
+                    return
+                _mfm_log("rename: モデルに古い名前が残っていたので読み直す %r"
+                         % (old_p,))
+                self._resync_dir(folder)
+            except Exception as e:
+                _mfm_log("rename verify error: %r" % (e,))
+        QTimer.singleShot(self.RENAME_VERIFY_MS, _check)
+
+    def _resync_dir(self, folder: str):
+        """そのフォルダをモデルに読み直させる（r146）。
+
+        QFileSystemModel には «このディレクトリだけ再読込» の API が無い。
+        既にこのクラスが持っている «rootPath を空へ逃がして当て直す» 手を
+        そのまま使う（_release_fs_handles の level 1 と同じ仕掛け）。
+        表示中のカラム構成は変えない。"""
+        try:
+            if not folder or not os.path.isdir(folder):
+                return
+            m = self._fs_model
+            keep = m.rootPath()
+            m.setRootPath("")
+            m.setRootPath(keep if keep and os.path.isdir(keep) else folder)
+            self._flush_deleted()
+            self._refresh_flat_view()
+        except Exception as e:
+            _mfm_log("resync_dir error: %r" % (e,))
 
     def _rename_dialog(self, paths: List[str]):
         if len(paths) != 1:
@@ -2967,6 +3186,9 @@ class BrowserPanel(QWidget):
         )
         if ok and new_name:
             new_path = old.parent / new_name
+            if not self._busy_guard([str(old), str(new_path)],
+                                    tr("名前変更", "Rename")):
+                return
             from core.undo_stack import RenameOp
             ok, err = self._rename_path(str(old), str(new_path))
             if not ok:
@@ -2987,6 +3209,8 @@ class BrowserPanel(QWidget):
         shown = "\n".join("  " + n for n in names[:10])
         if len(names) > 10:
             shown += "\n  …他 %d 件" % (len(names) - 10)
+        if not self._busy_guard(paths, tr("削除", "Delete")):
+            return
         msg = f"{len(paths)} 件を削除しますか？\n\n{shown}"
         ret = QMessageBox.warning(self, tr("削除の確認", "Confirm delete"), msg,
                                   QMessageBox.Yes | QMessageBox.Cancel)
@@ -3041,9 +3265,27 @@ class BrowserPanel(QWidget):
                         tr("%d 件を削除しました%s", "Deleted %d item(s)%s")
                         % (len(paths), hint))
                 self._check_current_gone_async()
-            self._run_file_op("削除", work, done, total=len(targets))
+            self._run_file_op("削除", work, done, total=len(targets),
+                              busy_paths=list(targets))
 
         _run(list(paths), False)
+
+    def _reveal_path(self, target: str):
+        """エクスプローラーで表示（r146: 失敗を黙らせない）。
+
+        r145 までは reveal_in_explorer を直接 connect していたので、
+        失敗しても «何も起きない» だけでユーザーには理由が届かなかった。"""
+        from core.file_operations import reveal_in_explorer, FileOperationError
+        try:
+            reveal_in_explorer(target)
+        except FileOperationError as e:
+            self.status_message.emit(
+                tr("エクスプローラーで表示できません: %s",
+                   "Cannot show in Explorer: %s") % e)
+        except Exception as e:
+            _mfm_log("reveal failed: %r" % (e,))
+            self.status_message.emit(
+                tr("エクスプローラーで表示できません", "Cannot show in Explorer"))
 
     def _release_fs_handles_for(self, paths, level: int = 1):
         """paths に含まれるフォルダの監視ハンドルを手放す（r144）。
@@ -3335,15 +3577,54 @@ class BrowserPanel(QWidget):
     class _OpCancelled(Exception):
         pass
 
-    def _run_file_op(self, title: str, work, on_done=None, total: int = 0):
+    def _busy_guard(self, paths, verb: str) -> bool:
+        """その場所が «走っている操作» と重なっていないか（r146）。
+
+        進捗ダイアログを非モーダルにしたので（ユーザー指示 2026-10-13）、
+        走っている最中でもマネージャーは触れる。ただし **その操作が触って
+        いる場所だけ** は通さない。移動元・移動先と、その上下関係にあるもの。
+        無関係なフォルダでの操作はこれまでどおり通る。"""
+        from core.file_locks import conflicts
+        bad = conflicts(paths)
+        if not bad:
+            return True
+        names = []
+        for raw, label in bad[:5]:
+            names.append("  %s（%s）" % (os.path.basename(raw.rstrip("/\\")) or raw,
+                                        label or tr("処理中", "in progress")))
+        QMessageBox.information(
+            self, verb,
+            tr("この項目は処理中のため、いま %s できません。\n\n%s\n\n"
+               "終わってからもう一度お試しください。",
+               "These items are busy and cannot be %s right now.\n\n%s\n\n"
+               "Please try again once the running operation finishes.")
+            % (verb, "\n".join(names)))
+        return False
+
+    def _run_file_op(self, title: str, work, on_done=None, total: int = 0,
+                     busy_paths=None):
         """work(progress_cb) をワーカーで実行。progress_cb(i, n) はワーカーから
         呼ばれ、キャンセル済みなら _OpCancelled を投げて中断させる。
-        on_done(result, cancelled: bool, error: str) は UI スレッドで呼ばれる。"""
+        on_done(result, cancelled: bool, error: str) は UI スレッドで呼ばれる。
+        busy_paths … その操作が触る場所（移動元・移動先）。走っている間だけ
+        予約し、同じ場所への別の操作を断る（r146）。"""
         from core.compat import QProgressDialog
+        from core import file_locks
+        lock_token = file_locks.acquire(busy_paths or [], title)
         notifier = _FileOpNotifier(self)
-        dlg = QProgressDialog(title, "キャンセル", 0, max(0, int(total)), self)
+        dlg = QProgressDialog(title, tr("キャンセル", "Cancel"),
+                              0, max(0, int(total)), self)
         dlg.setWindowTitle(title)
-        dlg.setWindowModality(Qt.WindowModal)
+        # r146（ユーザー指示 2026-10-13）:
+        #   「移動中やコピー中にマネージャーが止まらない様にしてください。
+        #     進捗バーは出してください。」
+        # 実処理はもともとワーカースレッドなので、止めていたのは «進捗ダイアログを
+        # WindowModal にしていたこと» だけだった。非モーダルにすれば、進捗を
+        # 出したままフォルダを見て回れる（キャンセルもそのまま効く）。
+        dlg.setWindowModality(Qt.NonModal)
+        dlg.setModal(False)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(dlg)                        # r146: ✕ を押せる状態にしておく
         dlg.setMinimumDuration(400)      # 短い操作ではダイアログを出さない
         dlg.setAutoClose(False)
         dlg.setAutoReset(False)
@@ -3386,6 +3667,7 @@ class BrowserPanel(QWidget):
         def done(res, err):
             state["done"] = True
             tick.stop()
+            file_locks.release(lock_token)
             try:
                 dlg.close()
                 dlg.deleteLater()
@@ -3457,9 +3739,106 @@ class BrowserPanel(QWidget):
     # カラムへのファイルドロップ（r87）
     # ------------------------------------------------------------------
 
-    def _on_files_dropped(self, paths: List[str], dest_dir: str, move: bool):
-        """カラム間 D&D の実行。移動（既定）／コピー（Ctrl）。
+    DROP_MENU_KEY = "drop_action_menu"
+
+    def _ask_drop_action(self, gpos, n: int):
+        """ドロップ時に «どうするか» を選ばせる（r146、持ち越し課題）。
+
+        Unreal Engine の D&D と同じ考え方。«落とした瞬間に移動» は取り返しが
+        付きにくく、Ctrl を押し忘れただけで移動になるのが怖い、という話だった。
+        修飾キーを押していた時は Explorer と同じで即実行（呼び出し側で判定）。
+        設定で切れば従来どおり «即移動»。
+
+        戻り値: "move" / "copy" / "advanced" / None（取りやめ）"""
+        if not bool(self._sm.get(self.DROP_MENU_KEY, True)):
+            return "move"
+        from core.compat import QMenu
+        from ui.dcc_header import glyph_icon
+        menu = QMenu(self)
+        cnt = tr("（%d 件）", " (%d)") % n if n > 1 else ""
+        a_move = menu.addAction(glyph_icon("➡"), tr("ここに移動", "Move Here") + cnt)
+        a_copy = menu.addAction(glyph_icon("📋"), tr("ここにコピー", "Copy Here") + cnt)
+        a_adv = menu.addAction(glyph_icon("🧩"),
+                               tr("高度なコピー…", "Advanced Copy…") + cnt)
+        a_adv.setToolTip(tr("名前を付け替えながらコピーします",
+                            "Copy while renaming"))
+        menu.addSeparator()
+        menu.addAction(tr("キャンセル", "Cancel"))
+        menu.setToolTipsVisible(True)
+        act = menu.exec(gpos) if hasattr(menu, "exec") else menu.exec_(gpos)
+        if act is a_move:
+            return "move"
+        if act is a_copy:
+            return "copy"
+        if act is a_adv:
+            return "advanced"
+        return None
+
+    def _advanced_copy_to(self, paths: List[str], dest_dir: str):
+        """落とし先へ «名前を付け替えながら» コピーする（r146）。"""
+        from ui.duplicate_dialog import DuplicateDialog
+        from core.file_operations import duplicate_items
+        from core.undo_stack import CopyOp
+        if not self._busy_guard(list(paths) + [dest_dir],
+                                tr("高度なコピー", "Advanced Copy")):
+            return
+        dlg = DuplicateDialog(paths, parent=self.window(), dest_dir=dest_dir)
+        # モーダルのまま（例外）: ここで決まる «名前の付け方» を使って
+        # 直後に実処理を行うため、返り値を待つ必要がある。
+        if (dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()) != QDialog.Accepted:
+            return
+        specs = dlg.specs()
+        inside = dlg.rename_inside()
+        results: List[str] = []
+
+        def work(cb):
+            duplicate_items(specs, progress_cb=cb, results=results,
+                            rename_inside=inside)
+            return results
+
+        def done(res, cancelled, err):
+            pairs = [(s, d) for (s, d) in specs if d in results]
+            if pairs:
+                self._undo_stack().push(CopyOp(pairs))
+            if err:
+                QMessageBox.critical(self, tr("高度なコピー", "Advanced Copy"), err)
+            elif cancelled:
+                self.status_message.emit(
+                    tr("高度なコピーをキャンセルしました（完了 %d 件）",
+                       "Advanced copy cancelled (%d done)") % len(results))
+            else:
+                self.status_message.emit(
+                    tr("高度なコピー: %d 件（Ctrl+Z で元に戻せます）",
+                       "Advanced copy: %d item(s) (Ctrl+Z to undo)") % len(results))
+        self._run_file_op(tr("高度なコピー", "Advanced Copy"), work, done,
+                          total=len(specs),
+                          busy_paths=[s for s, _d in specs] + [dest_dir])
+
+    def _on_files_dropped(self, paths: List[str], dest_dir: str,
+                          forced=None, gpos=None):
+        """カラム間 D&D の実行（r146 でメニュー対応）。
+
+        forced … "copy" / "move"（修飾キーで確定）/ None（メニューで選ばせる）
         同名が既にある時は «上書き / 名前を変えて / スキップ» を選ばせる。"""
+        # r146: 旧シグネチャ（第 3 引数が move: bool）でも動くようにしておく。
+        # 内部の呼び出しは全部直したが、真偽値が来た時に «コピー» に化けると
+        # 気づきにくい事故になる（False は «選ばせる» ではなく «コピー»）。
+        if forced is True:
+            forced = "move"
+        elif forced is False:
+            forced = "copy"
+        action = forced
+        if action is None:
+            from core.compat import QCursor
+            action = self._ask_drop_action(gpos or QCursor.pos(), len(paths))
+        if action is None:
+            self.status_message.emit(tr("取りやめました", "Cancelled"))
+            return
+        if action == "advanced":
+            if os.path.isdir(dest_dir):
+                self._advanced_copy_to(list(paths), os.path.normpath(dest_dir))
+            return
+        move = (action == "move")
         from core.file_operations import (move_items, copy_items,
                                           CONFLICT_RENAME, CONFLICT_SKIP)
         from core.undo_stack import MoveOp, CopyOp
@@ -3573,6 +3952,8 @@ class BrowserPanel(QWidget):
             return
         specs = dlg.specs()
         inside = dlg.rename_inside()
+        if not self._busy_guard([s for s, _d in specs], tr("複製", "Duplicate")):
+            return
         results: List[str] = []
 
         def work(cb):
@@ -3684,6 +4065,8 @@ class BrowserPanel(QWidget):
         """コピー/移動をワーカー＋進捗ダイアログで実行し、Undo 記録を積む（r62）。
         キャンセル時も完了した分は Undo 可能な記録として残す。"""
         from core.undo_stack import MoveOp, CopyOp
+        if not self._busy_guard(list(paths) + [target], verb):
+            return
         results: List[str] = []
         fn = move_items if move else copy_items
         # r98: «Manager で開いているフォルダ» は監視ハンドルのせいで Windows では
@@ -3712,7 +4095,8 @@ class BrowserPanel(QWidget):
                     tr("%s完了: %d 件", "%s finished: %d item(s)")
                     % (verb, len(results)))
             self._check_current_gone_async()          # r98/r107
-        self._run_file_op(verb, work, done, total=len(paths))
+        self._run_file_op(verb, work, done, total=len(paths),
+                          busy_paths=list(paths) + [target])
 
     def _clipboard_delete(self):
         paths = self._operation_targets()

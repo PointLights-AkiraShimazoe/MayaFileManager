@@ -286,6 +286,38 @@ class IntegrationManager(QObject):
         with self._lock:
             return list(self._dir_providers.get(norm(directory), []))
 
+    def _resolve_providers_sync(self, dirs):
+        """そのフォルダのプロバイダ（ワークスペース root）だけを同期で確定する。
+
+        r146: fetch_status は呼ばない（遅いのはそちら）。root_for だけなら
+        数ms で済むので、右クリックの中で待っても体感に出ない。
+        «間に合わなかったフォルダのファイルが黙って落ちる» のを防ぐための道。"""
+        for d in dirs or []:
+            key = norm(d)
+            with self._lock:
+                if key in self._dir_providers:
+                    continue
+            try:
+                eff = resolve_link_prefix(d)
+            except Exception:
+                eff = d
+            found = []
+            for p in self.providers:
+                if not p.available:
+                    continue
+                try:
+                    root = p.root_for(eff)
+                except Exception as e:
+                    _ilog("root_for(sync) %s %r: 例外 %r" % (p.key, eff, e))
+                    root = None
+                if root:
+                    found.append((p, root, eff))
+            with self._lock:
+                # 状態（_status）はまだ空のまま。後からワーカーが埋める。
+                self._dir_providers.setdefault(key, found)
+            _ilog("actions_for dir=%r: 同期でプロバイダ確定 %s"
+                  % (d, [p.key for p, _r, _e in found] or "なし"))
+
     def actions_for(self, paths):
         """右クリック用: [(provider_label, [(label, cb), ...], provider_key), ...]
 
@@ -319,6 +351,18 @@ class IntegrationManager(QObject):
                     if all(norm(d) in self._dir_providers for d in unknown):
                         break
                 time.sleep(0.02)
+            # r146（ユーザー報告 2026-10-13）:
+            #   「平坦モードで複数選択でチェックアウトをした場合に、
+            #     正常に実行されていなかった」
+            # 状態取得はワーカー 1 本の直列なので、平坦ビューのように
+            # フォルダが何十個もあると 0.4 秒では終わらない。ところが下の
+            # グループ分けは «providers_for が空なら黙って捨てる» 作りで、
+            # 間に合わなかったフォルダのファイルが **選択から静かに抜け落ち**、
+            # 一部だけがチェックアウトされていた。
+            # 間に合わなかった分はここで «プロバイダの確定だけ» 同期で行う。
+            # fetch_status（p4 fstat、数秒）は走らせないので十分速い。
+            self._resolve_providers_sync(
+                [d for d in unknown if norm(d) not in self._dir_providers])
         groups = {}          # (provider.key, root) -> (provider, root, [eff_paths])
         order = []
         for x in paths:

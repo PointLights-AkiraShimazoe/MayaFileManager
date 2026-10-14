@@ -225,17 +225,62 @@ class Provider:
         # ワーカースレッドから呼ばれる。UI への橋渡しは manager の Signal が行う。
         self.report = lambda ok, msg: None
 
-    def run_cli_async(self, cmd, cwd, what: str, timeout: float = 120.0):
+    # Windows のコマンドラインは 32767 文字が上限。平坦ビューで数百件を
+    # 選ぶと素直に並べただけで超える。超えた瞬間 CreateProcess が失敗する
+    # か、ひどい時は途中までしか渡らない（＝一部だけ実行される）。
+    # r146（ユーザー報告 2026-10-13「複数選択でチェックアウトが正常に
+    # 実行されていなかった」）: 安全側に倒して分割して回す。
+    CLI_ARG_CHARS = 24000
+
+    @classmethod
+    def split_cli_batches(cls, cmd, fixed_len: int):
+        """cmd を «固定部分 + ファイル群» とみなして長さで分割する。
+
+        fixed_len … ファイル群が始まる位置（それより前は毎回付ける）。
+        戻り値: [cmd1, cmd2, ...]（分ける必要が無ければ 1 本のまま）。
+        """
+        head, files = list(cmd[:fixed_len]), list(cmd[fixed_len:])
+        if not files:
+            return [list(cmd)]
+        budget = max(1000, cls.CLI_ARG_CHARS - sum(len(a) + 3 for a in head))
+        out, cur, used = [], [], 0
+        for f in files:
+            n = len(f) + 3            # 引用符と空白の分
+            if cur and used + n > budget:
+                out.append(head + cur)
+                cur, used = [], 0
+            cur.append(f)
+            used += n
+        if cur:
+            out.append(head + cur)
+        return out
+
+    def run_cli_async(self, cmd, cwd, what: str, timeout: float = 120.0,
+                      fixed_len: int = None):
         """CLI をデーモンスレッドで実行し、終了時に self.report() へ結果を渡す。
-        actions() が返す callable から使う（r58: 失敗を黙殺しない）。"""
+        actions() が返す callable から使う（r58: 失敗を黙殺しない）。
+
+        fixed_len を渡すと、それ以降を «ファイル群» とみなして長すぎる時に
+        分割実行する（r146）。1 本でも失敗したら失敗として報告する。"""
+        batches = ([list(cmd)] if fixed_len is None
+                   else self.split_cli_batches(cmd, fixed_len))
+
         def _go():
-            rc, out, err = run(cmd, cwd=cwd, timeout=timeout)
-            ok, msg = self.classify_cli_result(rc, out, err)
-            if ok:
+            fails, msgs = [], []
+            for i, c in enumerate(batches):
+                rc, out, err = run(c, cwd=cwd, timeout=timeout)
+                ok, msg = self.classify_cli_result(rc, out, err)
+                if ok:
+                    msgs.append(msg)
+                else:
+                    fails.append(msg)
+            if not fails:
                 self.note_success()
-                self.report(True, "%s: %s" % (what, msg))
+                tail = ("（%d 回に分けて実行）" % len(batches)) if len(batches) > 1 else ""
+                self.report(True, "%s: %s%s" % (what, msgs[0] if msgs else "完了", tail))
             else:
-                self.report(False, "%s に失敗しました。\n\n%s" % (what, msg))
+                self.report(False, "%s に失敗しました。\n\n%s"
+                            % (what, "\n".join(fails[:5])))
         threading.Thread(target=_go, daemon=True, name="mfm-integ-cli").start()
 
     def cli_output_is_error(self, text: str) -> bool:

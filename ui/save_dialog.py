@@ -30,8 +30,14 @@ class SaveDialog(QDialog):
     """mode: "save"（シーンを保存）/ "export"（選択を書き出し）。"""
 
     def __init__(self, dcc: str, mode: str, folder: str, initial_name: str = "",
-                 sm=None, parent=None):
+                 sm=None, parent=None, initial_is_selection=None):
+        """initial_is_selection:
+        initial_name が «ユーザーがブラウザで選んだファイル» 由来なら True。
+        «接続中のシーン名» のような補完値なら False（r146）。
+        None の時は従来どおり «名前があれば選択とみなす»（古い呼び出し互換）。"""
         super().__init__(parent)
+        self._picked = (bool(initial_name) if initial_is_selection is None
+                        else bool(initial_is_selection))
         self._dcc = "blender" if dcc == "blender" else "maya"
         self._mode = "export" if mode == "export" else "save"
         self._folder = folder or ""
@@ -47,7 +53,8 @@ class SaveDialog(QDialog):
             app, tr("選択を書き出し", "Export Selection") if self._mode == "export"
             else tr("シーンを保存", "Save Scene")))
         self.setMinimumWidth(560)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        from ui.dialog_util import apply_window_buttons as _awb
+        _awb(self)   # r146: ✕ を必ず押せる状態にする
         self._build(initial_name)
 
     # ── UI ─────────────────────────────────────────────────────────────
@@ -78,6 +85,19 @@ class SaveDialog(QDialog):
         grid.addWidget(self._ext_combo, 1, 2)
         grid.setColumnStretch(1, 1)
         root.addLayout(grid)
+
+        # r146: どのルールが効いているかをその場に出す
+        self._auto_lbl = QLabel("")
+        self._auto_lbl.setObjectName("mfmSaveAutoRule")
+        self._auto_lbl.setWordWrap(True)
+        try:
+            from core.theme_engine import qss_vars as _qv
+            v = _qv()
+            self._auto_lbl.setStyleSheet(
+                "color:%s;font-size:%spx;" % (v["on_surface_dim"], v["label_px"]))
+        except Exception as _e:
+            _swallow(_e, "ui/save_dialog.py _build(auto label style)")
+        root.addWidget(self._auto_lbl)
 
         # r140: ルール側でインクリメンタルセーブが ON の時だけ出す。
         from core.compat import QCheckBox as _QCheckBox
@@ -121,7 +141,7 @@ class SaveDialog(QDialog):
         name = os.path.basename(initial_name or "")
         # r145: 自動命名は «拡張子なしの名前» を返す。拡張子は、選んでいた
         # ファイル／直近の形式／DCC 既定の順で決める（下の分岐がやる）。
-        auto = self._auto_name_suggestion(bool(name))
+        auto = self._auto_name_suggestion(self._picked)
         if auto:
             keep = os.path.splitext(name)[1]
             name = auto + keep
@@ -135,6 +155,10 @@ class SaveDialog(QDialog):
         # 保存される形式は変わらない（effective_ext がファイル名から判定する）。
         self._incr_available = self.incremental_available()
         self._incr_cb.setVisible(self._incr_available)
+        try:
+            self._auto_lbl.setText(self._auto_rule_text())
+        except Exception as _e:
+            _swallow(_e, "ui/save_dialog.py _build(auto label)")
         self._ext_combo.setCurrentIndex(0)
         self._ext_combo.currentIndexChanged.connect(self._on_ext_changed)
         self._name_edit.setText(name)
@@ -344,14 +368,38 @@ class SaveDialog(QDialog):
     # ── 自動命名（r140: 階層型）─────────────────────
     def _auto_rule(self):
         """この保存先に効くルール (rule, values)。無ければ (None, {})。"""
+        rule, values, _src = self._auto_rule_full()
+        return rule, values
+
+    def _auto_rule_full(self):
+        """(rule, values, 出所のプリセット名)。無ければ (None, {}, "")。"""
         if self._sm is None or not self._folder:
-            return None, {}
+            return None, {}, ""
         try:
-            rule, values, _src = self._sm.resolve_auto_name_rule(self._folder)
-            return rule, values
+            return self._sm.resolve_auto_name_rule(self._folder)
         except Exception as _e:
             _swallow(_e, "ui/save_dialog.py _auto_rule")
-            return None, {}
+            return None, {}, ""
+
+    def _auto_rule_text(self) -> str:
+        """«今どのルールが効いているか» の 1 行（r146）。
+
+        ユーザー報告 2026-10-11「命名ルールが意味がわからない壊れ方をしています」。
+        壊れていた原因（下の _auto_name_suggestion 参照）とは別に、
+        **効いているのか効いていないのかが画面から読み取れない** のが
+        «意味がわからない» を増幅していた。当たったルールと拾った値、
+        当たらなかった時はその旨を、その場に出す。"""
+        from core import auto_name as _an
+        rule, values, src = self._auto_rule_full()
+        if not rule:
+            return tr("自動命名: このフォルダに合うルールはありません",
+                      "Auto-naming: no rule matches this folder")
+        pairs = ", ".join("%s=%s" % (k, v) for k, v in sorted(values.items()))
+        head = tr("自動命名: %s", "Auto-naming: %s") % (src or tr("（無名）", "(unnamed)"))
+        body = _an.stem_template(rule)
+        if pairs:
+            return "%s  /  %s  /  %s" % (head, body, pairs)
+        return "%s  /  %s" % (head, body)
 
     def incremental_available(self) -> bool:
         """ルール側でインクリメンタルセーブが ON か（オプションを出すか）。"""

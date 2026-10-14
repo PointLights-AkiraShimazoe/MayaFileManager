@@ -260,23 +260,103 @@ def _clean_launch_env() -> Dict[str, str]:
     return env
 
 
+def parse_env_text(text: str) -> Dict[str, str]:
+    """「KEY=VALUE」を並べた文字列を辞書にする（r146）。
+
+    区切りは **改行か ;**。``#`` 以降は注記として捨てる。値の前後の空白と
+    引用符は落とす（``MAYA_UI_LANGUAGE = "en_US"`` も通る）。
+    bat の ``SET KEY=VALUE`` を貼れるよう、先頭の ``set`` も許す。
+    """
+    out: Dict[str, str] = {}
+    for raw in re.split(r"[\r\n;]+", str(text or "")):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line[:4].lower() == "set ":
+            line = line[4:].strip()
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        if not k:
+            continue
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        out[k] = v
+    return out
+
+
+def _expand_wrapper(wrapper: str, exe: str, file_path: str,
+                    port: Optional[int]) -> List[str]:
+    """ラッパー指定を実際のコマンド列にする（r146）。
+
+    ``{exe}`` ``{file}`` ``{port}`` を差し替える。プレースホルダが 1 つも
+    書かれていなければ «ラッパー exe file» の順で後ろに付ける（よくある
+    ``run.bat <maya.exe> <file>`` の形）。
+    """
+    import shlex
+    try:
+        parts = shlex.split(wrapper, posix=False)
+    except ValueError:
+        parts = wrapper.split()
+    # posix=False は引用符を token に残す。Popen にリストで渡すと «"D:/a b/x.bat"»
+    # という名前のファイルを探しに行って失敗するので、ここで外す
+    # （空白入りのパスは引用符で書くのが自然なので、必ず通る道）。
+    parts = [(p[1:-1] if len(p) >= 2 and p[0] == p[-1] and p[0] in "\"'" else p)
+             for p in parts]
+    if not parts:
+        return []
+    has_ph = any(("{exe}" in p or "{file}" in p or "{port}" in p) for p in parts)
+    out: List[str] = []
+    for p in parts:
+        p = (p.replace("{exe}", exe)
+              .replace("{file}", file_path or "")
+              .replace("{port}", str(port or "")))
+        if p == "" and has_ph:
+            continue                       # {file} が空だった分は落とす
+        out.append(p)
+    if not has_ph:
+        out.append(exe)
+    # .bat / .cmd は CreateProcess が直接は扱えないことがあるので cmd 経由で。
+    # /c は «実行して終わる»（/k と違って窓が残らない）。
+    if out and os.path.splitext(out[0])[1].lower() in (".bat", ".cmd"):
+        comspec = os.environ.get("COMSPEC") or "cmd.exe"
+        out = [comspec, "/c"] + out
+    return out
+
+
 def launch_maya(installation: MayaInstallation,
                 file_path: Optional[str] = None,
                 extra_args: Optional[List[str]] = None,
                 command_port: Optional[int] = None,
-                clean_env: bool = True) -> subprocess.Popen:
+                clean_env: bool = True,
+                env_extra: Optional[Dict[str, str]] = None,
+                wrapper: str = "") -> subprocess.Popen:
     """
     Launch Maya as a detached subprocess.
 
     command_port: 指定すると起動後にその Python commandPort を開く
                   （FileManager から socket 接続して操作を送るため）。
     clean_env:    mayapy 由来の衝突環境変数を除去してクリーンに起動する（既定 True）。
+    env_extra:    起動時に足す環境変数（r146）。MAYA_UI_LANGUAGE のように
+                  **Maya が起動時に読む** ものは引数では渡せないのでこちら。
+    wrapper:      maya.exe の代わりに走らせる .bat / .exe（r146）。
+                  {exe} {file} {port} を書けばその位置へ差し込む。
+                  書かなければ «ラッパー maya.exe» の順で繋ぐ。
     Returns the Popen object (already detached).
     """
     if not installation.is_available:
         raise FileNotFoundError(f"Maya executable not found: {installation.path}")
 
-    cmd: List[str] = [str(installation.executable)]
+    exe = str(installation.executable)
+    if wrapper:
+        cmd: List[str] = _expand_wrapper(wrapper, exe, file_path or "",
+                                         command_port)
+        wrapper_took_file = "{file}" in wrapper
+    else:
+        cmd = [exe]
+        wrapper_took_file = False
     if command_port:
         # 起動後に Python commandPort を開く（既に開いていればエラーを握りつぶす）
         # 注意: -echoOutput は付けない。付けるとスクリプトエディタの全出力が
@@ -284,14 +364,17 @@ def launch_maya(installation: MayaInstallation,
         mel = ('catchQuiet(`commandPort -name ":%d" -sourceType "python"`);'
                % int(command_port))
         cmd += ["-command", mel]
-    if file_path:
+    if file_path and not wrapper_took_file:
         cmd += [file_path]
     if extra_args:
         cmd += extra_args
 
     kwargs: Dict = {"close_fds": True}
-    if clean_env:
-        kwargs["env"] = _clean_launch_env()
+    env = _clean_launch_env() if clean_env else dict(os.environ)
+    if env_extra:
+        env.update({str(k): str(v) for k, v in env_extra.items()})
+    if clean_env or env_extra:
+        kwargs["env"] = env
     system = platform.system()
     if system == "Windows":
         kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

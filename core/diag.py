@@ -70,3 +70,24 @@ def swallowed_count() -> int:
 def reset():
     """テスト用。"""
     _seen.clear()
+
+
+# ── 切り分け用の «殺しスイッチ»（r146）────────────────────────────
+#
+# 断続的に落ちる（Windows の ACCESS_VIOLATION 3221225477）ような相手は、
+# 仕掛けを 1 つずつ止めて «止めたら出なくなるか» を見るのが一番早い。
+# 環境変数 MFM_DIAG に名前を並べると、その仕掛けだけを止めて走れる。
+#
+#   set MFM_DIAG=no_destroy_hook,no_noanim_style
+#
+# 通常の実行では空なので、製品の挙動は一切変わらない。
+def diag_off(name: str) -> bool:
+    """MFM_DIAG に name が並んでいれば True（その仕掛けを止める）。"""
+    try:
+        import os
+        v = os.environ.get("MFM_DIAG", "")
+        if not v:
+            return False
+        return name in [x.strip() for x in v.split(",") if x.strip()]
+    except Exception:
+        return False
