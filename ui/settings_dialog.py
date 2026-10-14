@@ -154,8 +154,45 @@ class AutoNamingRuleRow(QFrame):
 
     def _build(self, directory: str):
         from core.compat import QCheckBox
-        layout = QGridLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        # ── 見出し（折りたたみ）────────────────────────────────────
+        # r146（ユーザー指示）: ルールを «フレームで折りたたみ» たい。
+        # 1 件が 6 行あるので、10 件も並ぶと目的のルールを探せない。
+        # 見出しだけ残して畳めるようにし、見出しに «どこの規則か» を出す。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(4)
+
+        head = QWidget()
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(4)
+        self._fold_btn = QToolButton()
+        self._fold_btn.setObjectName("mfmNamingFold")
+        self._fold_btn.setCheckable(True)
+        self._fold_btn.setChecked(True)          # 既定は開いている
+        self._fold_btn.setAutoRaise(True)
+        self._fold_btn.setArrowType(Qt.DownArrow)
+        self._fold_btn.setToolTip(tr("この規則を畳む／開く",
+                                     "Collapse or expand this rule"))
+        self._fold_btn.toggled.connect(self._on_fold_toggled)
+        hl.addWidget(self._fold_btn, 0)
+        self._title = QLabel("")
+        self._title.setTextInteractionFlags(Qt.NoTextInteraction)
+        hl.addWidget(self._title, 1)
+        head_del = QToolButton()
+        head_del.setText("\u2715")
+        head_del.setToolTip(tr("この規則を削除", "Remove this rule"))
+        head_del.clicked.connect(lambda: self.remove_requested.emit(self))
+        hl.addWidget(head_del, 0)
+        outer.addWidget(head, 0)
+        self._head = head
+
+        self._body = QWidget()
+        outer.addWidget(self._body, 1)
+
+        from core.compat import QCheckBox
+        layout = QGridLayout(self._body)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
         layout.addWidget(QLabel(tr("ルート:", "Root:")), 0, 0)
@@ -205,20 +242,39 @@ class AutoNamingRuleRow(QFrame):
         self._file_edit.textChanged.connect(self._refresh_hint)
         layout.addWidget(self._file_edit, 2, 1, 1, 5)
 
+        # ── 変数のプルダウン＋挿入（r146、ユーザー指示）──────────────
+        # 対象階層に書いた {...} がそのまま変数になる作りなので、
+        # «今どれが使えるのか» は対象階層を読まないと分からなかった。
+        # 使えるものを並べて、押すだけでファイル名欄へ入るようにする。
+        # 入る場所は **カーソルのある位置**（末尾に足すだけだと使えない）。
+        layout.addWidget(QLabel(tr("変数:", "Variables:")), 3, 0)
+        self._var_combo = QComboBox()
+        self._var_combo.setToolTip(tr(
+            "対象階層に書いた {名前} と {ver} が使えます。\n"
+            "選んで «挿入» を押すと、ファイル名欄のカーソル位置に入ります。",
+            "The {Name} items from the levels above, plus {ver}.\n"
+            "Pick one and press Insert to place it at the cursor."))
+        layout.addWidget(self._var_combo, 3, 1, 1, 3)
+        self._var_btn = QPushButton(tr("挿入", "Insert"))
+        self._var_btn.setAutoDefault(False)
+        self._var_btn.clicked.connect(lambda _c=False: self._insert_var())
+        layout.addWidget(self._var_btn, 3, 4, 1, 2)
+
         v = self._rule["ver"]
-        layout.addWidget(QLabel(tr("最新表記:", "Latest label:")), 3, 0)
+
+        layout.addWidget(QLabel(tr("最新表記:", "Latest label:")), 4, 0)
         self._latest_edit = QLineEdit(str(v.get("latest_label", "cur")))
         self._latest_edit.setFixedWidth(70)
-        layout.addWidget(self._latest_edit, 3, 1)
-        layout.addWidget(QLabel(tr("接頭辞:", "Prefix:")), 3, 2)
+        layout.addWidget(self._latest_edit, 4, 1)
+        layout.addWidget(QLabel(tr("接頭辞:", "Prefix:")), 4, 2)
         self._prefix_edit = QLineEdit(str(v.get("prefix", "v")))
         self._prefix_edit.setFixedWidth(50)
-        layout.addWidget(self._prefix_edit, 3, 3)
-        layout.addWidget(QLabel(tr("桁数:", "Digits:")), 3, 4)
+        layout.addWidget(self._prefix_edit, 4, 3)
+        layout.addWidget(QLabel(tr("桁数:", "Digits:")), 4, 4)
         self._digits_spin = QSpinBox()
         self._digits_spin.setRange(1, 12)
         self._digits_spin.setValue(int(v.get("digits", 3)))
-        layout.addWidget(self._digits_spin, 3, 5)
+        layout.addWidget(self._digits_spin, 4, 5)
 
         self._incr_cb = QCheckBox(
             tr("インクリメンタルセーブ",
@@ -231,14 +287,81 @@ class AutoNamingRuleRow(QFrame):
             "When on, the save dialog shows an incremental-save switch. "
             "Saving with it on copies the existing latest file to the next "
             "number, then saves under the latest label."))
-        layout.addWidget(self._incr_cb, 4, 0, 1, 6)
+        layout.addWidget(self._incr_cb, 5, 0, 1, 6)
 
         self._hint = QLabel("")
         self._hint.setWordWrap(True)
         self._hint.setStyleSheet(
             "color:%(on_surface_dim)s;font-size:%(label_px)spx;" % _tv())
-        layout.addWidget(self._hint, 5, 0, 1, 6)
+        layout.addWidget(self._hint, 6, 0, 1, 6)
+        self._dir_edit.textChanged.connect(self._refresh_title)
         self._refresh_hint()
+        self._refresh_title()
+
+    # ── 折りたたみ ──────────────────────────────────────────────
+    def _on_fold_toggled(self, on: bool):
+        self._body.setVisible(bool(on))
+        self._fold_btn.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
+
+    def set_collapsed(self, on: bool):
+        """畳む／開く（畳んだ時は見出しだけ残る）。"""
+        self._fold_btn.setChecked(not bool(on))
+
+    def is_collapsed(self) -> bool:
+        return not self._fold_btn.isChecked()
+
+    def _refresh_title(self, *_a):
+        """見出しに «どこの規則か» を出す（畳んでいても分かるように）。"""
+        root = (self._dir_edit.text() or "").strip()
+        levels = (self._levels_edit.text() or "").strip()
+        if root and levels:
+            txt = "%s  /  %s" % (root.rstrip("/\\"), levels)
+        else:
+            txt = root or levels or tr("（未設定の規則）", "(empty rule)")
+        self._title.setText(txt)
+        self._title.setToolTip(txt)
+
+    # ── 変数の挿入 ──────────────────────────────────────────────
+    def available_vars(self):
+        """今このルールで使える変数（対象階層の {...} ＋ ver）。"""
+        from core import auto_name as _an
+        out, seen = [], set()
+        for n in _an.level_vars(self._levels_edit.text() or ""):
+            if n and n not in seen:
+                seen.add(n)
+                out.append(n)
+        if "ver" not in seen:
+            out.append("ver")
+        return out
+
+    def _refresh_vars(self):
+        cur = self._var_combo.currentText()
+        names = self.available_vars()
+        self._var_combo.blockSignals(True)
+        self._var_combo.clear()
+        self._var_combo.addItems(["{%s}" % n for n in names])
+        i = self._var_combo.findText(cur)
+        if i >= 0:
+            self._var_combo.setCurrentIndex(i)
+        self._var_combo.blockSignals(False)
+        self._var_btn.setEnabled(self._var_combo.count() > 0)
+
+    def _insert_var(self):
+        """選んだ変数を **カーソルのある位置** へ入れる。"""
+        text = self._var_combo.currentText()
+        if not text:
+            return ""
+        e = self._file_edit
+        cur = e.text()
+        pos = e.cursorPosition()
+        if e.hasSelectedText():
+            a = e.selectionStart()
+            b = a + len(e.selectedText())
+            cur, pos = cur[:a] + cur[b:], a
+        e.setText(cur[:pos] + text + cur[pos:])
+        e.setCursorPosition(pos + len(text))
+        e.setFocus()
+        return text
 
     def _refresh_hint(self, *_a):
         """書いた内容から «こうなります» をその場に出す。"""
@@ -269,6 +392,8 @@ class AutoNamingRuleRow(QFrame):
         self._hint.setText("\u3000/\u3000".join(parts) if parts else tr(
             "例: 対象階層 {Group}/n{Item} → ファイル名 {Group}_{Item}_{ver}（拡張子は保存時）",
             "e.g. levels {Group}/n{Item} \u2192 file name {Group}_{Item}_{ver} (extension comes from the save dialog)"))
+        self._refresh_vars()
+        self._refresh_title()
 
     def _browse_dir(self):
         from core.compat import QFileDialog

@@ -251,6 +251,15 @@ def run_standalone(skip_launcher: bool = True):
         def _raise_existing(_w=None):
             w = active_main_window() or _win
             try:
+                # r146 後半: コンパクト中なら «コンパクトの開き方» で開く。
+                # ここで素の show() を呼ぶと、コンパクト側は «まだ畳んで
+                # いるつもり» のままなので、本体とパックが両方出たまま
+                # 止まる（ユーザー報告 2026-10-14）。状態の持ち主は
+                # CompactController 1 つに保つ。
+                c = getattr(w, "_compact_ctl", None)
+                if c is not None and c.is_active():
+                    c.expand()
+                    return
                 from core.compat import Qt as _Qt
                 w.setWindowState((w.windowState() & ~_Qt.WindowMinimized)
                                  | _Qt.WindowActive)

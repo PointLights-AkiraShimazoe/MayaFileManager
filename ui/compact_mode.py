@@ -186,11 +186,17 @@ class _Puck(QWidget):
         self._lay = lay
         self._mirrored = False
         self.setFixedSize(_Grip.WIDTH + 26 + 6, self.HEIGHT)
-        # r146: Qt.Window にしただけではタスクバーに出ない。Windows は枠無しの窓を
-        # WS_POPUP として作るのでボタンが付かない。拡張スタイルを直接立てる。
+        # r146 後半（ユーザー報告 2026-10-14）:
+        #   「タスクバーも、コンパクトと通常が切り替わる度に消えて出てを
+        #     繰り返していてみっともないです。」
+        # タスクバーのボタンは «ウィンドウ 1 つにつき 1 個» なので、本体と
+        # パックが交互に姿を見せると、ボタンも交互に消えて出る。
+        # **ボタンは本体のものだけにする。** パックには出さない
+        # （WS_EX_TOOLWINDOW）。畳んでもボタンが消えないのは、本体を
+        # 隠すのではなく «最小化» するようにしたから（CompactController.collapse）。
         try:
             from core.win_topmost import set_taskbar_button
-            set_taskbar_button(self, True)
+            set_taskbar_button(self, False)
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py _Puck(taskbar)")
         self.setStyleSheet(
@@ -379,6 +385,23 @@ class CompactController(QObject):
 
     def toggle(self):
         self.set_active(not self._active)
+
+    def close_puck(self):
+        """パックを閉じて手放す（r146 後半）。
+
+        パックは本体とは別の最上位ウィンドウなので、本体を閉じても
+        残っていると «プロセスが終わらない» ことになる。終了時に本体から
+        呼ぶ。"""
+        self._timer.stop()
+        puck = self._puck
+        self._puck = None
+        if puck is None:
+            return
+        try:
+            puck.close()
+            puck.deleteLater()
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py close_puck")
 
     def drop_on_puck(self, mime):
         """パックに直接落とされたファイルを «今いるフォルダ» へ渡す（r146）。"""
@@ -573,17 +596,26 @@ class CompactController(QObject):
             puck.move(self._clamp(self._puck_pos_for_window(), puck.size()))
         self._expanded = False
         self._hide_tool_windows()
-        self._win.hide()
+        # r146 後半: **隠さずに最小化する。**
+        #   hide() だと本体のタスクバーのボタンごと消える。代わりにパックの
+        #   ボタンが出るので «消えて出て» の点滅になり、しかも «コンパクトの
+        #   まま終了» すると «閉じる口» がパックしか無くなる。パックを閉じても
+        #   本体は隠れたまま生き残るので、次に起動した時に単一起動ガードが
+        #   «既にいる方を前に出す» 経路に入り、**本体とパックが両方出た**
+        #   （ユーザー報告 2026-10-14、スクリーンショット）。
+        #   最小化なら、ボタンは常に本体のものが 1 つだけ居座り、
+        #   右クリック → 閉じる も普通に効く。
+        self._win.showMinimized()
         self._return_foreground()
         import time
         self._collapsed_at = time.time()
         puck.show()
         puck.raise_()
         # 出すたびに掛け直す。Qt がネイティブ窓を作り直すと拡張スタイルが
-        # 戻ってしまい、またタスクバーから消える（冪等なので安い）。
+        # 戻ってしまい、またタスクバーに出てしまう（冪等なので安い）。
         try:
             from core.win_topmost import set_taskbar_button
-            set_taskbar_button(puck, True)
+            set_taskbar_button(puck, False)
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py collapse(taskbar)")
         self.remember_puck_pos()
@@ -684,10 +716,18 @@ class CompactController(QObject):
         target = self._clamp(self._window_pos_for_puck(),
                              w.frameGeometry().size())
         # 1) 隠れているうちに置き場所を決める（出してから動かさない）
+        #    r146 後半: 畳んでいる間は «最小化» なので、move() だけでは
+        #    効かないことがある（Windows は «戻した時の位置» を別に持つ）。
+        #    WINDOWPLACEMENT の rcNormalPosition を書き替える。
         try:
             w.move(target)
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py expand(move)")
+        try:
+            from core.win_topmost import set_restore_pos
+            set_restore_pos(w, target.x(), target.y())
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py expand(restore pos)")
         # r146（ユーザー報告 2026-10-13）:
         #   「Premiere でスペースを押しても効かず、Manager を閉じたら
         #     反応するようになりました。アクティブではないとユーザーが

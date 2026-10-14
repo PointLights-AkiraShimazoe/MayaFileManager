@@ -53,26 +53,63 @@ def setproject_code(path: str, indent: str = "") -> str:
     if not root:
         return ""
     pj = root.replace("\\", "/")
-    msg = tr("このファイルは次のプロジェクトの中にあります:\n%s\n\n"
-             "現在のプロジェクト:\n%s\n\nこのプロジェクトをセットしますか？",
-             "This file is inside the project:\n%s\n\n"
-             "Current project:\n%s\n\nSet this project?")
+    # r146（ユーザー指示 2026-10-14）:
+    #   「『プロジェクトをセットしなおしますか？』／現在：…／セット：… と
+    #     してください。パスはわかりやすく表示出来るとありがたいです。」
+    #
+    # r145 までは «ファイルの場所» と «現在» を別々の段落で長々と出していて、
+    # どこが違うのかを目で追う必要があった。実際のパスは
+    # D:/users/OneDrive - PointLights/Projects/… のように頭が長く同じなので、
+    # **共通の親をいったん括り出し、違うところだけを並べる**。
+    # confirmDialog は飾りの付かない素のテキストなので、できるのは
+    #   * 区切りを Windows の \\ に揃える
+    #   * 共通の頭を 1 行にまとめる
+    #   * 見出しの幅を揃えて «現在 / セット» を縦に並べる
+    # の 3 つ。これだけで «どこが違うのか» が一目で分かる。
+    q = tr("プロジェクトをセットしなおしますか？", "Set this project?")
+    l_common = tr("共通　：%s", "Common：%s")
+    l_cur = tr("現在　：%s", "Current：%s")
+    l_new = tr("セット：%s", "Set　　：%s")
+    none_txt = tr("（未設定）", "(none)")
     yes = tr("セットする", "Set Project")
     no = tr("セットしない", "Don't Set")
     log_set = tr("[MayaFileManager] プロジェクトをセット: ",
                  "[MayaFileManager] Set project: ")
     lines = [
         "import os as _mfm_os, __main__ as _mfm_main",
+        # パスを «読める形» に整える（共通の頭を括り出す）。Maya 側で
+        # 現在のプロジェクトが分かってから組み立てるので、ここに置く。
+        "def _mfm_split_common(cur, new):",
+        "    sep = '\\\\'",
+        "    a = (cur or '').replace('/', sep).rstrip(sep)",
+        "    b = (new or '').replace('/', sep).rstrip(sep)",
+        "    if not a or not b:",
+        "        return ('', a, b)",
+        "    pa, pb = a.split(sep), b.split(sep)",
+        "    i = 0",
+        "    while (i < len(pa) - 1 and i < len(pb) - 1",
+        "           and pa[i].lower() == pb[i].lower()):",
+        "        i += 1",
+        "    if i >= 2:",
+        "        return (sep.join(pa[:i]), sep.join(pa[i:]), sep.join(pb[i:]))",
+        "    return ('', a, b)",
         "import maya.cmds as _mfm_cmds, maya.mel as _mfm_mel",
         "_mfm_pj = %r" % pj,
         "_mfm_n = lambda p: _mfm_os.path.normcase(_mfm_os.path.normpath(p or '')).rstrip('\\\\/')",
         "_mfm_cur = _mfm_cmds.workspace(q=True, rootDirectory=True) or ''",
         "_mfm_decl = _mfm_main.__dict__.setdefault('_mfm_setproj_declined', set())",
         "if _mfm_n(_mfm_pj) != _mfm_n(_mfm_cur) and _mfm_n(_mfm_pj) not in _mfm_decl:",
+        "    _mfm_head, _mfm_a, _mfm_b = _mfm_split_common(_mfm_cur, _mfm_pj)",
+        "    _mfm_rows = []",
+        "    if _mfm_head:",
+        "        _mfm_rows.append(%r %% _mfm_head)" % l_common,
+        "    _mfm_rows.append(%r %% (_mfm_a or %r))" % (l_cur, none_txt),
+        "    _mfm_rows.append(%r %% _mfm_b)" % l_new,
+        "    _mfm_msg = %r + '\\n\\n' + '\\n'.join(_mfm_rows)" % q,
         "    _mfm_ans = _mfm_cmds.confirmDialog(title='Maya File Manager',"
-        " message=%r %% (_mfm_pj, _mfm_cur or '-'),"
+        " message=_mfm_msg,"
         " button=[%r, %r], defaultButton=%r, cancelButton=%r, dismissString=%r)"
-        % (msg, yes, no, yes, no, no),
+        % (yes, no, yes, no, no),
         "    if _mfm_ans == %r:" % yes,
         "        try:",
         "            _mfm_mel.eval('setProject \"%s\"' % _mfm_pj)",

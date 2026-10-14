@@ -1126,9 +1126,37 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             if (event is not None
                     and event.type() == _QtCore.QEvent.ActivationChange):
                 QTimer.singleShot(0, self._refresh_integrations_if_active)
+            if (event is not None
+                    and event.type() == _QtCore.QEvent.WindowStateChange):
+                QTimer.singleShot(0, self._compact_follow_window_state)
         except Exception as _e:
             _swallow(_e, "ui/main_window.py changeEvent")
         super().changeEvent(event)
+
+    def _compact_follow_window_state(self):
+        """最小化から戻されたら «開いた» ことにする（r146 後半）。
+
+        コンパクト中、本体は «隠す» のではなく «最小化» している
+        （タスクバーのボタンを消さないため）。すると **タスクバーの
+        ボタンを押すだけで本体が戻ってくる** 道ができる。その時に
+        コンパクト側が «まだ畳んでいるつもり» のままだと、
+
+          本体も出ている ＆ パックも出ている
+
+        という、ユーザーから見て «2 つある» 状態になる（2026-10-14 の報告が
+        まさにこれ）。状態の持ち主を 1 つにするため、«最小化されていない＝
+        開いている» を不変条件にしてここで揃える。"""
+        try:
+            if not self.isVisible() or self.isMinimized():
+                return
+            c = getattr(self, "_compact_ctl", None)
+            if c is None or not c.is_active() or c.is_expanded():
+                return
+            c.expand()
+        except RuntimeError:
+            return                      # 窓がもう無い
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _compact_follow_window_state")
 
     def _refresh_integrations_if_active(self):
         try:
@@ -1409,6 +1437,15 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             _swallow(_e, "ui/main_window.py:2017 closeEvent")
         self._save_areas_state()
         self._sm.save()
+        # r146 後半: パックは «本体とは別の最上位ウィンドウ» なので、
+        # 置き去りにするとアプリが終わらない（本体は閉じたのにプロセスが
+        # 残り、次の起動が «既にいる方を前に出す» に化ける）。一緒に閉じる。
+        try:
+            c = getattr(self, "_compact_ctl", None)
+            if c is not None:
+                c.close_puck()
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py closeEvent(puck)")
         # Undo 用の作業ごみ箱（削除の取り消し先）を OS のごみ箱へ送る（r62）。
         # r135: ただしテーマ/言語の作り直しは «終了» ではないので捨てない。
         # ここで捨てると、テーマを変えただけで Undo が全部吸われる。

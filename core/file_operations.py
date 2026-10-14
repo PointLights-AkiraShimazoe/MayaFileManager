@@ -26,6 +26,78 @@ class FileOperationError(Exception):
     pass
 
 
+class OperationCancelled(Exception):
+    """進捗コールバックが «もう止めて» と言う時に投げる印（r146）。
+
+    これを FileOperationError に包んではいけない。包むと «キャンセル» が
+    «失敗» として扱われ、エラーダイアログが出てしまう。UI 側の
+    BrowserPanel._OpCancelled はこれを継承している。"""
+
+
+# ── 進捗を «中身の数» で刻む（r146、ユーザー報告 2026-10-14）────────────
+#
+#   「複製や移動時に、フォルダ移動の場合でも、中身の数で進捗を出さないと、
+#     0%が急に100%になって終わるだけで、進捗バーの意味をなしていません。」
+#
+# r145 までは «選んだ項目の数» を分母にしていた。フォルダを 1 つ選べば
+# 分母は 1 なので、中に 3,000 ファイルあっても «0% → 100%» の 2 コマしか
+# 出ない。数えてから刻む。
+def count_entries(paths) -> int:
+    """paths の «中身も含めた» 件数（フォルダ自身も 1 件として数える）。"""
+    n = 0
+    for p in paths or []:
+        try:
+            pp = Path(p)
+            if pp.is_dir() and not pp.is_symlink():
+                n += 1                                  # フォルダ自身
+                for _root, dirs, files in os.walk(str(pp)):
+                    n += len(dirs) + len(files)
+            else:
+                n += 1
+        except OSError:
+            n += 1          # 数えられないものは 1 件として扱う（止めない）
+    return max(1, n)
+
+
+class _Progress:
+    """進捗の «今どこまで» を持つ。cb(i, total) を呼ぶだけの薄い入れ物。"""
+
+    def __init__(self, cb, total):
+        self.cb = cb
+        self.total = max(1, int(total))
+        self.i = 0
+
+    def tick(self, step: int = 1):
+        self.i += int(step)
+        if self.cb:
+            self.cb(min(self.i, self.total), self.total)
+
+
+def _copy_tree_progress(src: str, dest: str, tick):
+    """shutil.copytree 相当。**1 件ごとに tick() を呼ぶ**（r146）。
+
+    copytree をそのまま使うと、中で何千ファイル写していても進捗が出ず、
+    キャンセルも «フォルダ 1 つ終わるまで» 効かない。自前で歩く。"""
+    os.makedirs(dest, exist_ok=True)
+    tick()
+    try:
+        names = sorted(os.listdir(src))
+    except OSError:
+        names = []
+    for name in names:
+        s = os.path.join(src, name)
+        d = os.path.join(dest, name)
+        if os.path.isdir(s) and not os.path.islink(s):
+            _copy_tree_progress(s, d, tick)
+        else:
+            shutil.copy2(s, d)
+            tick()
+    try:
+        shutil.copystat(src, dest)
+    except OSError:
+        pass
+
+
 def copy_items(src_paths: List[str], dst_dir: str,
                progress_cb: Optional[Callable[[int, int], None]] = None,
                results: Optional[List[str]] = None) -> List[str]:
@@ -41,22 +113,24 @@ def copy_items(src_paths: List[str], dst_dir: str,
         raise FileOperationError(f"Destination does not exist: {dst_dir}")
 
     results = results if results is not None else []
-    total = len(src_paths)
+    # r146: 分母は «中身も含めた件数»（フォルダ 1 つでも中身の数だけ刻む）
+    prog = _Progress(progress_cb, count_entries(src_paths))
     if progress_cb:
-        progress_cb(0, total)
-    for i, src_str in enumerate(src_paths, 1):
+        progress_cb(0, prog.total)
+    for src_str in src_paths:
         src = Path(src_str)
         dest = _unique_dest(dst / src.name)
         try:
-            if src.is_dir():
-                shutil.copytree(str(src), str(dest))
+            if src.is_dir() and not src.is_symlink():
+                _copy_tree_progress(str(src), str(dest), prog.tick)
             else:
                 shutil.copy2(str(src), str(dest))
+                prog.tick()
             results.append(str(dest))
+        except OperationCancelled:
+            raise                      # キャンセルは «失敗» ではない
         except Exception as e:
             raise FileOperationError(f"Cannot copy {src}: {e}") from e
-        if progress_cb:
-            progress_cb(i, total)
 
     return results
 
@@ -67,15 +141,17 @@ CONFLICT_OVERWRITE = "overwrite"  # 既存を置き換える（フォルダ同�
 CONFLICT_SKIP = "skip"            # その項目は何もしない
 
 
-def _merge_move(src: Path, dst: Path, pairs: list):
+def _merge_move(src: Path, dst: Path, pairs: list, tick=None):
     """フォルダ同士の «上書き» ＝ Explorer と同じ «統合»（r87）。
     src の中身を dst へ移し、ファイル名が衝突したら置き換える。
     移動できたものは pairs に (元, 先) で積む（Undo 用）。"""
     dst.mkdir(parents=True, exist_ok=True)
+    if tick:
+        tick()
     for entry in list(src.iterdir()):
         target = dst / entry.name
         if entry.is_dir() and not entry.is_symlink():
-            _merge_move(entry, target, pairs)
+            _merge_move(entry, target, pairs, tick)
         else:
             if target.exists() or target.is_symlink():
                 _clear_readonly(str(target))
@@ -85,6 +161,8 @@ def _merge_move(src: Path, dst: Path, pairs: list):
                     _rmtree_force(str(target))
             shutil.move(str(entry), str(target))
             pairs.append((str(entry), str(target)))
+            if tick:
+                tick()
     try:
         src.rmdir()          # 中身を出し切っていれば消える
     except OSError:
@@ -109,25 +187,31 @@ def move_items(src_paths: List[str], dst_dir: str,
 
     results = results if results is not None else []
     pairs = pairs if pairs is not None else []
-    total = len(src_paths)
+    # r146: 分母は «中身も含めた件数»。同じドライブの中の移動は一瞬で
+    # 終わる（名前の付け替えなので中身は動かない）ので、その項目の分を
+    # まとめて進める。別ドライブへの移動や «統合» は 1 件ずつ刻む。
+    counts = [count_entries([p]) for p in src_paths]
+    prog = _Progress(progress_cb, sum(counts) or 1)
     if progress_cb:
-        progress_cb(0, total)
-    for i, src_str in enumerate(src_paths, 1):
+        progress_cb(0, prog.total)
+    for i, src_str in enumerate(src_paths):
         src = Path(src_str)
         naive = dst / src.name
+        mine = counts[i] if i < len(counts) else 1
         try:
             if naive.exists() or naive.is_symlink():
                 how = conflict_cb(str(src), str(naive)) if conflict_cb else CONFLICT_RENAME
                 if how == CONFLICT_SKIP:
-                    if progress_cb:
-                        progress_cb(i, total)
+                    prog.tick(mine)
                     continue
                 if how == CONFLICT_OVERWRITE:
                     if src.is_dir() and naive.is_dir():
-                        _merge_move(src, naive, pairs)   # フォルダ同士は統合
+                        # フォルダ同士は統合（1 件ずつ刻める）
+                        before = prog.i
+                        _merge_move(src, naive, pairs, prog.tick)
                         results.append(str(naive))
-                        if progress_cb:
-                            progress_cb(i, total)
+                        if prog.i - before < mine:
+                            prog.tick(mine - (prog.i - before))
                         continue
                     _clear_readonly(str(naive))
                     if naive.is_dir() and not naive.is_symlink():
@@ -142,10 +226,11 @@ def move_items(src_paths: List[str], dst_dir: str,
             shutil.move(str(src), str(dest))
             results.append(str(dest))
             pairs.append((str(src), str(dest)))
+            prog.tick(mine)
+        except OperationCancelled:
+            raise                      # キャンセルは «失敗» ではない
         except Exception as e:
             raise FileOperationError(f"Cannot move {src}: {e}") from e
-        if progress_cb:
-            progress_cb(i, total)
 
     return results
 
@@ -177,27 +262,27 @@ def duplicate_items(specs, progress_cb=None, results=None,
     再帰的に同じ置換を適用して改名する。results に完了分を積む（キャンセル時の
     Undo 用）。戻り値は複製先パスのリスト。"""
     results = results if results is not None else []
-    total = len(specs)
+    # r146: 複製もフォルダの中身の数で刻む（0% → 100% にしない）
+    prog = _Progress(progress_cb, count_entries([a for a, _b in specs]))
     if progress_cb:
-        progress_cb(0, total)
-    for i, (src, dst) in enumerate(specs, 1):
+        progress_cb(0, prog.total)
+    for src, dst in specs:
         s, d = Path(src), Path(dst)
         if d.exists():
             raise FileOperationError(f"既に存在します: {d}")
         try:
-            if s.is_dir():
-                shutil.copytree(str(s), str(d))
+            if s.is_dir() and not s.is_symlink():
+                _copy_tree_progress(str(s), str(d), prog.tick)
                 if rename_inside and rename_inside[0]:
                     _rename_tree(str(d), rename_inside[0], rename_inside[1])
             else:
                 shutil.copy2(str(s), str(d))
+                prog.tick()
             results.append(str(d))
-        except FileOperationError:
+        except (FileOperationError, OperationCancelled):
             raise
         except Exception as e:
             raise FileOperationError(f"複製に失敗: {s} → {e}") from e
-        if progress_cb:
-            progress_cb(i, total)
     return results
 
 

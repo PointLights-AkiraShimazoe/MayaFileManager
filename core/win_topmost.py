@@ -138,6 +138,58 @@ def set_taskbar_button(widget, on: bool = True) -> bool:
         return False
 
 
+def set_restore_pos(widget, x: int, y: int) -> bool:
+    """**最小化されたウィンドウの «戻る場所»** を決める（r146）。
+
+    コンパクトモードは «畳む＝最小化» にした（タスクバーのボタンを
+    消さないため）。開く時は «パックのいた場所» に出したいが、最小化
+    されている窓に ``move()`` しても効かないことがある。Windows が
+    «戻した時の位置» を別に持っている（WINDOWPLACEMENT.rcNormalPosition）
+    ためで、そこを書き替えるのが正しい。
+
+    こうしておくと «出してから動かす» をしないで済むので、白い枠が
+    一瞬見える問題も起きない。
+    """
+    if widget is None or not is_windows():
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        class WINDOWPLACEMENT(ctypes.Structure):
+            _fields_ = [("length", ctypes.c_uint), ("flags", ctypes.c_uint),
+                        ("showCmd", ctypes.c_uint),
+                        ("ptMinPosition", POINT), ("ptMaxPosition", POINT),
+                        ("rcNormalPosition", RECT)]
+
+        u = ctypes.windll.user32
+        hwnd = int(widget.winId())
+        if not hwnd:
+            return False
+        h = ctypes.c_void_p(hwnd)
+        wp = WINDOWPLACEMENT()
+        wp.length = ctypes.sizeof(WINDOWPLACEMENT)
+        if not u.GetWindowPlacement(h, ctypes.byref(wp)):
+            return False
+        w = wp.rcNormalPosition.right - wp.rcNormalPosition.left
+        ht = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top
+        wp.rcNormalPosition.left = int(x)
+        wp.rcNormalPosition.top = int(y)
+        wp.rcNormalPosition.right = int(x) + w
+        wp.rcNormalPosition.bottom = int(y) + ht
+        return bool(u.SetWindowPlacement(h, ctypes.byref(wp)))
+    except Exception as _e:
+        _swallow(_e, "core/win_topmost.py set_restore_pos")
+        return False
+
+
 def foreground_hwnd():
     """今フォアグラウンドにあるウィンドウのハンドル（Windows 以外は 0）。"""
     if not is_windows():

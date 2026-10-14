@@ -45,6 +45,7 @@ from core.file_operations import (
     copy_items, move_items, get_file_type_category, format_size,
     resolve_windows_shortcut,
     is_read_only, set_read_only,
+    OperationCancelled as _OperationCancelled,
     MAYA_EXTENSIONS
 )
 from core.thumbnail_generator import ThumbnailManager
@@ -3575,8 +3576,14 @@ class BrowserPanel(QWidget):
     # 0.4 秒を超えたら進捗ダイアログ（キャンセル付き）を出す。UI スレッドで
     # shutil を回してフリーズさせない。キャンセル時も «完了した分» は
     # Undo 記録に残す（部分完了を黙って捨てない）。
-    class _OpCancelled(Exception):
-        pass
+    class _OpCancelled(_OperationCancelled):
+        """キャンセルの印（r146 で core 側の印を継承）。
+
+        core/file_operations.py はフォルダの中を 1 件ずつ写すようになった。
+        その途中で進捗コールバックが投げるこの例外を «失敗» と取り違えて
+        FileOperationError に包むと、キャンセルしたのにエラーダイアログが
+        出る。core 側が «これだけは包まない» と分かるように、共通の親を持つ。
+        """
 
     def _busy_guard(self, paths, verb: str) -> bool:
         """その場所が «走っている操作» と重なっていないか（r146）。
@@ -3658,10 +3665,21 @@ class BrowserPanel(QWidget):
         tick.setInterval(200)
 
         def on_tick():
-            if state["done"]:
+            """0.4 秒を越えたら進捗ダイアログを «1 回だけ» 出す。
+
+            r146（ユーザー報告 2026-10-14）:
+              「複製している時に進捗バーのキャンセルを押しても何度も
+                ウィンドウが出てきてキャンセル出来ません」
+            原因はここ。200ms ごとに «見えていなければ出す» をしていたので、
+            キャンセル（QProgressDialog は押された時点で自分を隠す）や ✕ で
+            閉じた直後に、この見張りがまた出していた。出すのは一度きりで
+            足りるし、ユーザーが閉じたものを勝手に出し直してはいけない。"""
+            if state["done"] or state["cancel"]:
+                tick.stop()
                 return
             if _time_mod.monotonic() - t0 > 0.4 and not dlg.isVisible():
                 dlg.show()
+                tick.stop()
         tick.timeout.connect(on_tick)
         tick.start()
 

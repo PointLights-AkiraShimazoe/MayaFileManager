@@ -10,7 +10,7 @@ from _common import app, tmpdir, finish, run
 from core.maya_project import find_project_root
 
 EV = []          # Maya 側で起きたこと（順番つき）
-STATE = {"cur": "", "answer": None}
+STATE = {"cur": "", "answer": None, "msg": ""}
 
 
 def _install_fake_maya():
@@ -38,6 +38,7 @@ def _install_fake_maya():
 
     def _confirm(**k):
         EV.append(("dialog", k.get("title")))
+        STATE["msg"] = k.get("message") or ""
         b = k.get("button") or []
         if STATE["answer"] == "yes":
             return b[0]
@@ -130,6 +131,33 @@ def step():
     assert "dialog" not in kinds(), ("断ったのにまた聞いた", EV)
     assert ("file", "reference") in EV
     print("declined project is not asked again in the session: OK")
+
+    # 5) 確認の文面（r146、ユーザー指示 2026-10-14）
+    #    「プロジェクトをセットしなおしますか？／現在：…／セット：…」
+    #    長い共通の頭は 1 行に括り出して «どこが違うか» を見せる。
+    EV.clear()
+    STATE.update(cur="D:/users/OneDrive - PL/Projects/MoonLights/Dollar/SA",
+                 answer="no", msg="")
+    import __main__ as _m
+    _m.__dict__.pop("_mfm_setproj_declined", None)
+    w._maya_open(scene); _run_last(w)
+    msg = STATE["msg"]
+    assert msg.startswith("プロジェクトをセットしなおしますか？"), msg
+    assert "現在　：" in msg and "セット：" in msg, msg
+    assert "/" not in msg.split("：", 1)[-1] or "\\" in msg, \
+        ("区切りが Windows の形になっていない", msg)
+    print("confirm message: %s" % msg.replace("\n", " | "))
+
+    # 共通の頭が括り出される（同じ親の下で枝だけ違う時）
+    EV.clear()
+    STATE.update(cur=os.path.join(root, "projB", "x"), answer="no", msg="")
+    _m.__dict__.pop("_mfm_setproj_declined", None)
+    w._maya_open(scene); _run_last(w)
+    msg2 = STATE["msg"]
+    assert "共通　：" in msg2, ("共通の頭が括り出されていない", msg2)
+    head = msg2.split("共通　：", 1)[1].split("\n", 1)[0]
+    assert "projA" not in head and "projB" not in head, (head, msg2)
+    print("confirm message folds the shared head: OK")
 
     for m in ("maya", "maya.api", "maya.api.OpenMaya", "maya.cmds", "maya.mel"):
         sys.modules.pop(m, None)

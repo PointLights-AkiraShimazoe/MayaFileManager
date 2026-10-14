@@ -384,6 +384,12 @@ class QuickNavPresetEditor(QDialog):
     def _add_naming_rule(self, directory="", rule=None):
         from ui.settings_dialog import AutoNamingRuleRow
         row = AutoNamingRuleRow(directory=directory, rule=rule)
+        # r146（ユーザー指示）: 既にある規則は **畳んだ状態で並べる**。
+        # 1 件が 6 行あるので、数が増えると目的の規則を探せない。見出しに
+        # «ルート / 対象階層» を出しているので、畳んでいても見分けられる。
+        # «＋ ルールを追加» で作った新しい規則は、すぐ書けるよう開いておく。
+        if rule is not None:
+            row.set_collapsed(True)
         row.remove_requested.connect(self._remove_naming_rule)
         self._naming_rows.append(row)
         self._naming_layout.insertWidget(self._naming_layout.count() - 1, row)
