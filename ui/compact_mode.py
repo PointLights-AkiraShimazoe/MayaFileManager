@@ -596,16 +596,7 @@ class CompactController(QObject):
             puck.move(self._clamp(self._puck_pos_for_window(), puck.size()))
         self._expanded = False
         self._hide_tool_windows()
-        # r146 後半: **隠さずに最小化する。**
-        #   hide() だと本体のタスクバーのボタンごと消える。代わりにパックの
-        #   ボタンが出るので «消えて出て» の点滅になり、しかも «コンパクトの
-        #   まま終了» すると «閉じる口» がパックしか無くなる。パックを閉じても
-        #   本体は隠れたまま生き残るので、次に起動した時に単一起動ガードが
-        #   «既にいる方を前に出す» 経路に入り、**本体とパックが両方出た**
-        #   （ユーザー報告 2026-10-14、スクリーンショット）。
-        #   最小化なら、ボタンは常に本体のものが 1 つだけ居座り、
-        #   右クリック → 閉じる も普通に効く。
-        self._win.showMinimized()
+        self._park_window()
         self._return_foreground()
         import time
         self._collapsed_at = time.time()
@@ -624,6 +615,82 @@ class CompactController(QObject):
         if not puck.isVisible():
             self._win._log_quiet("compact: パックを出せなかったので通常表示へ戻す")
             self.set_active(False)
+
+    # ── 畳んでいる間の本体の置き場所（r146 後半）────────────────────
+    #
+    # 「畳む」をどう実装するかで 3 回つまずいたので、理由を全部残す。
+    #
+    #   hide()           … タスクバーのボタンごと消える。代わりにパックの
+    #                      ボタンが出るので «消えて出て» の点滅になる。
+    #                      さらに «コンパクトのまま終了» すると閉じる口が
+    #                      パックしか無く、閉じても本体が隠れたまま残って
+    #                      プロセスが生き延びる → 次の起動が «既にいる方を
+    #                      前に出す» 経路に入り、本体とパックが両方出た。
+    #   showMinimized()  … ボタンは残るが、**開く時が最悪**。Windows の
+    #                      復帰アニメーションが走り、しかも最小化から戻す
+    #                      操作は必ずフォアグラウンドを奪う。
+    #                      «パックのいた場所にすっと開く / フォーカスを
+    #                      奪わない» という指示を両方壊す。
+    #   画面の外へ置く    … ボタンは «見えているウィンドウ» のものとして
+    #                      居座り続け、開くのは move() 1 回で済む。
+    #                      アニメーションもフォーカスの奪い合いも無い。
+    #
+    # 3 つ目を採る。
+    PARK_MARGIN = 400          # 仮想画面の左端からこれだけ外へ置く
+
+    def _virtual_rect(self):
+        try:
+            scr = QApplication.primaryScreen()
+            if scr is not None:
+                return scr.virtualGeometry()
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _virtual_rect")
+        return QRect(0, 0, 1920, 1080)
+
+    def _park_pos(self):
+        """画面の «外» の置き場所（どのモニタにも載らない座標）。"""
+        vr = self._virtual_rect()
+        try:
+            w = max(1, self._win.frameGeometry().width())
+        except Exception:
+            w = 800
+        return QPoint(vr.left() - w - self.PARK_MARGIN, vr.top() + 80)
+
+    def pre_park(self):
+        """起動時、本体を **出す前に** 画面の外へ置く（r146 後半）。
+
+        出してから退けると、起動のたびに本体が一瞬ちらついて消える。
+        前回コンパクトのまま終了していた時だけ通る道。"""
+        try:
+            self._win.setAttribute(Qt.WA_ShowWithoutActivating, True)
+            self._win.move(self._park_pos())
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py pre_park")
+
+    def _park_window(self):
+        """本体を画面の外へ退ける（隠さない・最小化しない）。"""
+        w = self._win
+        try:
+            if w.isMinimized():
+                # 最小化されたまま畳みに来た時だけ、いったん普通に戻す
+                w.setAttribute(Qt.WA_ShowWithoutActivating, True)
+                w.showNormal()
+            if not w.isVisible():
+                w.setAttribute(Qt.WA_ShowWithoutActivating, True)
+                w.show()
+            w.move(self._park_pos())
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _park_window")
+
+    def is_parked(self) -> bool:
+        """本体が画面の外に退けてあるか（＝畳んでいる）。"""
+        try:
+            w = self._win
+            if not w.isVisible() or w.isMinimized():
+                return True
+            return not self._virtual_rect().intersects(w.frameGeometry())
+        except Exception:
+            return False
 
     def _return_foreground(self):
         """畳む時、元いたアプリへフォーカスを返す（r146）。
@@ -748,7 +815,11 @@ class CompactController(QObject):
             w.setAttribute(Qt.WA_ShowWithoutActivating, not take_focus)
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py expand(no-activate)")
-        w.showNormal()
+        # 畳んでいる間も «見えている»（画面の外に置いてあるだけ）ので、
+        # ここでやるのは位置を戻すことだけ。show() をやり直すと、
+        # Windows が «新しく出た窓» として扱って前へ出してしまう。
+        if w.isMinimized() or not w.isVisible():
+            w.showNormal()
         w.raise_()
         if for_drag:
             import time

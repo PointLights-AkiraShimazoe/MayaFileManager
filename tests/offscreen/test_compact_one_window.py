@@ -13,14 +13,21 @@
   * 隠れた本体は «閉じる口» が無い。パックを閉じてもプロセスが残り、
     次の起動が «既にいる方を前に出す» 経路に入って両方出た。
 
-直し方は «畳む＝最小化»。ボタンは常に本体のものが 1 つだけ居座る。
+最小化も駄目だった（ユーザー報告 2026-10-14「マウスオーバー時の通常
+ウィンドウへの展開方法が間違っています」）。Windows の復帰アニメーションが
+走り、しかも最小化から戻す操作は必ずフォアグラウンドを奪うので、
+«パックのいた場所にすっと開く / フォーカスを奪わない» を両方壊す。
+
+直し方は «畳む＝画面の外へ退ける»。見えたままなのでボタンは居座り、
+開くのは move() 1 回で済む。
 
 ここで固定すること:
-  1) 畳んだら本体は «最小化»（隠すのではない）、パックが出る
-  2) パックはタスクバーに出さない（ボタンは本体のものだけ）
-  3) 最小化から戻されたら «開いた» 扱いにする（2 つ出たまま止まらない）
-  4) 本体を閉じたらパックも閉じる（プロセスが残らない）
-  5) 起動時にコンパクトを復元しても «両方出ている» にならない
+  1) 畳んだら本体は «画面の外»（隠さない・最小化しない）、パックが出る
+  2) 開く時は show() をやり直さない（＝アニメーションもフォーカス奪取も無い）
+  3) パックはタスクバーに出さない（ボタンは本体のものだけ）
+  4) タスクバーから起こされたら «開いた» 扱いにする（2 つ出たまま止まらない）
+  5) 本体を閉じたらパックも閉じる（プロセスが残らない）
+  6) 起動時にコンパクトを復元しても «両方出ている» にならない
 """
 import ast
 import os
@@ -43,8 +50,22 @@ def check(cond, msg):
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _src_text(*parts):
+    return open(os.path.join(ROOT, *parts), encoding="utf-8").read()
+
+
 def _src(*parts):
-    return ast.parse(open(os.path.join(ROOT, *parts), encoding="utf-8").read())
+    return ast.parse(_src_text(*parts))
+
+
+def _inside_if(func, call):
+    """その呼び出しが if の中に入っているか（無条件に走らないか）。"""
+    for n in ast.walk(func):
+        if isinstance(n, ast.If):
+            for x in ast.walk(n):
+                if x is call:
+                    return True
+    return False
 
 
 def _func(tree, name):
@@ -67,8 +88,21 @@ c.set_active(True)
 QTest.qWait(200)
 app.processEvents()
 check(c.is_active() and not c.is_expanded(), "畳んだ状態になっている")
-check(w.isMinimized(), "本体は «最小化»（hide ではない）")
+check(c.is_parked(), "本体は画面の外へ退けてある")
+check(not w.isMinimized(), "最小化はしない（戻す時にアニメーションと"
+      "フォーカス奪取が付いてくる）")
+check(w.isVisible(), "隠さない（タスクバーのボタンを消さないため）")
 check(c._puck is not None and c._puck.isVisible(), "パックが出ている")
+
+# 2) 開く時は show() をやり直さない（位置を戻すだけ）
+col_src = _src_text("ui", "compact_mode.py")
+exp = _func(_src("ui", "compact_mode.py"), "expand")
+shows = [x for x in ast.walk(exp)
+         if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)
+         and x.func.attr in ("show", "showNormal")]
+for x in shows:
+    check(_inside_if(exp, x),
+          "開く時の show は «隠れていた時だけ» に限る（%s）" % x.func.attr)
 
 # 2) パックはタスクバーに出さない（呼び方を固定する）
 cm = _src("ui", "compact_mode.py")
@@ -93,14 +127,16 @@ hides = [x for x in ast.walk(col or ast.Module(body=[], type_ignores=[]))
          and x.func.value.attr == "_win"]
 check(not hides, "畳む時に本体を hide() しない（タスクバーから消える）")
 
-# ── 3) 最小化から戻されたら «開いた» 扱い ───────────────────────
-w.showNormal()
+# ── 3) タスクバーから起こされたら «開いた» 扱い ─────────────────
+c._collapsed_at = 0.0           # 畳んだ直後の猶予を明けておく
+w.activateWindow()
 QTest.qWait(150)
 app.processEvents()
 w._compact_follow_window_state()
 app.processEvents()
-check(c.is_expanded(), "最小化から戻したら開いた扱いになる")
+check(c.is_expanded(), "起こされたら開いた扱いになる")
 check(c._puck is None or not c._puck.isVisible(), "その時パックは引っ込む")
+check(not c.is_parked(), "本体が画面の中に戻る")
 
 # ── 4) 閉じたらパックも閉じる ───────────────────────────────────
 # （コンパクトは入ったまま。開いている状態から畳み直す）
@@ -127,13 +163,21 @@ w2.show()
 QTest.qWait(600)
 app.processEvents()
 c2 = w2._compact()
-both = (w2.isVisible() and not w2.isMinimized()
+both = (not c2.is_parked()
         and c2._puck is not None and c2._puck.isVisible())
 check(not both, "本体とパックが «両方出たまま» にならない")
 check(c2.is_active(), "コンパクトは復元されている")
-check(w2.isMinimized() or not w2.isVisible(), "本体は表に出ていない")
+check(c2.is_parked(), "本体は表に出ていない（画面の外）")
 w2.close()
 app.processEvents()
+
+# ── 7) 起動時のちらつき対策: «出す前に» 退ける口がある ─────────
+mwt = _src("ui", "main_window.py")
+init = _func(mwt, "__init__")
+pre = [x for x in ast.walk(init or ast.Module(body=[], type_ignores=[]))
+       if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)
+       and x.func.attr == "pre_park"]
+check(bool(pre), "起動時は show の前に退ける（本体がちらつかない）")
 
 sm.set(CompactController.ACTIVE_KEY, False, save=False)
 finish(not fails)

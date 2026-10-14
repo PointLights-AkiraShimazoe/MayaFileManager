@@ -109,9 +109,9 @@ def s1():
     ctl = w._compact()
     puck = ctl._puck
     check(ctl.is_active(), "コンパクトモードに入る")
-    # r146 後半: 畳む＝«最小化»（hide ではない）。タスクバーのボタンを
-    # 消さないため。表に出ていないことを見る。
-    check(w.isMinimized() or not w.isVisible(), "本体が表から消える")
+    # r146 後半: 畳む＝«画面の外へ退ける»（hide も最小化もしない）。
+    # タスクバーのボタンを消さず、開く時もアニメーションを挟まないため。
+    check(ctl.is_parked(), "本体が表から消える")
     check(puck is not None and puck.isVisible(), "パックが出る")
     check(lead.compact_btn.isChecked(), "ヘッダのボタンが光る（状態が分かる）")
     # r146（ユーザー指示 2026-10-11）: コンパクトモードは最前面表示を
@@ -144,7 +144,7 @@ def s1():
           "つまみに乗せても開かない（enterEvent を自分で持たない）")
     check("enterEvent" in vars(_cm._OpenButton),
           "開くのはアイコン側の仕事")
-    check(not ctl.is_expanded() and (w.isMinimized() or not w.isVisible()),
+    check(not ctl.is_expanded() and ctl.is_parked(),
           "この時点ではまだ畳んだまま")
 
     # つまみのドラッグで動く（位置を直接動かして記憶されるかを見る）
@@ -248,8 +248,7 @@ def s1():
     busy["v"] = False
     ctl._tick()
     _settle(120)
-    check(w.isMinimized() or not w.isVisible(),
-          "外に出たら次の監視で即座に畳む")
+    check(ctl.is_parked(), "外に出たら次の監視で即座に畳む")
     check(puck.isVisible(), "畳んだらパックが戻る")
     check(ctl.POLL_MS <= 100, "監視の間隔が短い（%d ms）" % ctl.POLL_MS)
 

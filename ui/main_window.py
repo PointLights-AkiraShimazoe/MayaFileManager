@@ -140,6 +140,12 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         # だけで読み戻していなかったため。ここで復元する（本体を見せてからに
         # する。先に畳むと復元したジオメトリが確定しない）。
         if bool(self._sm.get("compact_mode", False)):
+            # r146 後半: **出す前に** 画面の外へ置く。出してから退けると、
+            # 起動のたびに本体が一瞬ちらついて消える。
+            try:
+                self._compact().pre_park()
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py pre_park")
             QTimer.singleShot(0, self._restore_compact_mode)
 
     # ------------------------------------------------------------------
@@ -1127,31 +1133,37 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
                     and event.type() == _QtCore.QEvent.ActivationChange):
                 QTimer.singleShot(0, self._refresh_integrations_if_active)
             if (event is not None
-                    and event.type() == _QtCore.QEvent.WindowStateChange):
+                    and event.type() in (_QtCore.QEvent.WindowStateChange,
+                                         _QtCore.QEvent.ActivationChange)):
                 QTimer.singleShot(0, self._compact_follow_window_state)
         except Exception as _e:
             _swallow(_e, "ui/main_window.py changeEvent")
         super().changeEvent(event)
 
     def _compact_follow_window_state(self):
-        """最小化から戻されたら «開いた» ことにする（r146 後半）。
+        """タスクバーから起こされたら «開いた» ことにする（r146 後半）。
 
-        コンパクト中、本体は «隠す» のではなく «最小化» している
-        （タスクバーのボタンを消さないため）。すると **タスクバーの
-        ボタンを押すだけで本体が戻ってくる** 道ができる。その時に
-        コンパクト側が «まだ畳んでいるつもり» のままだと、
+        コンパクト中、本体は隠れていない（画面の外に置いてあるだけ）。
+        タスクバーのボタンはそのまま残るので、**押せば本体が起きてくる**。
+        その時にコンパクト側が «まだ畳んでいるつもり» のままだと、
 
           本体も出ている ＆ パックも出ている
 
-        という、ユーザーから見て «2 つある» 状態になる（2026-10-14 の報告が
-        まさにこれ）。状態の持ち主を 1 つにするため、«最小化されていない＝
-        開いている» を不変条件にしてここで揃える。"""
+        という «2 つある» 状態になる（2026-10-14 の報告がまさにこれ）。
+        状態の持ち主を 1 つに保つため、起こされたらここで開いた扱いに揃える。
+
+        畳んだ直後の «余熱» のアクティブ化では開かない
+        （accepts_activation の猶予。開いた瞬間にまた畳んで点滅するため）。"""
         try:
-            if not self.isVisible() or self.isMinimized():
+            if self.isMinimized():
                 return
             c = getattr(self, "_compact_ctl", None)
             if c is None or not c.is_active() or c.is_expanded():
                 return
+            if not self.isActiveWindow():
+                return                  # 起こされたわけではない
+            if not c.accepts_activation():
+                return                  # 畳んだ直後の余熱
             c.expand()
         except RuntimeError:
             return                      # 窓がもう無い
