@@ -140,12 +140,11 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         # だけで読み戻していなかったため。ここで復元する（本体を見せてからに
         # する。先に畳むと復元したジオメトリが確定しない）。
         if bool(self._sm.get("compact_mode", False)):
-            # r146 後半: **出す前に** 画面の外へ置く。出してから退けると、
-            # 起動のたびに本体が一瞬ちらついて消える。
-            try:
-                self._compact().pre_park()
-            except Exception as _e:
-                _swallow(_e, "ui/main_window.py pre_park")
+            # r146（実機 2026-10-15、ユーザー報告「起動時に画面外に出て
+            # 戻ってこなくなりました」）: ここで «出す前に画面の外へ退ける»
+            # をしていたが **撤去した**。復元が途中で止まると、退けたまま
+            # 戻る手立てが無くなる（アプリを見失う）。起動時に一瞬ちらつく
+            # ことより、見失わないことを優先する。
             QTimer.singleShot(0, self._restore_compact_mode)
 
     # ------------------------------------------------------------------
@@ -1362,16 +1361,31 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
 
         «見失わない» ことを最優先にする。パックを出せなかった場合は
         コンパクトを諦めて通常表示に戻す（CompactController 側で面倒を見る）。"""
+        c = None
         try:
             if not self.isVisible():
                 self.show()           # ジオメトリを確定させてから畳む
-            self._compact().restore_from_settings()
+            c = self._compact()
+            c.restore_from_settings()
         except Exception as e:
             self._log_quiet("compact restore failed: %r" % (e,))
             try:
-                self._compact().set_active(False)
+                c = c or self._compact()
+                c.set_active(False)
             except Exception as _e:
                 _swallow(_e, "ui/main_window.py _restore_compact_mode")
+        # r146（ユーザー報告 2026-10-15「起動時に画面外に出て戻ってこない」）:
+        # 最後に **必ず** «見える状態か» を確かめる。畳んでいる間、本体は
+        # 画面の外にいるので、パックが出ていなければアプリを見失う。
+        try:
+            if c is not None:
+                puck = getattr(c, "_puck", None)
+                ok = c.is_active() and puck is not None and puck.isVisible()
+                if not ok:
+                    c.set_active(False)
+                    c.pull_window_onto_screen()
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py _restore_compact_mode(safety)")
         self.sync_compact_button()
 
     def sync_compact_button(self):

@@ -57,7 +57,8 @@ _CCV._call_drop_cb(lambda p, d, f, g: _new_got.append((p, d, f, g)),
                    ["a.ma"], "D", "move", None)
 check(_new_got and _new_got[0][2] == "move", "新しい 4 引数はそのまま届く")
 
-bp = _src("ui/browser_panel.py")
+from _common import panel_source
+bp = panel_source()
 check("_ask_drop_action" in bp, "落とした場所でメニューを出す口がある")
 for label in ("ここに移動", "ここにコピー", "高度なコピー"):
     check(label in bp, "メニューに «%s» がある" % label)

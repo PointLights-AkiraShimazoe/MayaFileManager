@@ -58,7 +58,8 @@ check(callable(getattr(col, "_path_of", None)),
 col.deleteLater()
 
 # ── B) 状態が届いたら描き直す ────────────────────────────────────
-bp = _src("ui/browser_panel.py")
+from _common import panel_source
+bp = panel_source()
 check("_on_flat_integration_status" in bp, "平坦ビュー用の再描画がある")
 check("status_updated.connect(self._on_flat_integration_status)" in bp,
       "状態更新につないでいる")

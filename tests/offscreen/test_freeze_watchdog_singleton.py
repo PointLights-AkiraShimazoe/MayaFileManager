@@ -25,12 +25,12 @@ import threading
 from _common import *  # noqa: F401,F403
 from _common import app, sm, finish, run, QTest
 
-import ui.main_window_dcc as mwd
+import ui.freeze_watchdog as mwd
 from ui.main_window import MainWindow
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(os.path.dirname(os.path.dirname(HERE)), "ui",
-                   "main_window_dcc.py")
+                   "freeze_watchdog.py")
 
 
 def _func(name):
@@ -52,7 +52,7 @@ def _calls(node, dotted):
 
 
 def s1():
-    fn = _func("_install_freeze_watchdog")
+    fn = _func("install")
 
     # 1) self._fh_file のような «ウィンドウの持ち物» にしない
     for n in ast.walk(fn):

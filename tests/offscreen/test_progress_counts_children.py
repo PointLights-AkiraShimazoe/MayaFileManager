@@ -119,10 +119,8 @@ check(seen3[-1][0] == seen3[-1][1], "移動も最後は満タン（%r）" % (see
 check(os.path.isdir(os.path.join(dst3, "big")), "移動できている")
 
 # ── 6) 進捗ダイアログの見張りはキャンセル後に出し直さない ───────
-HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(os.path.dirname(os.path.dirname(HERE)), "ui",
-                   "browser_panel.py")
-tree_ast = ast.parse(open(SRC, encoding="utf-8").read())
+from _common import panel_ast
+tree_ast = panel_ast()
 on_tick = None
 for node in ast.walk(tree_ast):
     if isinstance(node, ast.FunctionDef) and node.name == "on_tick":

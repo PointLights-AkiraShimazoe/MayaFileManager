@@ -187,13 +187,47 @@ check(c2.is_parked(), "本体は表に出ていない（画面の外）")
 w2.close()
 app.processEvents()
 
-# ── 7) 起動時のちらつき対策: «出す前に» 退ける口がある ─────────
+# ── 7) 見失わないこと（r146、ユーザー報告 2026-10-15）──────────
+#   「起動時に画面外に出て戻ってこなくなりました。」
 mwt = _src("ui", "main_window.py")
 init = _func(mwt, "__init__")
 pre = [x for x in ast.walk(init or ast.Module(body=[], type_ignores=[]))
        if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)
        and x.func.attr == "pre_park"]
-check(bool(pre), "起動時は show の前に退ける（本体がちらつかない）")
+check(not pre, "起動時に «出す前に退ける» をしない（戻れなくなる）")
+rest = _func(mwt, "_restore_compact_mode")
+calls = {x.func.attr for x in ast.walk(rest)
+         if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)}
+check("pull_window_onto_screen" in calls,
+      "復元に失敗したら必ず画面の中へ引き戻す（%r）" % (sorted(calls),))
+
+# 実際に «パックが出せなかった» 時、本体が画面の中に戻る
+sm.set(CompactController.ACTIVE_KEY, True, save=False)
+w3 = MainWindow(settings_manager=sm)
+w3.resize(800, 500)
+w3.show()
+QTest.qWait(300)
+app.processEvents()
+c3 = w3._compact()
+c3.set_active(True)
+QTest.qWait(150)
+app.processEvents()
+c3._puck.hide()                 # パックが出せなかった状況を作る
+c3.set_active(False)
+c3.pull_window_onto_screen()
+app.processEvents()
+check(not c3.is_parked(), "引き戻せば本体は画面の中にいる")
+w3.close()
+app.processEvents()
+
+# 透過はしない（全体が透けて見えづらくなる）
+cm_init = None
+for n in ast.walk(cm):
+    if isinstance(n, ast.ClassDef) and n.name == "_Puck":
+        cm_init = _func(n, "__init__")
+trans = [x for x in ast.walk(cm_init)
+         if isinstance(x, ast.Attribute) and x.attr == "WA_TranslucentBackground"]
+check(not trans, "パックは透過しない（見えづらくなる）")
 
 sm.set(CompactController.ACTIVE_KEY, False, save=False)
 finish(not fails)

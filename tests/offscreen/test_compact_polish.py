@@ -67,11 +67,16 @@ check(any(isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)
           and x.func.attr == "is_parked" for x in ast.walk(col)),
       "退けてある時はパックを «本体の角» から決め直さない")
 
-# ── 3) 縁：透過＋太い線＋光る色 ─────────────────────────────────
+# ── 3) 縁：四角＋太い線＋光る色（透過はしない。全体が透けて見えづらい）──
 init = _func(puck_cls, "__init__")
 attrs = [x for x in ast.walk(init)
          if isinstance(x, ast.Attribute) and x.attr == "WA_TranslucentBackground"]
-check(bool(attrs), "角の外に窓の地色が残らない（透過）")
+check(not attrs, "パックは透過しない（ユーザー報告 2026-10-15）")
+qss_fn = _func(puck_cls, "_qss")
+consts = [x.value for x in ast.walk(qss_fn)
+          if isinstance(x, ast.Constant) and isinstance(x.value, str)]
+check(any("border-radius:0px" in c for c in consts),
+      "角を丸めない（丸めると外側に窓の地色が残る）")
 check(hasattr(cm._Puck, "FLASH_KEY") and hasattr(cm._Puck, "flash"),
       "«ここに居ます» と光る口がある")
 

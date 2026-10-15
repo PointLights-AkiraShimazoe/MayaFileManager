@@ -115,7 +115,8 @@ check('explorer /select,"%s"' in reveal,
 check("p.parent.exists()" in reveal,
       "実体が無い時も黙って return しない（親を開くか理由を投げる）")
 
-bp = io.open(os.path.join(ROOT, "ui", "browser_panel.py"), encoding="utf-8").read()
+from _common import panel_source
+bp = panel_source()
 check("_reveal_path" in bp, "失敗をユーザーに伝える経路がある")
 
 # ── D: 自動命名 ───────────────────────────────────────────────────

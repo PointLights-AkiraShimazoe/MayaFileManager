@@ -229,3 +229,33 @@ def run(first_step, delay=3000, timeout=40000):
     QTimer.singleShot(delay, first_step)
     QTimer.singleShot(timeout, lambda: (print("TIMEOUT"), app.quit()))
     app.exec()
+
+
+# r146: BrowserPanel は責務ごとの Mixin に分かれた（ui/browser_*_mixin.py）。
+# «browser_panel.py の原文を読んで検査する» テストは、本体だけでなく
+# Mixin も含めて見る必要がある。ここでまとめて返す。
+PANEL_FILES = ("ui/browser_panel.py",
+               "ui/browser_fileops_mixin.py",
+               "ui/browser_rename_mixin.py",
+               "ui/browser_context_menu_mixin.py")
+
+
+def panel_source() -> str:
+    """BrowserPanel 本体と Mixin の原文を連結したもの。"""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    out = []
+    for rel in PANEL_FILES:
+        with open(os.path.join(root, *rel.split("/")), encoding="utf-8") as f:
+            out.append(f.read())
+    return "\n".join(out)
+
+
+def panel_ast():
+    """本体と Mixin を 1 つの Module として parse したもの（関数検索用）。"""
+    import ast as _ast
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    mod = _ast.Module(body=[], type_ignores=[])
+    for rel in PANEL_FILES:
+        with open(os.path.join(root, *rel.split("/")), encoding="utf-8") as f:
+            mod.body.extend(_ast.parse(f.read()).body)
+    return mod

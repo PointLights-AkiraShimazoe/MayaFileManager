@@ -58,7 +58,8 @@ L.release(t2)
 check(not L.busy_paths(), "全部終われば空になる")
 
 # ── 呼び出し側に組み込まれているか ───────────────────────────────
-bp = io.open(os.path.join(ROOT, "ui", "browser_panel.py"), encoding="utf-8").read()
+from _common import panel_source
+bp = panel_source()
 check("def _busy_guard" in bp, "重なりを見る共通処理がある")
 check("busy_paths=list(paths) + [target]" in bp,
       "コピー／移動は «移動元と移動先» を予約する")

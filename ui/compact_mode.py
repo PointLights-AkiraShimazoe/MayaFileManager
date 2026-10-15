@@ -168,11 +168,10 @@ class _Puck(QWidget):
             _swallow(_e, "ui/compact_mode.py _Puck(icon)")
         self.setObjectName("mfmCompactPuck")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        # r146（ユーザー報告 2026-10-15「コンパクトの縁に黒い四角のあまりが
-        # 見えます」）: 角を丸めているのに窓そのものは四角いので、角の外側に
-        # 窓の地色（黒）が残って見える。透過にして «丸の外は何も無い» に
-        # する。本体ではなくこの小窓だけなので、描画経路を変える影響は小さい。
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        # r146（ユーザー報告 2026-10-15）: «角の黒い余り» を消すために
+        # 透過（WA_TranslucentBackground）にしたが、**全体が透けて更に
+        # 見えづらくなった**ので撤去した。角を丸めない（四角にする）だけで
+        # 余りは出ない。
         # r146: 出す時にフォーカスを奪わない。奪うと «畳む → パックが出る →
         # アクティブになる → 下の event() が開く → カーソルは外なので畳む»
         # という点滅ループになる（道具窓を開いていると特に起きやすい）。
@@ -316,7 +315,7 @@ class _Puck(QWidget):
         edge = v.get(self.FLASH_KEY, v["error"]) if alert else v["primary"]
         width = 3 if alert else 2
         base = ("#mfmCompactPuck{background:%(plane_header)s;"
-                "border-radius:8px;}"
+                "border-radius:0px;}"
                 "#mfmCompactRestore{background:transparent;border:none;}"
                 "#mfmCompactRestore:hover{background:%(state_hover)s;"
                 "border-radius:5px;}" % v)
@@ -448,6 +447,7 @@ class CompactController(QObject):
             w.showNormal()
             w.raise_()
             w.activateWindow()      # ここはユーザーが明示的に押した時だけ通る
+            self.pull_window_onto_screen()   # 画面の外に残さない（r146）
             if self._puck is not None:
                 self._puck.hide()
             self._show_tool_windows()
@@ -772,6 +772,7 @@ class CompactController(QObject):
         if not puck.isVisible():
             self._win._log_quiet("compact: パックを出せなかったので通常表示へ戻す")
             self.set_active(False)
+            self.pull_window_onto_screen()
 
     # ── 畳んでいる間の本体の置き場所（r146 後半）────────────────────
     #
@@ -812,6 +813,31 @@ class CompactController(QObject):
         except Exception:
             w = 800
         return QPoint(vr.left() - w - self.PARK_MARGIN, vr.top() + 80)
+
+    def pull_window_onto_screen(self):
+        """本体が画面の外にいたら、必ず画面の中へ引き戻す（r146）。
+
+        ユーザー報告 2026-10-15:
+          「起動時に画面外に出て戻ってこなくなりました。」
+        畳んでいる間は画面の外に置くので、**戻す道が 1 つでも失敗すると
+        アプリを見失う**。最後の砦として、見える場所へ引き戻す口を持つ。"""
+        w = self._win
+        try:
+            if w.isMinimized():
+                w.showNormal()
+            if not w.isVisible():
+                w.show()
+            vr = self._virtual_rect()
+            if vr.intersects(w.frameGeometry()):
+                return False
+            scr = QApplication.primaryScreen()
+            av = scr.availableGeometry() if scr is not None else vr
+            w.move(av.left() + 40, av.top() + 40)
+            w.raise_()
+            return True
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py pull_window_onto_screen")
+            return False
 
     def pre_park(self):
         """起動時、本体を **出す前に** 画面の外へ置く（r146 後半）。

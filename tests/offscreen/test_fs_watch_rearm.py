@@ -36,8 +36,8 @@ def check(cond, msg):
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-BP = ast.parse(open(os.path.join(ROOT, "ui", "browser_panel.py"),
-                    encoding="utf-8").read())
+from _common import panel_ast
+BP = panel_ast()
 
 
 def _func(name):
@@ -60,7 +60,6 @@ calls = {x.func.attr for x in ast.walk(f)
 check("_rearm_fs_watch" in calls, "見張りを付け直す道を通る")
 
 # ── 2) 操作の終わりで必ず付け直す ───────────────────────────────
-src = open(os.path.join(ROOT, "ui", "browser_panel.py"), encoding="utf-8").read()
 run_op = _func("_run_file_op")
 inner = {n.name for n in ast.walk(run_op) if isinstance(n, ast.FunctionDef)}
 check("done" in inner, "_run_file_op に終了処理がある")

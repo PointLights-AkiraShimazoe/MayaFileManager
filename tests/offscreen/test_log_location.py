@@ -37,7 +37,8 @@ def s1():
 
     # フリーズ監視も同じ場所を使う（別々に定義していると片方だけ直し忘れる）
     import io
-    src = io.open(os.path.join(tool, "ui", "main_window_dcc.py"),
+    # r146: 見張りは ui/freeze_watchdog.py へ分離した
+    src = io.open(os.path.join(tool, "ui", "freeze_watchdog.py"),
                   encoding="utf-8").read()
     assert "_MFM_FREEZE_LOG" in src, "監視側が共通の定義を使っていない"
     assert 'os.path.dirname(os.path.abspath(__file__))),\n            "mfm_freeze.log")' not in src, \

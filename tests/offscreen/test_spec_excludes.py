@@ -111,7 +111,8 @@ for need in ("core.integrations", "core.integrations.svn_provider",
 print("hiddenimports に連携モジュールと xml が明示されている: OK")
 
 # ── 3) 起動失敗を黙って握り潰していないこと ───────────────────────────
-bp = io.open(os.path.join(ROOT, "ui", "browser_panel.py"), encoding="utf-8").read()
+from _common import panel_source
+bp = panel_source()
 i = bp.index("integrations start error")
 tail = bp[i:i + 1200]
 assert "status_message.emit" in tail, \
