@@ -152,11 +152,13 @@ class _Puck(QWidget):
         #     常に最前面にしていない時に、どこに行ったかがわからなくなります。」
         # Qt.Tool は WS_EX_TOOLWINDOW になるのでタスクバーに出ない。
         # Qt.Window にしてタスクバーへ出す（枠は自前なので FramelessWindowHint）。
-        # パック自身は «常に手前»。本体の最前面表示とは独立で、本体の設定を
-        # 勝手に書き換えない（r145 はここで最前面表示を道連れにしていた）。
-        super().__init__(None,
-                         Qt.Window | Qt.FramelessWindowHint
-                         | Qt.WindowStaysOnTopHint)
+        # r146（ユーザー報告 2026-10-15「最前面モードでなくてもコンパクトに
+        # すると最前面モードと同様の挙動」）: パックの «常に手前» は
+        # **本体の最前面設定に従う**（CompactController.sync_topmost）。
+        # 以前はここで WindowStaysOnTopHint を固定していたので、最前面 OFF
+        # でもパックだけが他アプリの上に居座っていた。OFF の時に隠れたら
+        # タスクバーのボタンで前に出す（notice）。
+        super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
         self.controller = controller
         self.setWindowTitle(tr("ファイルマネージャー（コンパクト）",
                                "File Manager (compact)"))
@@ -474,6 +476,10 @@ class CompactController(QObject):
         puck = self._ensure_puck()
         self._park_window()          # 起こされて表に出ていたら退け直す
         try:
+            # 最前面 OFF で他の窓に隠れていても、タスクバーから呼ばれた時は
+            # 前に出す（ユーザーが明示的に呼んだので奪ってよい）
+            puck.show()
+            puck.raise_()
             puck.flash()
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py notice")
@@ -557,7 +563,9 @@ class CompactController(QObject):
     def _ensure_puck(self):
         if self._puck is None:
             self._puck = _Puck(self)
+            self._puck_topmost = None
             self._puck.set_mirrored(self._dir in ("dl", "ul"))
+            self.sync_topmost()
             pos = self._sm.get(self.PUCK_POS_KEY, None)
             if isinstance(pos, (list, tuple)) and len(pos) == 2:
                 self._puck.move(int(pos[0]), int(pos[1]))
@@ -568,6 +576,33 @@ class CompactController(QObject):
             # 見失う» という事故になる（実機 2026-10-13: 保存値 -2108,-510）。
             self._pull_puck_onto_screen()
         return self._puck
+
+    def puck_topmost(self):
+        """今パックに掛かっている «常に手前»（None＝パック未作成）。"""
+        return getattr(self, "_puck_topmost", None)
+
+    def sync_topmost(self):
+        """パックの «常に手前» を本体の最前面設定に合わせる（r146）。
+
+        本体の設定が ON ならパックも手前に、OFF なら普通の窓（他の窓に
+        隠れ得る）。ユーザー報告 2026-10-15「最前面モードでなくても
+        コンパクトにすると最前面モードと同様の挙動」への対応。"""
+        puck = self._puck
+        if puck is None:
+            return
+        try:
+            fn = getattr(self._win, "is_always_on_top", None)
+            on = bool(fn()) if callable(fn) else False
+        except Exception:
+            on = False
+        if getattr(self, "_puck_topmost", None) == on:
+            return
+        self._puck_topmost = on
+        try:
+            from core.win_topmost import set_topmost
+            set_topmost(puck, on)
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py sync_topmost")
 
     def _pull_puck_onto_screen(self):
         """パックがどの画面にも載っていなければ主画面の左上寄りへ戻す。"""
@@ -766,6 +801,7 @@ class CompactController(QObject):
             set_taskbar_button(puck, False)
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py collapse(taskbar)")
+        self.sync_topmost()
         self.remember_puck_pos()
         # r146: «畳んだのにパックが出ていない» と、アプリごと見失う
         # （本体は隠れている・パックは見えない）。出せなければ畳むのをやめる。

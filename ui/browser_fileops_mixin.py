@@ -116,20 +116,40 @@ class FileOpsMixin:
                             _swallow(_e, "ui/browser_panel.py:2123 _release_fs_handles")
                         break
             if level <= 1:
-                # r128: 一度 «空» を挙げて、これまでに fetch した子フォルダの
-                # 監視を落としてから親へ逃がす。そのまま親を挙げるだけだと
-                # 古い監視が残る（＝Windows でハンドルを握ったまま）。
-                try:
-                    self._fs_model.setRootPath("")
-                except Exception as _e:
-                    _swallow(_e, "ui/browser_panel.py:2425 _release_fs_handles")
-                if parent and os.path.isdir(parent):
-                    self._fs_model.setRootPath(parent)
+                # r146（実機計測 2026-10-15）: **setRootPath("") は使わない。**
+                # Qt の setRootPath は «それまでの rootPath» の見張りだけを外す
+                # （子フォルダ全部ではない）。"" を挙げると、その上モデルの
+                # 根＝ドライブ一覧を一度だけ読みに行き、切れたネットワーク
+                # ドライブがあると **監視スレッドが 16 秒止まる**（その間、
+                # どのフォルダの変化もモデルに届かない＝「反映されない」）。
+                # 外したいフォルダを一度 root にしてから親へ逃がす。これで
+                # そのフォルダの見張りだけが外れ、節は «要再読» の印が付く
+                # （付け直しは _rearm_fs_watch）。
+                self._unwatch_dir(folder)
                 self._flush_deleted()
                 return
             self._recreate_fs_model(parent)
         except Exception as e:
             _mfm_log("release_fs_handles error: %r" % (e,))
+
+    def _unwatch_dir(self, folder: str):
+        """folder の見張り（Windows ではディレクトリのハンドル）を外す（r146）。
+
+        QFileSystemModel が見張りを外すのは «rootPath から離れる時» だけ
+        なので、folder を root にしてから親へ移る。親が «要再読» なら
+        ここで読み直す（≒ 現在地なら表示が新しくなる）。"""
+        m = self._fs_model
+        try:
+            if not folder or not os.path.isdir(folder):
+                return
+            parent = os.path.dirname(folder.rstrip("/\\")) or folder
+            if os.path.normcase(os.path.normpath(parent)) == os.path.normcase(
+                    os.path.normpath(folder)):
+                return      # ドライブの根は外せない（外す必要もない）
+            m.setRootPath(folder)
+            m.setRootPath(parent)
+        except Exception as e:
+            _mfm_log("unwatch_dir error: %r" % (e,))
 
     def _recreate_fs_model(self, root_hint: str = ""):
         """QFileSystemModel を作り直して «監視スレッドのハンドル» を完全に手放す。
@@ -172,12 +192,11 @@ class FileOpsMixin:
             old.fileRenamed.disconnect()
         except Exception as _e:
             _swallow(_e, "ui/browser_panel.py:2174 _recreate_fs_model")
-        # r128: 監視スレッド（QFileInfoGatherer）に «もう何も見るな» と伝えてから
-        # 捨てる。rootPath を空にすると Qt 側の監視対象が外れる。
-        try:
-            old.setRootPath("")
-        except Exception as _e:
-            _swallow(_e, "ui/browser_panel.py:2178 _recreate_fs_model")
+        # r146: 以前はここで old.setRootPath("") をしていたが撤去。
+        # "" はドライブ一覧の読み込みを起こし（切れたネットワークドライブで
+        # 16 秒）、捨てる側の監視スレッドがそれを終えるまで、破棄
+        # （~QFileInfoGatherer の wait）で UI が止まる。捨てれば監視は
+        # スレッドごと終わるので、何も伝える必要は無い。
         try:
             old.setParent(None)
             old.deleteLater()
@@ -237,9 +256,9 @@ class FileOpsMixin:
           「フォルダを削除したら、カラムが一度左に移動し、再度サーチされる
             ように右に戻る挙動をしました。」
           「カラムは D ドライブまで巻き戻りました。」
-        setRootPath("") は «これまでに読んだフォルダの見張りを全部落とす»
-        ので、カラムが組み直されて左へ飛ぶ。付け直すのは «そのフォルダ»
-        だけで足りる。"""
+        setRootPath("") はカラムを組み直して左へ飛ばす上、ドライブ一覧の
+        読み込みで監視スレッドを長く止める（_release_fs_handles 参照）。
+        付け直すのは «そのフォルダ» だけで足りる。"""
         try:
             if not folder or not os.path.isdir(folder):
                 return
@@ -255,7 +274,7 @@ class FileOpsMixin:
             反映されずなので駄目です。1 分近く待っても反映がされてないです。」
 
         原因はここ。削除・移動の **前** に、Windows のハンドルを手放すため
-        ``setRootPath("")`` で見張りを全部落としている（それ自体は必要）。
+        見張りを外している（それ自体は必要。_release_fs_handles）。
         ところが **後で付け直していなかった** ので、そのフォルダで何が起きても
         モデルに届かなくなっていた＝いつまで経っても表示が変わらない。
         操作が終わったら必ずここを通して付け直す。"""
@@ -297,16 +316,29 @@ class FileOpsMixin:
                 t.start(700)
             return
         m = self._fs_model
-        # r146（実機 2026-10-15）: Windows では «同じ場所を挙げ直す» だけでは
-        # 見張りが戻らない（Qt は既に読んだ節を読み直さない）。
-        # _release_fs_handles と同じく、いったん空を挙げてから付け直す。
-        # モデルを作り直すわけではないので、カラムの index は生きたまま。
+        # r146（実機計測 2026-10-15）: **setRootPath("") は使わない**
+        # （理由は _release_fs_handles）。見張りが外れた節には Qt が
+        # «要再読» の印（canFetchMore）を付けているので、fetchMore で
+        # 読み直させれば見張りも一緒に戻る。root は動かさないので、
+        # カラムが組み直されることも巻き戻ることもない。
+        # 最後は «今いる場所» を root に戻す（ここが見張られていないと
+        # 一番困る）。その時に外れる «前の root» も読み直しておく。
+        cur = self._current_path or ""
         try:
-            m.setRootPath("")
+            tgt = cur if os.path.isdir(cur) else os.path.dirname(cur or "")
+        except OSError:
+            tgt = ""
+        prev = ""
+        try:
+            prev = m.rootPath() or ""
+            if (tgt and os.path.isdir(tgt) and os.path.normcase(
+                    os.path.normpath(prev or "x")) != os.path.normcase(
+                    os.path.normpath(tgt))):
+                m.setRootPath(tgt)
         except Exception as _e:
-            _swallow(_e, "ui/browser_panel.py _rearm_fs_watch(clear)")
+            _swallow(_e, "ui/browser_panel.py _rearm_fs_watch(cur)")
         done = []
-        for d in (dirs or []):
+        for d in list(dirs or []) + [prev, tgt]:
             if not d:
                 continue
             try:
@@ -321,19 +353,13 @@ class FileOpsMixin:
                 continue
             done.append(k)
             try:
-                m.setRootPath(d)
+                idx = m.index(d)
+                if idx.isValid() and m.canFetchMore(idx):
+                    m.fetchMore(idx)
             except Exception as _e:
                 _swallow(_e, "ui/browser_panel.py _rearm_fs_watch")
-            if len(done) >= 8:
+            if len(done) >= 12:
                 break
-        # 最後は «今いる場所» に戻す（ここが見張られていないと一番困る）
-        cur = self._current_path or ""
-        try:
-            tgt = cur if os.path.isdir(cur) else os.path.dirname(cur or "")
-            if tgt and os.path.isdir(tgt):
-                m.setRootPath(tgt)
-        except Exception as _e:
-            _swallow(_e, "ui/browser_panel.py _rearm_fs_watch(cur)")
         self._flush_deleted()
         self._refresh_flat_view()
 

@@ -44,6 +44,11 @@ def s1():
     w = MainWindow(settings_manager=sm)
     w.resize(1100, 700)
     w.show()
+    # r146: 起動 1 秒後の本物のポートスキャン（別スレッド）が、このテストの
+    # 途中で «空の一覧» を返してコンボを組み替えることがあり、手順 5 で
+    # 20261 の行が見つからず落ちていた（Linux で間欠）。走行中の印を
+    # 立てておけばスキャンは始まらない（本体の重複防止ガードを使う）。
+    w._scan_running["maya"] = True
     _settle(250)
     combo = w._conn_combo
 

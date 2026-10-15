@@ -18,8 +18,10 @@ st = get_undo_stack()
 
 def s1():
     # ── 空フォルダをクリック → ヘッダ付きの空カラムが出る ──────────────
-    n0 = len(columns(b))
+    # r146: 先に d のカラムが出るのを待ってから数える（遅い環境では 3 秒
+    # 経ってもカラムが揃っておらず、数が合わずに落ちていた）
     cv, rect, _ = find_item(b, "empty_dir"); assert cv
+    n0 = len(columns(b))
     QTest.mouseClick(cv.viewport(), Qt.LeftButton, Qt.NoModifier, rect.center())
     QTimer.singleShot(700, lambda: s2(n0))
 

@@ -44,16 +44,17 @@ class DuplicateDialog(QDialog):
         root.setContentsMargins(12, 10, 12, 10)
         root.setSpacing(8)
 
-        # モード切替（ピル型トグル）
+        # モード切替（r146: 本物のスイッチ。文字だけの ON/OFF ボタンだった）
+        from ui.toggle_switch import ToggleSwitch
         mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel(tr("モード:", "Mode:")))
-        self._mode_btn = QToolButton()
-        self._mode_btn.setCheckable(True)
-        self._mode_btn.setObjectName("mfmPillToggle")
+        mode_row.addWidget(QLabel(tr("Replace モード", "Replace mode")))
+        self._mode_btn = ToggleSwitch(False)
         self._mode_btn.setToolTip(tr("OFF: 名前を指定 / ON: Search→Replace で命名",
                                      "OFF: type a name / ON: name by Search→Replace"))
         self._mode_btn.toggled.connect(self._on_mode)
         mode_row.addWidget(self._mode_btn)
+        self._mode_text = QLabel("")
+        mode_row.addWidget(self._mode_text)
         mode_row.addStretch(1)
         n = len(self._paths)
         mode_row.addWidget(QLabel(tr("対象: %d 件", "Items: %d") % n))
@@ -97,6 +98,7 @@ class DuplicateDialog(QDialog):
         grid.addWidget(self._recursive_cb, 3, 1)
         root.addLayout(grid)
 
+        self._recursive_cb.toggled.connect(self._update_preview)
         self._preview = QLabel()
         self._preview.setObjectName("mfmDupPreview")
         self._preview.setWordWrap(True)
@@ -123,8 +125,8 @@ class DuplicateDialog(QDialog):
             self._name_edit.setFocus()
 
     def _on_mode(self, replace_mode: bool):
-        self._mode_btn.setText(tr("Replace モード: ON", "Replace mode: ON") if replace_mode
-                               else tr("Replace モード: OFF", "Replace mode: OFF"))
+        self._mode_text.setText(tr("ON（Search→Replace で命名）", "ON (name by Search→Replace)")
+                                if replace_mode else tr("OFF（名前を指定）", "OFF (type a name)"))
         for w in (self._name_label, self._name_edit):
             w.setVisible(not replace_mode)
         for w in (self._search_label, self._search_edit, self._replace_label,
@@ -203,5 +205,50 @@ class DuplicateDialog(QDialog):
             lines.append("%s → %s%s" % (os.path.basename(src), n, mark))
         if len(specs) > 6:
             lines.append(tr("…他 %d 件", "… %d more") % (len(specs) - 6))
+        # r146: 「サブフォルダ以下の名前にも適用」が ON なら、中身がどう
+        # 変わるかも見せる（ユーザー報告 2026-10-15「サブフォルダ含めた時に
+        # 名前変更プレビューがでない」）。
+        lines.extend(self._inside_preview_lines(specs))
         self._preview.setText("\n".join(lines))
         self._ok.setEnabled(bool(specs) and not bad)
+
+    INSIDE_PREVIEW_MAX = 8        # 見せる行数
+    INSIDE_SCAN_MAX = 400         # 歩く件数の上限（大きなフォルダで固まらない）
+
+    def _inside_preview_lines(self, specs):
+        """フォルダの中身に置換が掛かる分のプレビュー行（r146）。
+        «名前が変わるもの» だけを拾う。何も変わらなければその旨を 1 行。"""
+        inside = self.rename_inside()
+        if not inside:
+            return []
+        search, repl = inside
+        out, scanned, changed = [], 0, 0
+        for src, _dst in specs:
+            if not os.path.isdir(src) or os.path.islink(src):
+                continue
+            top = os.path.basename(src.rstrip("/\\"))
+            for dirpath, dirnames, filenames in os.walk(src):
+                for n in dirnames + filenames:
+                    scanned += 1
+                    new = apply_replace_name(n, search, repl)
+                    if new != n:
+                        changed += 1
+                        if len(out) < self.INSIDE_PREVIEW_MAX:
+                            rel = os.path.relpath(os.path.join(dirpath, n), src)
+                            out.append("    %s/%s → %s" % (top, rel.replace("\\", "/"), new))
+                    if scanned >= self.INSIDE_SCAN_MAX:
+                        break
+                if scanned >= self.INSIDE_SCAN_MAX:
+                    break
+            if scanned >= self.INSIDE_SCAN_MAX:
+                break
+        if not out:
+            return [tr("  （サブフォルダ以下に置換対象の名前はありません）",
+                       "  (nothing inside matches the search)")]
+        head = tr("  サブフォルダ以下（%d 件が変わる%s）:",
+                  "  Inside folders (%d change%s):") % (
+            changed, tr("、上限まで確認", ", scan capped") if scanned >= self.INSIDE_SCAN_MAX else "")
+        more = []
+        if changed > len(out):
+            more = [tr("    …他 %d 件", "    … %d more") % (changed - len(out))]
+        return [head] + out + more

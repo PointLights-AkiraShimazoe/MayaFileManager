@@ -1301,6 +1301,13 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             self._topmost_keeper().set_active(on)
         except Exception as e:
             self._log_quiet("always_on_top failed: %r" % (e,))
+        # r146: コンパクトのパックも同じ設定に従う（勝手に手前に居座らない）
+        try:
+            c = getattr(self, "_compact_ctl", None)
+            if c is not None:
+                c.sync_topmost()
+        except Exception as _e:
+            _swallow(_e, "ui/main_window.py set_always_on_top(puck)")
         try:
             self._lead_blk.set_always_on_top(on)
         except Exception as _e:

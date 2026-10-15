@@ -47,8 +47,22 @@ class _DragListView(QListView):
     を修飾キーなしで押した時は選択を崩さず（プレスを保留）、
     - Move 閾値を超えたら選択全体をドラッグ
     - 動かさずに離したらその項目だけの単一選択に確定（clicked も発火）
-    未選択項目・修飾キー付きは QListView 標準の選択処理に任せる。
-    ドラッグ終了は drag_finished(paths) で通知（落下先が DCC なら親が処理）。"""
+    未選択項目・修飾キー付きの «押下» は QListView 標準の選択処理に任せるが、
+    その後の移動は自前でドラッグにする（下記）。
+    ドラッグ終了は drag_finished(paths) で通知（落下先が DCC なら親が処理）。
+
+    r146: **左ボタンが押されている間の MouseMove は Qt に渡さない。**
+    QAbstractItemView::mouseMoveEvent は左ボタン押下中に動いただけで
+    DragSelectingState に入り、«Clear|SelectCurrent» で前回の押下位置から
+    カーソルまでの矩形を選び直す。閾値未満（1〜9px）の最初の数イベントを
+    素通ししていたため、
+    - 複数選択を掴んだ瞬間に «前回クリックした項目〜掴んだ項目» の範囲だけが
+      残り、それ以外が選択から落ちる（「D&D を始めたら一つ欠ける」）
+    - 未選択の 1 点を掴んでそのまま動かすと、ドラッグにならず範囲選択が
+      走る（「1 点だけを D&D したいのに全てが選択される」）
+    になっていた（ユーザー報告 2026-10-15）。カラム側は r94 で同じ理由で
+    «必ず消費» にしてある。未選択の 1 点は押下で単一選択にしてから、
+    その 1 点を掴んだ扱いにする（Explorer と同じ）。"""
 
     drag_finished = Signal(list)
 
@@ -63,7 +77,10 @@ class _DragListView(QListView):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._pending = None          # (pos, index, ctrl_only)
+        self._pending = None          # (pos, index, release_action)
+        # release_action: "single"  … 動かさず離したら単一選択に確定（clicked）
+        #                 "deselect"… 動かさず離したら Ctrl トグル解除
+        #                 "qt"      … 押下は Qt に渡した。離す時も Qt に渡す
         self._path_role = _PATH_ROLE
 
     def wheel_rows(self) -> int:
@@ -102,17 +119,24 @@ class _DragListView(QListView):
 
     def _selected_paths(self):
         out = []
+        seen = set()
         for idx in self.selectedIndexes():
+            if idx.column() != 0:
+                continue
             p = self.model().data(idx, self._path_role)
-            if p:
+            if p and p not in seen:
+                seen.add(p)
                 out.append(p)
         return out
 
-    def mousePressEvent(self, event):
+    def _event_pos(self, event):
         try:
-            pos = event.position().toPoint()
+            return event.position().toPoint()
         except AttributeError:
-            pos = event.pos()
+            return event.pos()
+
+    def mousePressEvent(self, event):
+        pos = self._event_pos(event)
         idx = self.indexAt(pos)
         sm = self.selectionModel()
         mods = event.modifiers()
@@ -123,35 +147,43 @@ class _DragListView(QListView):
         # 「複数選択をし、D&D をすると一つ選択が外れる」）。
         # Explorer と同じく «離した時に初めてトグル» にする。
         ctrl_only = bool(mods & Qt.ControlModifier) and not (mods & Qt.ShiftModifier)
-        if (event.button() == Qt.LeftButton and idx.isValid() and sm is not None
+        left = event.button() == Qt.LeftButton
+        if (left and idx.isValid() and sm is not None
                 and sm.isSelected(idx) and (mods == Qt.NoModifier or ctrl_only)):
-            self._pending = (pos, idx, ctrl_only)
+            self._pending = (pos, idx, "deselect" if ctrl_only else "single")
             self.setFocus(Qt.MouseFocusReason)
             return                      # 選択を崩さない（ドラッグ候補）
         self._pending = None
         super().mousePressEvent(event)
+        # r146: 未選択の項目（修飾キー付きも含む）は Qt が押下で選択を
+        # 組み替えた。ここからの移動は «その選択» を掴んだドラッグにする。
+        # 空白の押下（idx 無効）は Qt の矩形選択に任せる。
+        if left and idx.isValid():
+            self._pending = (pos, idx, "qt")
 
     def mouseMoveEvent(self, event):
         if self._pending is not None and (event.buttons() & Qt.LeftButton):
-            try:
-                pos = event.position().toPoint()
-            except AttributeError:
-                pos = event.pos()
+            pos = self._event_pos(event)
             if (pos - self._pending[0]).manhattanLength() >= QApplication.startDragDistance():
                 self._pending = None
                 self._start_drag()
-                return
+            # r146: 閾値未満でも Qt に渡さない（渡すと矩形選択で選択が崩れる。
+            # クラス docstring 参照）。
+            return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if self._pending is not None:
-            _pos, idx, ctrl_only = self._pending
+            _pos, idx, action = self._pending
             self._pending = None
+            if action == "qt":
+                super().mouseReleaseEvent(event)
+                return
             sm = self.selectionModel()
             if sm is not None and idx.isValid():
                 from core.compat import QtCore as _QC
                 QISM = _QC.QItemSelectionModel
-                if ctrl_only:
+                if action == "deselect":
                     # r125: ドラッグに至らなかった Ctrl+クリック＝トグル解除
                     sm.select(idx, QISM.Deselect | QISM.Rows)
                 else:

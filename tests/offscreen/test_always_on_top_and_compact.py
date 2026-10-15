@@ -33,6 +33,7 @@ from _common import *  # noqa: F401,F403
 from _common import app, sm, finish, run, QTest
 
 from core.compat import Qt
+from core.win_topmost import is_windows as _is_windows
 from ui.main_window import MainWindow
 
 fails = []
@@ -115,13 +116,23 @@ def s1():
     check(puck is not None and puck.isVisible(), "パックが出る")
     check(lead.compact_btn.isChecked(), "ヘッダのボタンが光る（状態が分かる）")
     # r146（ユーザー指示 2026-10-11）: コンパクトモードは最前面表示を
-    # 勝手に触らない。«どこへ行ったか» はパック自身で担保する
-    #   - パックは常に手前（本体の設定とは無関係）
-    #   - パックはタスクバーに出る（Qt.Tool をやめた）
+    # 勝手に触らない。
+    # r146（ユーザー報告 2026-10-15「最前面モードでなくてもコンパクトに
+    # すると最前面モードと同様の挙動」）: パックの «常に手前» は本体の
+    # 最前面設定に従う（OFF なら普通の窓）。
     check(not w.is_always_on_top(),
           "コンパクトに入っても最前面表示を勝手に入れない")
-    check(bool(puck.windowFlags() & Qt.WindowStaysOnTopHint),
-          "パック自身は常に手前")
+    check(ctl.puck_topmost() is False,
+          "最前面 OFF ならパックも手前に居座らない（%r）" % (ctl.puck_topmost(),))
+    if not _is_windows():
+        check(not (puck.windowFlags() & Qt.WindowStaysOnTopHint),
+              "（Qt フラグでも）パックは常に手前ではない")
+    w.set_always_on_top(True)
+    _settle(150)
+    check(ctl.puck_topmost() is True, "最前面 ON にするとパックも手前")
+    w.set_always_on_top(False)
+    _settle(150)
+    check(ctl.puck_topmost() is False, "最前面 OFF に戻すとパックも戻る")
     check((puck.windowFlags() & Qt.WindowType_Mask) != Qt.Tool,
           "パックはタスクバーに出る（Qt.Tool ではない）")
     check(bool(puck.windowTitle()),

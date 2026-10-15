@@ -2217,6 +2217,21 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         _mfm_log("current path gone(async): %s -> %s" % (checked_path, dest))
         self.status_message.emit(
             "表示中のフォルダが無くなったため、%s へ移動しました" % dest)
+        # r146: 移動先が «すぐ上の親» で、その親のカラムが既に出ているなら
+        # カラムを組み直さず、消えたフォルダのカラムを閉じて親に戻るだけにする
+        # （ユーザー報告 2026-10-15「フォルダを削除したら、カラムが一度左に
+        # 移動し、再度サーチされるように右に戻る」）。navigate_to は全カラムを
+        # 作り直すので、消したものの下だけ片付けたい時には大げさ。
+        try:
+            parent = os.path.dirname(checked_path.rstrip("/\\"))
+            same = os.path.normcase(os.path.normpath(parent)) == os.path.normcase(
+                os.path.normpath(dest))
+            idx = self._column_view._proxy_index_for_path(dest) if same else None
+            if idx is not None and idx.isValid():
+                self._collapse_to(dest, idx)
+                return
+        except Exception as e:
+            _mfm_log("gone: collapse failed, fall back to navigate: %r" % (e,))
         self.navigate_to(dest)
 
     def _fallback_to_existing_ancestor(self) -> bool:

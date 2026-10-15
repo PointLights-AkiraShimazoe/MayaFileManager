@@ -9,15 +9,20 @@
   「カラムは D ドライブまで巻き戻りました。」
 
 原因は 1 つ。削除・移動の前に Windows のハンドルを手放すため
-``setRootPath("")`` で «これまでに読んだフォルダの見張り» を全部落として
-いるのに、**後で付け直していなかった**。
+``setRootPath("")`` で見張りを落としているのに、**後で付け直していなかった**。
   * 付け直さない → そのフォルダの変化が永久に届かない（反映されない）
   * "" を挟む     → カラムが組み直されて左へ飛ぶ（巻き戻る）
 
+さらに実機計測（2026-10-15）で、``setRootPath("")`` はモデルの根＝ドライブ
+一覧を読みに行き、切れたネットワークドライブがあると **監視スレッドが
+16 秒止まる**（その間どのフォルダの変化も届かない）ことが分かった。
+以後 ``setRootPath("")`` は **どこでも使わない**。
+
 ここで固定すること:
-  1) _resync_dir は rootPath を空にしない（巻き戻さない）
+  1) パネルのコードに setRootPath("") が無い
   2) 操作が終わったら必ず見張りを付け直す道を通る
-  3) 付け直した後、rootPath は «今いる場所» に戻っている
+  3) 見張りを外した後に付け直すと、rootPath は «今いる場所» に戻り、
+     カラムは動かず、増えたファイルが見える
 """
 import ast
 import os
@@ -47,17 +52,17 @@ def _func(name):
     raise AssertionError(name)
 
 
-# ── 1) _resync_dir は rootPath を空にしない ─────────────────────
-f = _func("_resync_dir")
-empties = [x for x in ast.walk(f)
+# ── 1) パネルのコードに setRootPath("") が無い ─────────────────────
+empties = [x for x in ast.walk(BP)
            if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)
            and x.func.attr == "setRootPath"
            and x.args and isinstance(x.args[0], ast.Constant)
            and x.args[0].value == ""]
-check(not empties, "_resync_dir は setRootPath(\"\") をしない（カラムが巻き戻る）")
+check(not empties, "setRootPath(\"\") をどこでもしない（%d 箇所）" % len(empties))
+f = _func("_resync_dir")
 calls = {x.func.attr for x in ast.walk(f)
          if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)}
-check("_rearm_fs_watch" in calls, "見張りを付け直す道を通る")
+check("_rearm_fs_watch" in calls, "_resync_dir は見張りを付け直す道を通る")
 
 # ── 2) 操作の終わりで必ず付け直す ───────────────────────────────
 run_op = _func("_run_file_op")
@@ -82,17 +87,25 @@ app.processEvents()
 
 root_before = b._column_view.rootIndex()
 root_path_before = b._column_view._path_for_index(root_before) or ""
-b._fs_model.setRootPath("")           # 見張りを全部落とした状態を作る
+b._unwatch_dir(d)                     # 操作前と同じく見張りを外した状態を作る
+# （印の確認はイベントを回す前に。表示中のカラムは Qt のビューが
+#   すぐ fetchMore で読み直す＝印はその場で消える）
+check(bool(b._fs_model.canFetchMore(b._fs_model.index(d))),
+      "外した直後は «要再読» の印が付いている")
+rp = os.path.normcase(os.path.normpath(b._fs_model.rootPath()))
+check(rp == os.path.normcase(os.path.normpath(os.path.dirname(d))),
+      "外すと rootPath は親へ逃げている（%r）" % (b._fs_model.rootPath(),))
 app.processEvents()
 b._rearm_fs_watch([sub])
 # r146: 付け直しは «少し置いてからまとめて 1 回»（その場編集とぶつけない）
-for _ in range(25):
+want_rp = os.path.normcase(os.path.normpath(d))
+for _ in range(30):
     QTest.qWait(100)
     app.processEvents()
-    if b._fs_model.rootPath():
+    if os.path.normcase(os.path.normpath(b._fs_model.rootPath())) == want_rp:
         break
 rp = os.path.normcase(os.path.normpath(b._fs_model.rootPath()))
-check(rp == os.path.normcase(os.path.normpath(d)),
+check(rp == want_rp,
       "付け直したあと rootPath は «今いる場所»（%r）" % (b._fs_model.rootPath(),))
 
 root_path_after = b._column_view._path_for_index(b._column_view.rootIndex()) or ""

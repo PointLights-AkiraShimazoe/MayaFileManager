@@ -2348,6 +2348,10 @@ class CappedColumnView(QColumnView):
             if view is not None and hasattr(view, "indexAt"):
                 if self._handle_view_drag(view, event, et):
                     return True
+        elif et == _QtCore.QEvent.DragLeave:
+            view = obj.parent()
+            if view is not None and hasattr(view, "indexAt"):
+                self._drop_hilite(view, None)
         elif et == _QtCore.QEvent.MouseButtonPress:
             view = obj.parent()
             if view is not None and hasattr(view, "indexAt"):
@@ -2685,6 +2689,7 @@ class CappedColumnView(QColumnView):
             if not paths:
                 return False
             if et == _QtCore.QEvent.Drop:
+                self._drop_hilite(view, None)
                 try:
                     pos = event.position().toPoint()
                 except AttributeError:
@@ -2722,9 +2727,79 @@ class CappedColumnView(QColumnView):
             event.setDropAction(Qt.MoveAction if not (
                 event.keyboardModifiers() & Qt.ControlModifier) else Qt.CopyAction)
             event.accept()
+            # r146: 落下先を光らせる（ユーザー報告 2026-10-15「移動先で
+            # フォルダの上にマウスをもっていっても反応がない」）。
+            # ここでイベントを消費しているので Qt 標準のドロップ表示は
+            # 出ない。自前で «落ちる先» を見せる。
+            try:
+                pos = event.position().toPoint()
+            except AttributeError:
+                pos = event.pos()
+            self._drop_hilite(view, pos)
             return True
         except Exception as e:
             _mfm_log("drag/drop error: %r" % (e,))
+            return False
+
+    def _drop_hilite(self, view, pos):
+        """ドラッグ中、落下先を枠で示す（r146）。
+
+        pos が None なら消す。フォルダ項目の上ならその行、ファイルや空白の
+        上なら «そのカラムのフォルダ» に落ちるのでビュー全体を囲む
+        （_drop_dir_for と同じ判定）。
+        フォルダかどうかはモデルの持つ情報（isDir）で判定する。
+        os.path.isdir は UI スレッドで数秒止まることがある（OneDrive 等）。"""
+        try:
+            hl = getattr(view, "_mfm_drop_hl", None)
+            if pos is None:
+                if hl is not None and is_alive(hl):
+                    hl.hide()
+                return
+            vp = view.viewport()
+            if hl is None or not is_alive(hl):
+                from core.compat import QWidget as _QW
+                from core.theme_engine import qss_vars
+                hl = _QW(vp)
+                hl.setObjectName("mfmDropHilite")
+                hl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                hl.setAttribute(Qt.WA_StyledBackground, True)
+                v = qss_vars()
+                try:
+                    from core.compat import QColor as _QColor
+                    c = _QColor(v["primary"])
+                    c.setAlpha(46)
+                    fill = c.name(_QColor.HexArgb)
+                except Exception:
+                    fill = "transparent"
+                hl.setStyleSheet(
+                    "#mfmDropHilite{border:2px solid " + v["primary"]
+                    + ";background:" + fill + ";}")
+                view._mfm_drop_hl = hl
+            idx = view.indexAt(pos)
+            rect = None
+            if idx.isValid() and self._is_dir_index(idx):
+                p = self._path_of_index(idx)
+                if p and not self._is_link_path(p):
+                    rect = view.visualRect(idx)
+            if rect is None or rect.isEmpty():
+                rect = vp.rect().adjusted(1, 1, -1, -1)
+            hl.setGeometry(rect)
+            hl.show()
+            hl.raise_()
+        except Exception as e:
+            _mfm_log("drop hilite error: %r" % (e,))
+
+    def _is_dir_index(self, idx) -> bool:
+        """index がフォルダか（I/O なし。モデルが既に持っている情報だけ）。"""
+        try:
+            m = idx.model()
+            src = idx
+            while hasattr(m, "mapToSource"):
+                src = m.mapToSource(src)
+                m = m.sourceModel()
+            return bool(m is not None and hasattr(m, "isDir") and src.isValid()
+                        and m.isDir(src))
+        except Exception:
             return False
 
     @staticmethod

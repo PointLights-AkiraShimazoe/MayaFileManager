@@ -141,6 +141,21 @@ class _QTestFallback:
         for ch in text:
             QTest.keyClick(widget, ch, modifiers)
 
+    @staticmethod
+    def _key(widget, et, key, modifiers):
+        text = key if isinstance(key, str) else ""
+        k = ord(key.upper()) if isinstance(key, str) else key
+        QApplication.sendEvent(widget, _QtGui.QKeyEvent(et, k, modifiers, text))
+        QApplication.processEvents()
+
+    @staticmethod
+    def keyPress(widget, key, modifiers=_QtCore.Qt.NoModifier, delay=-1):
+        QTest._key(widget, _QtCore.QEvent.KeyPress, key, modifiers)
+
+    @staticmethod
+    def keyRelease(widget, key, modifiers=_QtCore.Qt.NoModifier, delay=-1):
+        QTest._key(widget, _QtCore.QEvent.KeyRelease, key, modifiers)
+
 
 def _qtest_pick(name):
     """本物にそのメソッドがあれば本物、無ければ自前。"""
@@ -160,6 +175,8 @@ class QTest:   # noqa: N801
     mouseDClick = _qtest_pick("mouseDClick")
     keyClick = _qtest_pick("keyClick")
     keyClicks = _qtest_pick("keyClicks")
+    keyPress = _qtest_pick("keyPress")
+    keyRelease = _qtest_pick("keyRelease")
 
 
 def flush_deleted():

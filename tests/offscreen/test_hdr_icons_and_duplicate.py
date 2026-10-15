@@ -56,6 +56,23 @@ dlg._recursive_cb.setChecked(True)
 assert os.path.basename(dlg.specs()[0][1]) == "z.mz" and dlg.rename_inside() == ("a", "z")
 print("duplicate dialog: OK")
 
+# r146: Replace モードは本物のスイッチ（文字だけの ON/OFF ボタンではない）。
+# サブフォルダ以下にも適用 ON なら、中身の名前がどう変わるかもプレビューに出る。
+from ui.toggle_switch import ToggleSwitch
+assert isinstance(dlg._mode_btn, ToggleSwitch), type(dlg._mode_btn)
+assert "ON" in dlg._mode_text.text()
+dlg2 = DuplicateDialog([os.path.join(d, "chr_A")])
+dlg2._mode_btn.setChecked(True)
+dlg2._search_edit.setText("chr_A"); dlg2._replace_edit.setText("chr_C")
+assert "chr_A_model.ma" not in dlg2._preview.text(), dlg2._preview.text()
+dlg2._recursive_cb.setChecked(True)
+pv = dlg2._preview.text()
+assert "chr_A/chr_A_model.ma → chr_C_model.ma" in pv, pv
+assert "chr_A/sub/chr_A_rig.ma → chr_C_rig.ma" in pv, pv
+dlg2._recursive_cb.setChecked(False)
+assert "sub/chr_A_rig.ma" not in dlg2._preview.text()
+print("duplicate dialog switch + inside preview: OK")
+
 # 5) Tab で次の項目の名前変更へ
 b = make_panel()
 for n in ("t1.ma", "t2.ma"):
