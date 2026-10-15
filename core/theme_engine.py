@@ -319,6 +319,8 @@ def build_qss(mode="dark"):
         "fill_subtle_hover": c["fill_subtle_hover"],
         "fill_subtle_pressed": c["fill_subtle_pressed"],
         "error": c["error"],
+        # r146: «ここに居ます» と呼びかける色（コンパクトのパックが光る）
+        "warning": c.get("warning", c["error"]),
         "selection": c["selection"],
         "on_selection": c["on_selection"],
         # r144: 下階層を表示中の項目（＝フォーカスの無いカラムの選択）
@@ -521,16 +523,21 @@ QDockWidget::title {{
 QSplitter::handle {{ background-color: {hairline}; }}
 QSplitter::handle:horizontal {{ width: 1px; }}
 QSplitter::handle:vertical {{ height: 1px; }}
-/* アドレス欄の «ディレクトリ｜ファイル名» のバーは掴めないと意味が無いので、
-   1px ではなく当たり判定のある幅を持たせる（r146、ユーザー指示 2026-10-14）。*/
+/* アドレス欄の «ディレクトリ｜ファイル名» のバー（r146）。
+   掴めないと意味が無いので当たり判定は 7px 取るが、**線は出さない**。
+   線を引くと、丸い角を持つ入力欄との間でどうしても «ズレて見える»
+   （ユーザー報告 2026-10-15）。欄と欄の間の «すき間» そのものが仕切りに
+   なっているので、普段は透明にしておき、乗せた時だけ中央に出す。 */
 QSplitter#mfmAddressSplit::handle:horizontal {{
     width: 7px;
     background-color: transparent;
-    border-left: 1px solid {outline_variant};
-    margin: 3px 0px;
+    border: none;
+    image: none;
 }}
 QSplitter#mfmAddressSplit::handle:horizontal:hover {{
-    border-left: 1px solid {primary};
+    background-color: {primary};
+    margin: 5px 3px;
+    border-radius: 1px;
 }}
 
 /* ---------- Tabs ---------- */

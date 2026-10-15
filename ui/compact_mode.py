@@ -106,12 +106,31 @@ class _OpenButton(QToolButton):
         self._timer.setInterval(self.HOVER_OPEN_MS)
         self._timer.timeout.connect(self._open_if_still_here)
 
+    def _cursor_on_me(self) -> bool:
+        """カーソルが自分の上にあるか（r146、実機 2026-10-15）。
+
+        ``underMouse()`` は «enter を受け取ったか» に依存するので、
+        ウィンドウが **カーソルの下に出てきた** 時は False のままになる。
+        畳んだ直後にマウスを乗せても開かなかったのはこれ。座標で見る。"""
+        try:
+            return self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        except Exception:
+            return False
+
     def _open_if_still_here(self):
         try:
-            if self.underMouse():
+            if self._cursor_on_me():
                 self._puck.controller.expand()
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py _OpenButton._open_if_still_here")
+
+    def arm_if_hovered(self):
+        """カーソルが既に乗っていたら、乗せた時と同じように待ち始める。
+
+        パックは «畳んだ場所» に出るので、カーソルの下に現れることがある。
+        その時 Qt は enterEvent を出さないので、自分で見て構える。"""
+        if self._cursor_on_me():
+            self._timer.start()
 
     def enterEvent(self, e):
         self._timer.start()
@@ -149,6 +168,11 @@ class _Puck(QWidget):
             _swallow(_e, "ui/compact_mode.py _Puck(icon)")
         self.setObjectName("mfmCompactPuck")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        # r146（ユーザー報告 2026-10-15「コンパクトの縁に黒い四角のあまりが
+        # 見えます」）: 角を丸めているのに窓そのものは四角いので、角の外側に
+        # 窓の地色（黒）が残って見える。透過にして «丸の外は何も無い» に
+        # する。本体ではなくこの小窓だけなので、描画経路を変える影響は小さい。
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         # r146: 出す時にフォーカスを奪わない。奪うと «畳む → パックが出る →
         # アクティブになる → 下の event() が開く → カーソルは外なので畳む»
         # という点滅ループになる（道具窓を開いていると特に起きやすい）。
@@ -199,12 +223,10 @@ class _Puck(QWidget):
             set_taskbar_button(self, False)
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py _Puck(taskbar)")
-        self.setStyleSheet(
-            "#mfmCompactPuck{background:%(plane_header)s;"
-            "border:1px solid %(primary)s;border-radius:7px;}"
-            "#mfmCompactRestore{background:transparent;border:none;}"
-            "#mfmCompactRestore:hover{background:%(state_hover)s;"
-            "border-radius:5px;}" % v)
+        # 線は «もう少し目立つ様に»（ユーザー指示 2026-10-15）。2px にして
+        # 呼びかけ（flash）の時はオレンジへ変える。
+        self._qss_v = v
+        self.setStyleSheet(self._qss(False))
 
 
     # r146 後半（ユーザー報告 2026-10-14）:
@@ -275,9 +297,67 @@ class _Puck(QWidget):
             elif act is a_leave:
                 self.controller.set_active(False)
             elif act is a_min:
-                self.showMinimized()
+                # r146（ユーザー報告 2026-10-15「最小化だけ通常ウィンドウが
+                # 開くだけになってます」）: パック自身を最小化しても意味が
+                # 無い（タスクバーのボタンを持っていない）。アプリとして
+                # 最小化する＝本体をタスクバーへ入れ、パックも引っ込める。
+                self.controller.minimize_to_taskbar()
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py _Puck.contextMenuEvent")
+
+    # ── 見た目 ───────────────────────────────────────────────────
+    # 呼びかけの色はテーマから取る（signal amber）。ベタ書きしない。
+    FLASH_KEY = "warning"
+    FLASH_TIMES = 6
+    FLASH_MS = 140
+
+    def _qss(self, alert: bool) -> str:
+        v = self._qss_v
+        edge = v.get(self.FLASH_KEY, v["error"]) if alert else v["primary"]
+        width = 3 if alert else 2
+        base = ("#mfmCompactPuck{background:%(plane_header)s;"
+                "border-radius:8px;}"
+                "#mfmCompactRestore{background:transparent;border:none;}"
+                "#mfmCompactRestore:hover{background:%(state_hover)s;"
+                "border-radius:5px;}" % v)
+        # 枠の太さと色だけは状態で変えるので、トークン展開の外で足す
+        return base + ("#mfmCompactPuck{border:" + str(width)
+                       + "px solid " + edge + ";}")
+
+    def flash(self):
+        """«ここに居ます» とユーザーに見せる（r146、ユーザー指示 2026-10-15）。
+
+          「タスクバーをコンパクトでクリックすると通常ウィンドウは一瞬でる
+            だけでバグに見えるので、コンパクトのままオレンジ色なりの蛍光色を
+            一度ユーザーに視認させるために光らせるでお願いします。」
+        """
+        t = getattr(self, "_flash_timer", None)
+        if t is not None:
+            t.stop()
+        self.show()
+        self.raise_()
+        self._flash_left = self.FLASH_TIMES
+        t = QTimer(self)
+        t.setInterval(self.FLASH_MS)
+
+        def _step():
+            self._flash_left -= 1
+            self.setStyleSheet(self._qss(self._flash_left % 2 == 1))
+            if self._flash_left <= 0:
+                t.stop()
+                self.setStyleSheet(self._qss(False))
+        t.timeout.connect(_step)
+        self._flash_timer = t
+        self.setStyleSheet(self._qss(True))
+        t.start()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # カーソルの下に出てきた時も «乗せた» 扱いで構える（r146）
+        try:
+            QTimer.singleShot(0, self.btn.arm_if_hovered)
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _Puck.showEvent")
 
     def set_mirrored(self, on: bool):
         """左右を入れ替える（r145、指示 2026-10-09）。
@@ -379,6 +459,43 @@ class CompactController(QObject):
 
     def toggle(self):
         self.set_active(not self._active)
+
+    def notice(self):
+        """«ここに居ます» をユーザーに見せる（開かない。r146）。
+
+        ユーザー指示 2026-10-15:
+          「タスクバーをコンパクトでクリックすると通常ウィンドウは一瞬でる
+            だけでバグに見えるので、コンパクトのままオレンジ色なりの蛍光色を
+            一度ユーザーに視認させるために光らせるでお願いします。」
+        本体を開くと、カーソルはタスクバーにあるので次の監視ですぐ畳まれ、
+        «一瞬出て消える» になる。開かずにパックを光らせて知らせる。"""
+        if not self._active or self._expanded:
+            return
+        puck = self._ensure_puck()
+        self._park_window()          # 起こされて表に出ていたら退け直す
+        try:
+            puck.flash()
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py notice")
+
+    def minimize_to_taskbar(self):
+        """アプリとして最小化する（パックも引っ込める。r146）。"""
+        if self._puck is not None:
+            try:
+                self._puck.hide()
+            except Exception as _e:
+                _swallow(_e, "ui/compact_mode.py minimize_to_taskbar(puck)")
+        try:
+            self._win.showMinimized()
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py minimize_to_taskbar(win)")
+
+    def restore_from_taskbar(self):
+        """最小化から戻された時（コンパクト中）。パックを出して知らせる。"""
+        if not self._active or self._expanded:
+            return
+        self._park_window()
+        self.notice()
 
     def close_puck(self):
         """パックを閉じて手放す（r146 後半）。
@@ -609,7 +726,13 @@ class CompactController(QObject):
             return
         puck = self._ensure_puck()
         # 本体がまだ見えているうちに、対応するパックの位置を決める
-        if self._win.isVisible():
+        # r146（ユーザー報告 2026-10-15「コンパクトで再起動すると、必ず画面の
+        # 一番左上にでてくる。元々閉じた場所に出て欲しい。」）:
+        # 起動時は本体を «出す前に» 画面の外へ退けてある。その状態で
+        # «本体の角» からパックの位置を決めると、画面外の座標になり、
+        # _clamp で主画面の左上へ引き戻されて、しかもそれが保存されていた。
+        # 退けてある時は触らない（覚えている置き場所をそのまま使う）。
+        if self._win.isVisible() and not self.is_parked():
             puck.move(self._clamp(self._puck_pos_for_window(), puck.size()))
         # r146 後半（ユーザー報告 2026-10-14）:
         #   「コンパクト⇔通常を繰り返すだけで、どんどん UI が左上に
@@ -910,22 +1033,11 @@ class CompactController(QObject):
                 return True
         return False
 
-    def _typing(self) -> bool:
-        """文字入力中か（入力中は畳まない）。
-
-        r146: 本体だけでなく «本体から開いた道具窓» で打っている時も対象。
-        設定ダイアログに文字を打っている最中にマウスが窓の外にあると、
-        それだけで畳まれていた。"""
-        app = QApplication.instance()
-        if app is None:
-            return False
-        act = app.activeWindow()
-        if act is None:
-            return False
-        if act is not self._win and not self._owned_by_win(act):
-            return False
-        fw = app.focusWidget()
-        return isinstance(fw, QLineEdit) and fw.hasFocus()
+    # r146（ユーザー指示 2026-10-15）: «文字入力中は畳まない» は撤去した。
+    # 「マネージャー関連のウィンドウのどれがアクティブでも、全てから
+    #   マウスが離れているとコンパクトにしてください」という指示と
+    # ぶつかるため（Maya の起動設定を開いたまま離れても畳まれなかった）。
+    # 判断は _cursor_inside() 一本に絞る。
 
     def _tick(self):
         if not self._active or not self._expanded:
@@ -958,6 +1070,12 @@ class CompactController(QObject):
                     self._drag_until = 0.0      # 中に入った＝猶予は役目を終えた
                 return
             self._drag_until = 0.0
-        if self._busy() or self._typing() or self._cursor_inside():
+        # r146（ユーザー指示 2026-10-15）:
+        #   「マネージャー関連のウィンドウのどれがアクティブでも、
+        #     全てからマウスが離れているとコンパクトにしてください。」
+        # _typing()（文字入力中は畳まない）はこれと真っ向からぶつかるので
+        # **外した**。判断の基準は «マウスがどこにあるか» 1 本にする
+        # （_cursor_inside は本体と道具窓を全部見ている）。
+        if self._busy() or self._cursor_inside():
             return
         self.collapse()

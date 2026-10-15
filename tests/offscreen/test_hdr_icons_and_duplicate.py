@@ -72,7 +72,8 @@ def s1():
 def s2():
     assert b._rename_inline()
     cv, _, _ = find_item(b, "t1.ma")
-    ed = [e for e in cv.findChildren(QLineEdit) if e.objectName() == "mfmInlineRename"][0]
+    ed = [e for e in b.findChildren(QLineEdit)
+          if e.objectName() == "mfmInlineRename"][0]
     ed.selectAll(); QTest.keyClicks(ed, "u1.ma"); QTest.keyClick(ed, Qt.Key_Tab)
     QTimer.singleShot(500, s3)
 
@@ -80,7 +81,7 @@ def s2():
 def s3():
     assert os.path.exists(os.path.join(d, "u1.ma")), os.listdir(d)
     cv, _, _ = find_item(b, "t2.ma")
-    eds = [e for e in cv.findChildren(QLineEdit)
+    eds = [e for e in b.findChildren(QLineEdit)
            if e.objectName() == "mfmInlineRename" and e.isVisible()]
     assert eds and eds[0].text() == "t2.ma", "Tab did not move rename to next item"
     QTest.keyClick(eds[0], Qt.Key_Escape)

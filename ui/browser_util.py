@@ -184,6 +184,13 @@ class _SafeIconProvider(QFileIconProvider):
         self._lock = threading.Lock()
         self._folder = None
         self._file = None
+        # «フォルダかどうか» の答えを覚える／裏で調べる（r146）
+        import queue as _queue
+        self._isdir = {}
+        self._asking = set()
+        self._ask = _queue.Queue()
+        threading.Thread(target=self._isdir_worker, daemon=True,
+                         name="mfm-icon-isdir").start()
 
     def _generic(self, kind):
         try:
@@ -191,15 +198,62 @@ class _SafeIconProvider(QFileIconProvider):
         except Exception:
             return QIcon()
 
+    # ── «フォルダかどうか» を UI スレッドで待たない（r146、実機 2026-10-15）
+    #
+    # mfm_freeze.log に 21.1 秒のフリーズが記録され、止まっていたのは
+    # ここの ``arg.isDir()`` だった。QFileInfo.isDir() はディスクに
+    # 問い合わせる。OneDrive の «実体の無いファイル» や、消した直後のパス、
+    # 応答の悪い共有では、1 回で数十秒返らないことがある。アイコンは
+    # **見た目だけ** のものなので、ここで待つ価値は無い。
+    #
+    # 代わりに
+    #   * 答えを覚えているならそれを使う
+    #   * 知らなければ «拡張子が無ければフォルダ» と仮に決めて即返し、
+    #     本当の答えは裏のスレッドで調べて覚える（次の描画で正しくなる）
+    # とする。待たないので UI は止まらない。
+    def _isdir_nowait(self, path: str, has_ext: bool) -> bool:
+        from core.diag import diag_off as _d
+        if _d("old_icon_isdir"):
+            import os
+            try:
+                return os.path.isdir(path)
+            except OSError:
+                return False
+        if not path:
+            return not has_ext
+        with self._lock:
+            known = self._isdir.get(path)
+            if known is None and path not in self._asking:
+                self._asking.add(path)
+                self._ask.put(path)
+        if known is not None:
+            return known
+        return not has_ext              # 仮の答え（拡張子が無ければフォルダ）
+
+    def _isdir_worker(self):
+        import os
+        while True:
+            path = self._ask.get()
+            try:
+                v = os.path.isdir(path)
+            except OSError:
+                v = False
+            with self._lock:
+                self._isdir[path] = v
+                self._asking.discard(path)
+                if len(self._isdir) > 20000:
+                    self._isdir.clear()   # 覚えすぎない
+
     def icon(self, arg):
         try:
             if isinstance(arg, QFileInfo):
-                if arg.isDir():
+                ext0 = arg.suffix().lower()
+                if self._isdir_nowait(arg.filePath(), bool(ext0)):
                     with self._lock:
                         if self._folder is None:
                             self._folder = self._generic(QFileIconProvider.Folder)
                         return self._folder
-                ext = arg.suffix().lower()
+                ext = ext0
                 if not ext or ext in self._GENERIC_EXT:
                     with self._lock:
                         if self._file is None:

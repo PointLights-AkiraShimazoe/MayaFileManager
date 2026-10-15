@@ -86,18 +86,27 @@ else:
             exec(_mfm_c)
             _mfm_r = None
     except Exception as _e:
+        # r146（ユーザー指示 2026-10-15）:
+        #   「maya でエラーとなった際に、maya で 2 回、マネージャーで 1 回の
+        #     エラーログがでるのは正直邪魔です。内容がわかれば 1 回でよい
+        #     もののハズです。」
+        # ここで raise していたので、**読みやすい 1 行**（下の _l）に加えて
+        # Maya 自身が Traceback をもう 1 回出していた。投げ直さず、
+        # 結果の文字列として返す。マネージャー側はこの文字列を見て
+        # «失敗» と判断するので、伝わる情報は変わらない。
         _l(_M["fail"] + str(_e), "error")
-        raise
-    _s = "" if _mfm_r is None else str(_mfm_r)
-    _low = _s.strip().lower()
-    if _low.startswith("error:") or _low.startswith("failed:"):
-        _l(_M["fail"] + _s.split(":", 1)[1].strip(), "error")
-    elif _low.startswith("cancelled"):
-        _l(_M["cancel"], "warning")
-    elif _low == "confirm":
-        _l(_M["confirm"], "info")
+        _mfm_r = "Error: " + str(_e)
     else:
-        _l(_M["done"], "info")
+        _s = "" if _mfm_r is None else str(_mfm_r)
+        _low = _s.strip().lower()
+        if _low.startswith("error:") or _low.startswith("failed:"):
+            _l(_M["fail"] + _s.split(":", 1)[1].strip(), "error")
+        elif _low.startswith("cancelled"):
+            _l(_M["cancel"], "warning")
+        elif _low == "confirm":
+            _l(_M["confirm"], "info")
+        else:
+            _l(_M["done"], "info")
 """
 
 

@@ -61,14 +61,16 @@ def test_maya_simple_results():
     assert LOG[0][1].startswith("[MayaFileManager] リファレンス: D:/proj/chr_A.ma"), LOG[0]
     # 戻り値はそのまま返る（マネージャーの挙動を変えない）
     assert eval(dcc_log.wrap_maya("'saved:x.ma'", "保存", "x.ma"), {}) == "saved:x.ma"
-    # 例外はログを出した上で再送出
+    # r146（ユーザー指示 2026-10-15）: 例外は «読める 1 行» にして返す。
+    #   「maya で 2 回、マネージャーで 1 回のエラーログがでるのは邪魔です。」
+    # 投げ直すと Maya 自身が Traceback をもう 1 回出すので、投げ直さない。
+    # 返す文字列は "Error: ..." なので、マネージャー側の判定は変わらない。
     LOG.clear()
-    try:
-        eval(dcc_log.wrap_maya("1/0", "開く", "x.ma"), {})
-        raise AssertionError("例外が握りつぶされた")
-    except ZeroDivisionError:
-        pass
+    res = eval(dcc_log.wrap_maya("1/0", "開く", "x.ma"), {})
+    assert str(res).startswith("Error:"), res
+    assert "division by zero" in str(res), res
     assert _levels() == ["info", "error"], LOG
+    assert len([1 for lv, _m in LOG if lv == "error"]) == 1, ("エラーが 2 行", LOG)
     print("maya: start/done/fail/cancel lines go to the Script Editor: OK")
 
 

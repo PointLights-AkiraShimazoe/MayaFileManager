@@ -19,7 +19,7 @@ from core.i18n import tr  # r118
 from core.compat import (
     Qt, Signal,
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QLineEdit, QComboBox,
-    QSpinBox, QGroupBox,
+    QSpinBox, QGroupBox, QToolButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QMessageBox, QColor
 )
@@ -93,6 +93,158 @@ class PreviewTable(QTableWidget):
 # Batch Rename Dialog
 # ---------------------------------------------------------------------------
 
+class _RuleRow(QWidget):
+    """変換ルール 1 件（r146、ユーザー指示 2026-10-15）。
+
+      「変換ルールを複数持てるようにしてください。
+        ＋ボタンで増やし、上から順に適用されたとして結果表示を出して
+        ください。」
+
+    1 件は «モード＋そのモードの引数» なので丸ごと 1 つのウィジェットに
+    まとめ、ダイアログ側は «これを縦に並べるだけ» にする。
+    """
+
+    changed = Signal()
+    remove_requested = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        head = QGridLayout(self)
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
+
+        head.addWidget(QLabel(tr("モード:", "Mode:")), 0, 0)
+        self._mode_combo = QComboBox()
+        self._mode_combo.addItems([
+            tr("文字列置換", "Find & Replace"),
+            tr("プレフィックス追加", "Add Prefix"),
+            tr("サフィックス追加", "Add Suffix"),
+            tr("連番", "Numbering"),
+            tr("正規表現", "Regular Expression"),
+        ])
+        self._mode_combo.setFixedWidth(160)
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        head.addWidget(self._mode_combo, 0, 1)
+        head.setColumnStretch(2, 1)
+
+        self._del_btn = QToolButton()
+        self._del_btn.setText("\u2715")
+        self._del_btn.setToolTip(tr("このルールを削除", "Remove this rule"))
+        self._del_btn.clicked.connect(lambda: self.remove_requested.emit(self))
+        head.addWidget(self._del_btn, 0, 3)
+
+        self._params_widget = QWidget()
+        self._params_layout = QGridLayout(self._params_widget)
+        self._params_layout.setContentsMargins(0, 0, 0, 0)
+        self._params_layout.setSpacing(6)
+        head.addWidget(self._params_widget, 1, 0, 1, 4)
+
+        self._replace_find_edit = QLineEdit()
+        self._replace_find_edit.setPlaceholderText(tr("検索文字列", "Text to find"))
+        self._replace_find_edit.textChanged.connect(lambda _t: self.changed.emit())
+        self._replace_repl_edit = QLineEdit()
+        self._replace_repl_edit.setPlaceholderText(tr("置換文字列", "Replacement text"))
+        self._replace_repl_edit.textChanged.connect(lambda _t: self.changed.emit())
+        self._prefix_edit = QLineEdit()
+        self._prefix_edit.setPlaceholderText(tr("追加するプレフィックス", "Prefix to add"))
+        self._prefix_edit.textChanged.connect(lambda _t: self.changed.emit())
+        self._suffix_edit = QLineEdit()
+        self._suffix_edit.setPlaceholderText(tr("追加するサフィックス", "Suffix to add"))
+        self._suffix_edit.textChanged.connect(lambda _t: self.changed.emit())
+        self._seq_token_edit = QLineEdit("{n}")
+        self._seq_token_edit.setFixedWidth(60)
+        self._seq_token_edit.textChanged.connect(lambda _t: self.changed.emit())
+        self._seq_start_spin = QSpinBox()
+        self._seq_start_spin.setRange(0, 99999)
+        self._seq_start_spin.setValue(1)
+        self._seq_start_spin.valueChanged.connect(lambda _v: self.changed.emit())
+        self._seq_pad_spin = QSpinBox()
+        self._seq_pad_spin.setRange(1, 8)
+        self._seq_pad_spin.setValue(3)
+        self._seq_pad_spin.valueChanged.connect(lambda _v: self.changed.emit())
+        self._regex_pattern_edit = QLineEdit()
+        self._regex_pattern_edit.setPlaceholderText(
+            tr("正規表現パターン (例: ^(.+)_v\\d+$)",
+               "Regex pattern (e.g. ^(.+)_v\\d+$)"))
+        self._regex_pattern_edit.textChanged.connect(lambda _t: self.changed.emit())
+        self._regex_replace_edit = QLineEdit()
+        self._regex_replace_edit.setPlaceholderText(
+            tr("置換文字列 (例: \\1)", "Replacement (e.g. \\1)"))
+        self._regex_replace_edit.textChanged.connect(lambda _t: self.changed.emit())
+
+        self._show_mode_params(0)
+
+    def set_removable(self, on: bool):
+        self._del_btn.setVisible(bool(on))
+
+    def _on_mode_changed(self, idx: int):
+        self._clear_params()
+        self._show_mode_params(idx)
+        self.changed.emit()
+
+    def _clear_params(self):
+        while self._params_layout.count():
+            item = self._params_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+
+    def _show_mode_params(self, idx: int):
+        pl = self._params_layout
+
+        if idx == 0:  # 文字列置換
+            pl.addWidget(QLabel(tr("検索:", "Find:")), 0, 0)
+            pl.addWidget(self._replace_find_edit, 0, 1)
+            pl.addWidget(QLabel(tr("置換:", "Replace:")), 0, 2)
+            pl.addWidget(self._replace_repl_edit, 0, 3)
+
+        elif idx == 1:  # プレフィックス
+            pl.addWidget(QLabel(tr("プレフィックス:", "Prefix:")), 0, 0)
+            pl.addWidget(self._prefix_edit, 0, 1)
+
+        elif idx == 2:  # サフィックス
+            pl.addWidget(QLabel(tr("サフィックス:", "Suffix:")), 0, 0)
+            pl.addWidget(self._suffix_edit, 0, 1)
+
+        elif idx == 3:  # 連番
+            pl.addWidget(QLabel(tr("置換トークン:", "Token:")), 0, 0)
+            pl.addWidget(self._seq_token_edit, 0, 1)
+            pl.addWidget(QLabel(tr("開始番号:", "Start:")), 0, 2)
+            pl.addWidget(self._seq_start_spin, 0, 3)
+            pl.addWidget(QLabel(tr("桁数:", "Digits:")), 0, 4)
+            pl.addWidget(self._seq_pad_spin, 0, 5)
+
+        elif idx == 4:  # 正規表現
+            pl.addWidget(QLabel(tr("パターン:", "Pattern:")), 0, 0)
+            pl.addWidget(self._regex_pattern_edit, 0, 1, 1, 3)
+            pl.addWidget(QLabel(tr("置換:", "Replace:")), 1, 0)
+            pl.addWidget(self._regex_replace_edit, 1, 1, 1, 3)
+
+    # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
+
+    def rule(self) -> RenameRule:
+        idx = self._mode_combo.currentIndex()
+        if idx == 0:
+            return RenameRule("replace",
+                              find=self._replace_find_edit.text(),
+                              replace=self._replace_repl_edit.text())
+        elif idx == 1:
+            return RenameRule("prefix", prefix=self._prefix_edit.text())
+        elif idx == 2:
+            return RenameRule("suffix", suffix=self._suffix_edit.text())
+        elif idx == 3:
+            return RenameRule("sequence",
+                              token=self._seq_token_edit.text(),
+                              start=self._seq_start_spin.value(),
+                              pad=self._seq_pad_spin.value())
+        elif idx == 4:
+            return RenameRule("regex",
+                              pattern=self._regex_pattern_edit.text(),
+                              replacement=self._regex_replace_edit.text())
+        return RenameRule("replace")
+
+
 class BatchRenameDialog(QDialog):
 
     renamed = Signal(list)  # List[Tuple[old_path, new_path]]
@@ -124,73 +276,34 @@ class BatchRenameDialog(QDialog):
         root.setSpacing(10)
 
         # ── Rule area ─────────────────────────────────────────────────
-        rule_group = QGroupBox(tr("変換ルール", "Rename Rule"))
-        rule_layout = QGridLayout(rule_group)
+        # r146（ユーザー指示 2026-10-15）: ルールは **複数** 持てる。
+        # ＋ で増やし、**上から順に** 当てた結果をプレビューに出す。
+        rule_group = QGroupBox(tr("変換ルール", "Rename Rules"))
+        rule_layout = QVBoxLayout(rule_group)
         rule_layout.setSpacing(8)
 
-        rule_layout.addWidget(QLabel(tr("モード:", "Mode:")), 0, 0)
-        self._mode_combo = QComboBox()
-        self._mode_combo.addItems([
-            tr("文字列置換", "Find & Replace"),
-            tr("プレフィックス追加", "Add Prefix"),
-            tr("サフィックス追加", "Add Suffix"),
-            tr("連番", "Numbering"),
-            tr("正規表現", "Regular Expression"),
-        ])
-        self._mode_combo.setFixedWidth(160)
-        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        rule_layout.addWidget(self._mode_combo, 0, 1)
+        self._rules_box = QWidget()
+        self._rules_layout = QVBoxLayout(self._rules_box)
+        self._rules_layout.setContentsMargins(0, 0, 0, 0)
+        self._rules_layout.setSpacing(6)
+        rule_layout.addWidget(self._rules_box)
 
-        # ── Stacked params area ───────────────────────────────────────
-        self._params_widget = QWidget()
-        self._params_layout = QGridLayout(self._params_widget)
-        self._params_layout.setContentsMargins(0, 0, 0, 0)
-        self._params_layout.setSpacing(6)
-        rule_layout.addWidget(self._params_widget, 1, 0, 1, 4)
+        add_row = QHBoxLayout()
+        self._add_rule_btn = QPushButton(tr("＋ ルールを追加", "+ Add rule"))
+        self._add_rule_btn.setAutoDefault(False)
+        self._add_rule_btn.setToolTip(tr(
+            "ルールは上から順に当たります（1 つ目の結果に 2 つ目を当てる）。",
+            "Rules are applied top to bottom (rule 2 runs on rule 1's result)."))
+        self._add_rule_btn.clicked.connect(lambda _c=False: self._add_rule())
+        add_row.addWidget(self._add_rule_btn)
+        add_row.addStretch()
+        rule_layout.addLayout(add_row)
 
-        # 文字列置換
-        self._replace_find_edit = QLineEdit()
-        self._replace_find_edit.setPlaceholderText(tr("検索文字列", "Text to find"))
-        self._replace_find_edit.textChanged.connect(self._update_preview)
-        self._replace_repl_edit = QLineEdit()
-        self._replace_repl_edit.setPlaceholderText(tr("置換文字列", "Replacement text"))
-        self._replace_repl_edit.textChanged.connect(self._update_preview)
-
-        # プレフィックス
-        self._prefix_edit = QLineEdit()
-        self._prefix_edit.setPlaceholderText(tr("追加するプレフィックス", "Prefix to add"))
-        self._prefix_edit.textChanged.connect(self._update_preview)
-
-        # サフィックス
-        self._suffix_edit = QLineEdit()
-        self._suffix_edit.setPlaceholderText(tr("追加するサフィックス", "Suffix to add"))
-        self._suffix_edit.textChanged.connect(self._update_preview)
-
-        # 連番
-        self._seq_token_edit = QLineEdit("{n}")
-        self._seq_token_edit.setFixedWidth(60)
-        self._seq_token_edit.textChanged.connect(self._update_preview)
-        self._seq_start_spin = QSpinBox()
-        self._seq_start_spin.setRange(0, 99999)
-        self._seq_start_spin.setValue(1)
-        self._seq_start_spin.valueChanged.connect(self._update_preview)
-        self._seq_pad_spin = QSpinBox()
-        self._seq_pad_spin.setRange(1, 8)
-        self._seq_pad_spin.setValue(3)
-        self._seq_pad_spin.valueChanged.connect(self._update_preview)
-
-        # 正規表現
-        self._regex_pattern_edit = QLineEdit()
-        self._regex_pattern_edit.setPlaceholderText(tr("正規表現パターン (例: ^(.+)_v\\d+$)",
-                                                       "Regex pattern (e.g. ^(.+)_v\\d+$)"))
-        self._regex_pattern_edit.textChanged.connect(self._update_preview)
-        self._regex_replace_edit = QLineEdit()
-        self._regex_replace_edit.setPlaceholderText(tr("置換文字列 (例: \\1)",
-                                                       "Replacement (e.g. \\1)"))
-        self._regex_replace_edit.textChanged.connect(self._update_preview)
+        self._rule_rows = []
+        self._preview_table = None      # まだ無い（_add_rule が触るので先に置く）
+        self._add_rule()
 
         root.addWidget(rule_group)
-        self._show_mode_params(0)
 
         # ── Case options ──────────────────────────────────────────────
         case_row = QHBoxLayout()
@@ -255,72 +368,39 @@ class BatchRenameDialog(QDialog):
     # Mode switching
     # ------------------------------------------------------------------
 
-    def _on_mode_changed(self, idx: int):
-        self._clear_params()
-        self._show_mode_params(idx)
+    def _add_rule(self):
+        row = _RuleRow()
+        row.changed.connect(self._update_preview)
+        row.remove_requested.connect(self._remove_rule)
+        self._rule_rows.append(row)
+        self._rules_layout.addWidget(row)
+        self._sync_rule_buttons()
         self._update_preview()
+        return row
 
-    def _clear_params(self):
-        while self._params_layout.count():
-            item = self._params_layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
+    def _remove_rule(self, row):
+        if row in self._rule_rows and len(self._rule_rows) > 1:
+            self._rule_rows.remove(row)
+            row.setParent(None)
+            row.deleteLater()
+            self._sync_rule_buttons()
+            self._update_preview()
 
-    def _show_mode_params(self, idx: int):
-        pl = self._params_layout
+    def _sync_rule_buttons(self):
+        """1 件しか無い時は «削除» を出さない（消せると空になる）。"""
+        many = len(self._rule_rows) > 1
+        for r in self._rule_rows:
+            r.set_removable(many)
 
-        if idx == 0:  # 文字列置換
-            pl.addWidget(QLabel(tr("検索:", "Find:")), 0, 0)
-            pl.addWidget(self._replace_find_edit, 0, 1)
-            pl.addWidget(QLabel(tr("置換:", "Replace:")), 0, 2)
-            pl.addWidget(self._replace_repl_edit, 0, 3)
-
-        elif idx == 1:  # プレフィックス
-            pl.addWidget(QLabel(tr("プレフィックス:", "Prefix:")), 0, 0)
-            pl.addWidget(self._prefix_edit, 0, 1)
-
-        elif idx == 2:  # サフィックス
-            pl.addWidget(QLabel(tr("サフィックス:", "Suffix:")), 0, 0)
-            pl.addWidget(self._suffix_edit, 0, 1)
-
-        elif idx == 3:  # 連番
-            pl.addWidget(QLabel(tr("置換トークン:", "Token:")), 0, 0)
-            pl.addWidget(self._seq_token_edit, 0, 1)
-            pl.addWidget(QLabel(tr("開始番号:", "Start:")), 0, 2)
-            pl.addWidget(self._seq_start_spin, 0, 3)
-            pl.addWidget(QLabel(tr("桁数:", "Digits:")), 0, 4)
-            pl.addWidget(self._seq_pad_spin, 0, 5)
-
-        elif idx == 4:  # 正規表現
-            pl.addWidget(QLabel(tr("パターン:", "Pattern:")), 0, 0)
-            pl.addWidget(self._regex_pattern_edit, 0, 1, 1, 3)
-            pl.addWidget(QLabel(tr("置換:", "Replace:")), 1, 0)
-            pl.addWidget(self._regex_replace_edit, 1, 1, 1, 3)
-
-    # ------------------------------------------------------------------
-    # Preview
-    # ------------------------------------------------------------------
+    def _build_rules(self):
+        """上から順に当てるルールの一覧（r146）。"""
+        return [r.rule() for r in getattr(self, "_rule_rows", [])]
 
     def _build_rule(self) -> RenameRule:
-        idx = self._mode_combo.currentIndex()
-        if idx == 0:
-            return RenameRule("replace",
-                              find=self._replace_find_edit.text(),
-                              replace=self._replace_repl_edit.text())
-        elif idx == 1:
-            return RenameRule("prefix", prefix=self._prefix_edit.text())
-        elif idx == 2:
-            return RenameRule("suffix", suffix=self._suffix_edit.text())
-        elif idx == 3:
-            return RenameRule("sequence",
-                              token=self._seq_token_edit.text(),
-                              start=self._seq_start_spin.value(),
-                              pad=self._seq_pad_spin.value())
-        elif idx == 4:
-            return RenameRule("regex",
-                              pattern=self._regex_pattern_edit.text(),
-                              replacement=self._regex_replace_edit.text())
-        return RenameRule("replace")
+        """後方互換（1 件目のルール）。"""
+        rules = self._build_rules()
+        return rules[0] if rules else RenameRule("replace")
+
 
     def _apply_case(self, name: str) -> str:
         idx = self._case_combo.currentIndex()
@@ -366,17 +446,27 @@ class BatchRenameDialog(QDialog):
         return sorted(pairs, key=lambda t: len(os.path.normpath(t[0]).split(os.sep)),
                       reverse=True)
 
-    def _update_preview(self):
-        rule = self._build_rule()
-        results = batch_rename(self._targets(), rule, dry_run=True)
+    def _new_name_for(self, name: str, index: int) -> str:
+        """ルールを **上から順に** 当てた結果の名前（r146）。
 
-        # Apply case transform to new names
+        1 つ目の結果に 2 つ目を当てる（«上から順に適用された» 結果を
+        そのままプレビューに出すため）。"""
+        for rule in self._build_rules():
+            name = rule.apply(name, index=index)
+        return self._apply_case(name)
+
+    def _update_preview(self):
+        if not getattr(self, "_rule_rows", None) \
+                or getattr(self, "_preview_table", None) is None:
+            return                      # 構築途中（まだ出す先が無い）
         case_results = []
-        for old, new, err in results:
-            if not err:
-                new_path = Path(new)
-                new_name = self._apply_case(new_path.name)
-                new = str(new_path.parent / new_name)
+        for i, old in enumerate(self._targets()):
+            op = Path(old)
+            try:
+                new = str(op.parent / self._new_name_for(op.name, i))
+                err = None
+            except Exception as e:
+                new, err = old, str(e)
             case_results.append((old, new, err))
 
         self._current_results = case_results

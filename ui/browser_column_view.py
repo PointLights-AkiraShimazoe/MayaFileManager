@@ -672,8 +672,8 @@ class CappedColumnView(QColumnView):
 
     # ── ゆっくり2回クリックで名前変更（r67、Explorer 準拠） ──────────────
     def _schedule_reclick_rename(self, path: str):
-        if not path:
-            return
+        if not path or self._inline_edit_open():
+            return                      # 編集中は予約そのものを作らない（r146）
         self._cancel_reclick_rename()
         t = QTimer(self)
         t.setSingleShot(True)
@@ -686,6 +686,18 @@ class CappedColumnView(QColumnView):
         t.start()
         self._reclick_timer = t
 
+    def set_inline_editing(self, on: bool):
+        """名前をその場編集している間だけ True（パネルが教える。r146）。
+
+        親を辿って探すのはやめた（辿れないことがあり、守りが素通りする）。
+        «編集を始めた/終えた» を持ち主から直接知らせてもらう。"""
+        self._mfm_inline_editing = bool(on)
+        if on:
+            self._cancel_reclick_rename()
+
+    def _inline_edit_open(self) -> bool:
+        return bool(getattr(self, "_mfm_inline_editing", False))
+
     def _cancel_reclick_rename(self):
         t = getattr(self, "_reclick_timer", None)
         if t is not None:
@@ -697,7 +709,15 @@ class CappedColumnView(QColumnView):
             self._reclick_timer = None
 
     def _fire_reclick_rename(self, path: str):
+        """ゆっくり 2 回クリックでの名前変更（Explorer 準拠）。
+
+        r146（実機 2026-10-15）: **既に名前を打っている最中なら何もしない。**
+        以前はここから名前変更をやり直していたので、開いている編集欄が
+        作り直され、打っている途中の入力が消えた（回帰スイートでは
+        «Internal C++ object already deleted» として出た）。"""
         self._reclick_timer = None
+        if self._inline_edit_open():
+            return
         cb = getattr(self, "_rename_cb", None)
         if callable(cb):
             try:

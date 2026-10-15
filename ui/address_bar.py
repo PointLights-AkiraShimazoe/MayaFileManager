@@ -171,24 +171,27 @@ class AddressBar(QWidget):
             return d
         if not d:
             return f
-        return self.for_display(d.rstrip("/\\") + os.sep + f)
+        return self.for_display(d.rstrip("/\\") + "/" + f)
 
     @staticmethod
     def for_display(path: str) -> str:
-        """見た目を OS の区切り文字に揃える（r146、ユーザー報告 2026-10-14）。
+        """見た目を **スラッシュ** に揃える（r146、ユーザー指示 2026-10-15）。
 
-          「起動時にパスが / になってます。一度でも選択すれば \\ になります」
+          「そもそも Manager のパスが \\ になっています。MayaFileManager
+            なので、全ての状況で / にしてください。」
 
         Qt（QFileSystemModel.filePath）は Windows でも «C:/Work» と / で返し、
         os.path.join は «C:\\Work» と \\ で返す。どちらが入るかは経路次第
-        なので、そのまま出すと起動直後だけ / で、クリックすると \\ に化けた。
-        Windows ユーザーが見慣れているのは \\ なので、**入口で揃える**。
+        なので、そのまま出すと起動直後とクリック後で見え方が変わっていた。
+        Maya は内部でもスクリプトでも / を使うので、**/ に寄せる**。
+        ここから Maya へそのまま貼れることを優先する。
 
-        POSIX では \\ はファイル名に使える普通の文字なので触らない。
-        UNC（\\\\server\\share）は / を含まないのでそのまま通る。
+        Windows でだけ変換する。POSIX では \\ はファイル名に使える普通の
+        文字なので、触ると本当に \\ を含む名前へ行けなくなる。
+        UNC（\\\\server\\share）も // 始まりとして Windows は解釈できる。
         """
         if os.sep == "\\" and path:
-            return path.replace("/", "\\")
+            return path.replace("\\", "/")
         return path
 
     def setText(self, path: str):

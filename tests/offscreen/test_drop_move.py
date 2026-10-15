@@ -75,7 +75,7 @@ def test_folder_overwrite_merges():
 def test_panel_guards():
     """自分の中へ／同じ場所へ のドロップは何もしない。"""
     calls = []
-    b._run_file_op = lambda title, work, done=None, total=0: calls.append(title)
+    b._run_file_op = lambda title, work, done=None, total=0, **_k: calls.append(title)
     b._on_files_dropped([A], os.path.join(A, "sub_not_exist"), True)
     assert not calls, "存在しない移動先で実行された"
     os.makedirs(os.path.join(A, "sub"), exist_ok=True)

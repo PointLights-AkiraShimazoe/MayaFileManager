@@ -147,8 +147,10 @@ check(deep_first[0][0].count(os.sep) >= deep_first[-1][0].count(os.sep),
       "実行は深い順（親を先に変えて子を迷子にしない）")
 
 # 実際に走らせる（prefix を付ける）
-d._mode_combo.setCurrentIndex(1)          # プレフィックス追加
-d._prefix_edit.setText("P_")
+# r146: ルールは複数持てるようになったので 1 件目を取る
+_r0 = d._rule_rows[0]
+_r0._mode_combo.setCurrentIndex(1)        # プレフィックス追加
+_r0._prefix_edit.setText("P_")
 app.processEvents()
 pairs = [(o, n) for o, n, e in d._current_results if e is None]
 for old_p, new_p in d._deepest_first(pairs):

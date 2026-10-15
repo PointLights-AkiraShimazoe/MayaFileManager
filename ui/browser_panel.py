@@ -6,6 +6,7 @@
 r110 でモジュールを分割した。旧 browser_panel.* の名前は互換のため
 ここで再エクスポートしているので、既存の import は変更不要。"""
 from core.diag import swallow as _swallow  # r112
+from core.diag import diag_off as _diag_off  # r146 切り分け用
 from core.i18n import tr  # r118: モジュールレベルで提供（ローカル import 不要）
 
 import os
@@ -2853,6 +2854,15 @@ class BrowserPanel(QWidget):
                       release_cb=lambda lv=1: self._release_fs_handles(src, lv))
         if not ok:
             _mfm_warn("rename failed: %s -> %s : %r" % (src, dst, err))
+        # r146（ユーザー指示 2026-10-15）:
+        #   「リネームでも先出しのカラム再サーチの様な動きをします。
+        #     この挙動は本来どんな操作の結果でも起きてはならないものとして
+        #     全て修正してください。」
+        # release_cb が走ると見張りが落ちる（Windows のハンドルを手放すため
+        # 必要）。**落としたら必ず付け直す。** 付け直さないと以後その場所の
+        # 変化が届かず «古い名前が残る» ことになる。
+        self._rearm_fs_watch([os.path.dirname(src.rstrip("/\\")),
+                              os.path.dirname(dst.rstrip("/\\"))])
         return ok, err
 
     @staticmethod
@@ -2970,12 +2980,25 @@ class BrowserPanel(QWidget):
                 old_editor.close()
             except Exception as _e:
                 _swallow(_e, "ui/browser_panel.py:2380 _open_inline_editor")
+        # r146: 開いた瞬間に «ゆっくり 2 回クリック» の予約を捨てる。
+        # 残っていると、打っている最中に編集欄を作り直してしまう。
+        self._inline_editing = True
+        try:
+            self._column_view.set_inline_editing(True)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _open_inline_editor(reclick off)")
         rect = view.visualRect(idx)
         if not rect.isValid():
             self._rename_dialog([path])
             return
         vp = view.viewport()
-        ed = QLineEdit(vp)
+        # r146（実機 2026-10-15）: **編集欄はカラムの子にしない。**
+        # カラム（とそのビューポート）は、モデルの見張りを付け直したり
+        # 表示を読み直したりすると作り直される。その巻き添えで編集欄ごと
+        # 消え、打ちかけの名前が失われていた（回帰スイートでは
+        # «Internal C++ object already deleted» として出た）。
+        # パネルの子にして、カラムの作り直しから切り離す。
+        ed = QLineEdit(self)
         ed.setObjectName("mfmInlineRename")
         name = os.path.basename(path.rstrip("/\\"))
         ed.setText(name)
@@ -2987,7 +3010,14 @@ class BrowserPanel(QWidget):
             isz = -1
         dec = (isz if isz > 0 else 16) + 6
         ed.setAutoFillBackground(True)
-        ed.setGeometry(rect.left() + dec, rect.top(), max(80, rect.width() - dec), rect.height())
+        # 位置はカラムの座標なので、パネルの座標へ移し替える
+        try:
+            tl = self.mapFromGlobal(vp.mapToGlobal(rect.topLeft()))
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _open_inline_editor(map)")
+            tl = rect.topLeft()
+        ed.setGeometry(tl.x() + dec, tl.y(),
+                       max(80, rect.width() - dec), rect.height())
         ed.show()
         ed.raise_()
         ed.setFocus(Qt.OtherFocusReason)
@@ -3008,6 +3038,11 @@ class BrowserPanel(QWidget):
             except Exception as _e:
                 _swallow(_e, "ui/browser_panel.py:2417 finish")
             self._inline_editor = None
+            self._inline_editing = False
+            try:
+                self._column_view.set_inline_editing(False)
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py finish(reclick on)")
             if not commit or not new_name or new_name == name:
                 return
             if any(c in new_name for c in '\\/:*?"<>|'):
@@ -3038,7 +3073,36 @@ class BrowserPanel(QWidget):
                 _mfm_log("rename post error: %r" % (e,))
 
         ed.returnPressed.connect(lambda: finish(True))
-        ed.editingFinished.connect(lambda: finish(True))   # フォーカス喪失=確定（Explorer準拠）
+
+        def _on_focus_out():
+            """フォーカスが外れた＝確定（Explorer 準拠）。
+
+            r146（実機 2026-10-15）: ただし **誰も受け取っていない時は別**。
+            カラムが組み直されたりして «こちらの都合で» 焦点が外れただけの
+            時まで確定すると、打ちかけの名前が勝手に決まってしまう
+            （回帰スイートでは、打っている最中に編集欄が消える形で出た）。
+            受け手がいない時は焦点を取り戻して編集を続ける。"""
+            # r146（実機 2026-10-15）: **こちらの都合で焦点が外れた時は確定
+            # しない。** カラムは、見張りの付け直しや読み直しで作り直される。
+            # その拍子に焦点が移っただけで «確定» にすると、打ちかけの名前が
+            # 勝手に決まり、編集欄も消える（打った内容が失われる）。
+            # 確定するのは «別のウィンドウへ移った» 時だけにする。
+            # 同じウィンドウの中にいる限りは編集を続けられる
+            # （決めるのは Enter、やめるのは Esc）。
+            app = QApplication.instance()
+            aw = app.activeWindow() if app is not None else None
+            mine = self.window()
+            if aw is not None and aw is not mine:
+                finish(True)            # 別のウィンドウへ移った＝確定
+                return
+            def _refocus():
+                try:
+                    if not state["done"] and is_alive(ed) and ed.isVisible():
+                        ed.setFocus(Qt.OtherFocusReason)
+                except RuntimeError:
+                    pass
+            QTimer.singleShot(0, _refocus)
+        ed.editingFinished.connect(_on_focus_out)
 
         # Tab / Shift+Tab: 確定して同じカラムの次／前の項目の名前変更へ（r67）
         def _neighbor_path(step: int):
@@ -3163,21 +3227,109 @@ class BrowserPanel(QWidget):
     def _resync_dir(self, folder: str):
         """そのフォルダをモデルに読み直させる（r146）。
 
-        QFileSystemModel には «このディレクトリだけ再読込» の API が無い。
-        既にこのクラスが持っている «rootPath を空へ逃がして当て直す» 手を
-        そのまま使う（_release_fs_handles の level 1 と同じ仕掛け）。
-        表示中のカラム構成は変えない。"""
+        **rootPath を空へ逃がしてはいけない。**（ユーザー報告 2026-10-15）
+          「フォルダを削除したら、カラムが一度左に移動し、再度サーチされる
+            ように右に戻る挙動をしました。」
+          「カラムは D ドライブまで巻き戻りました。」
+        setRootPath("") は «これまでに読んだフォルダの見張りを全部落とす»
+        ので、カラムが組み直されて左へ飛ぶ。付け直すのは «そのフォルダ»
+        だけで足りる。"""
         try:
             if not folder or not os.path.isdir(folder):
                 return
-            m = self._fs_model
-            keep = m.rootPath()
-            m.setRootPath("")
-            m.setRootPath(keep if keep and os.path.isdir(keep) else folder)
-            self._flush_deleted()
-            self._refresh_flat_view()
+            self._rearm_fs_watch([folder])      # 編集中なら中で後回しになる
         except Exception as e:
             _mfm_log("resync_dir error: %r" % (e,))
+
+    def _rearm_fs_watch(self, dirs):
+        """フォルダの «見張り» を付け直す（r146、実機 2026-10-15）。
+
+        ユーザー報告:
+          「コピーでも移動でも、結果が即座に反映されておらず、完了しても
+            反映されずなので駄目です。1 分近く待っても反映がされてないです。」
+
+        原因はここ。削除・移動の **前** に、Windows のハンドルを手放すため
+        ``setRootPath("")`` で見張りを全部落としている（それ自体は必要）。
+        ところが **後で付け直していなかった** ので、そのフォルダで何が起きても
+        モデルに届かなくなっていた＝いつまで経っても表示が変わらない。
+        操作が終わったら必ずここを通して付け直す。"""
+        if _diag_off("no_rearm"):
+            return
+        # r146（実機 2026-10-15）: **すぐにはやらない。**
+        # 付け直しはカラムを組み直すので、操作の直後にやると «その場編集を
+        # 開いた直後» とぶつかる。少し置いてからまとめて 1 回だけ行う。
+        want = [d for d in (dirs or []) if d]
+        pend = getattr(self, "_rearm_pending", None)
+        if pend is None:
+            pend = self._rearm_pending = []
+        for d in want:
+            if d not in pend:
+                pend.append(d)
+        t = getattr(self, "_rearm_timer", None)
+        if t is None:
+            t = self._rearm_timer = QTimer(self)
+            t.setSingleShot(True)
+            t.timeout.connect(self._rearm_fs_watch_now)
+        t.start(900)
+
+    def _rearm_fs_watch_now(self):
+        """溜めておいた «見張りの付け直し» を 1 回で片付ける（r146）。"""
+        dirs = list(getattr(self, "_rearm_pending", []) or [])
+        self._rearm_pending = []
+        # r146（実機 2026-10-15）: **名前を打っている最中は触らない。**
+        # 見張りの付け直しはカラムを組み直すことがあり、その巻き添えで
+        # インライン編集の QLineEdit が消える（Windows の回帰スイートで
+        # «Internal C++ object already deleted» として出た）。終わるまで待つ。
+        # 判定は «自分で立てた旗» だけで行う（実機 2026-10-15）。
+        # ウィジェットの生存や可視を見る形にしていたが、守りが素通りする
+        # 場面があった。始めた／終えたを自分で覚える。
+        if getattr(self, "_inline_editing", False):
+            # 名前を打っている最中は触らない。終わってからやる。
+            self._rearm_pending = list(dirs or [])
+            t = getattr(self, "_rearm_timer", None)
+            if t is not None:
+                t.start(700)
+            return
+        m = self._fs_model
+        # r146（実機 2026-10-15）: Windows では «同じ場所を挙げ直す» だけでは
+        # 見張りが戻らない（Qt は既に読んだ節を読み直さない）。
+        # _release_fs_handles と同じく、いったん空を挙げてから付け直す。
+        # モデルを作り直すわけではないので、カラムの index は生きたまま。
+        try:
+            m.setRootPath("")
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _rearm_fs_watch(clear)")
+        done = []
+        for d in (dirs or []):
+            if not d:
+                continue
+            try:
+                if not os.path.isdir(d):
+                    d = os.path.dirname(d.rstrip("/\\"))
+                if not d or not os.path.isdir(d):
+                    continue
+            except OSError:
+                continue
+            k = os.path.normcase(os.path.normpath(d))
+            if k in done:
+                continue
+            done.append(k)
+            try:
+                m.setRootPath(d)
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py _rearm_fs_watch")
+            if len(done) >= 8:
+                break
+        # 最後は «今いる場所» に戻す（ここが見張られていないと一番困る）
+        cur = self._current_path or ""
+        try:
+            tgt = cur if os.path.isdir(cur) else os.path.dirname(cur or "")
+            if tgt and os.path.isdir(tgt):
+                m.setRootPath(tgt)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _rearm_fs_watch(cur)")
+        self._flush_deleted()
+        self._refresh_flat_view()
 
     def _rename_dialog(self, paths: List[str]):
         if len(paths) != 1:
@@ -3654,15 +3806,45 @@ class BrowserPanel(QWidget):
             except Exception as e:
                 notifier.finished.emit(None, str(e) or e.__class__.__name__)
 
+        # r146（ユーザー指示 2026-10-15）:
+        #   「1 ファイルが長いと、動いていないようにも見えるので、処理が
+        #     動いている事がわかるように、回転するサークルなりを出して
+        #     ください。それが止まっていると、処理自体が止まっているのかと
+        #     気付けるようにしたい意図です。」
+        # 進捗の «数» は 1 ファイルが大きいと何十秒も動かない。別に
+        # «回り続ける印» を出し、**止まったら止まっていると分かる** ようにする。
+        # 回しているのは UI スレッドのタイマーなので、UI が固まれば止まる
+        # ＝ユーザーの意図どおりの合図になる。
+        SPIN = "◐◓◑◒"
+        state["spin"] = 0
+        state["label"] = title
+
+        def _paint_label():
+            mark = SPIN[state["spin"] % len(SPIN)]
+            dlg.setLabelText("%s  %s" % (state["label"], mark))
+
         def on_progress(i, n):
             if n > 0 and dlg.maximum() != n:
                 dlg.setMaximum(n)
             dlg.setValue(i)
-            dlg.setLabelText("%s  (%d / %d)" % (title, i, n) if n > 0 else title)
+            state["label"] = ("%s  (%d / %d)" % (title, i, n)) if n > 0 else title
+            _paint_label()
 
         # 項目数が少なく1件が重い（巨大ファイル）時も、0.4秒経ったら必ず出す
         tick = QTimer(self)
         tick.setInterval(200)
+
+        spin = QTimer(self)
+        spin.setInterval(160)
+
+        def _spin():
+            if state["done"]:
+                spin.stop()
+                return
+            state["spin"] += 1
+            _paint_label()
+        spin.timeout.connect(_spin)
+        spin.start()
 
         def on_tick():
             """0.4 秒を越えたら進捗ダイアログを «1 回だけ» 出す。
@@ -3686,6 +3868,7 @@ class BrowserPanel(QWidget):
         def done(res, err):
             state["done"] = True
             tick.stop()
+            spin.stop()
             file_locks.release(lock_token)
             try:
                 dlg.close()
@@ -3704,9 +3887,43 @@ class BrowserPanel(QWidget):
             # r72: 平坦ビューは静的モデル（QStandardItemModel）なので、削除/移動/
             # Undo 後に自分で作り直す（放置すると「削除できない」ように見える）
             self._refresh_flat_view()
+            # r146（ユーザー報告 2026-10-15「削除したものが残ったままの現象」）:
+            # カラムは QFileSystemModel の «フォルダの見張り» 頼みで、
+            # 消えた・増えたの通知は取りこぼすことがある（ネットワーク先や
+            # OneDrive、短時間に大量に動かした時）。操作が終わった時点で、
+            # 触ったフォルダだけ自分で読み直す。
+            if not _diag_off("no_post_resync"):
+                self._resync_touched(busy_paths)
+                # 見張りを «今いる場所» へ付け直す（これを忘れると、以後その
+                # フォルダの変化が永久に届かない＝反映されない）
+                self._rearm_fs_watch([self._current_path])
         notifier.progress.connect(on_progress)
         notifier.finished.connect(done)
         threading.Thread(target=run, daemon=True, name="mfm-file-op").start()
+
+    def _resync_touched(self, paths):
+        """操作が触ったフォルダを読み直す（r146）。
+
+        見張りの取りこぼしで «消したのに残っている / 増えたのに出ない» が
+        起きる。対象はせいぜい数件なので、終わったときに素直に読み直す。"""
+        dirs = []
+        for p in (paths or []):
+            if not p:
+                continue
+            try:
+                d = p if os.path.isdir(p) else os.path.dirname(p)
+            except OSError:
+                d = os.path.dirname(p)
+            if d and d not in dirs:
+                dirs.append(d)
+            parent = os.path.dirname(p.rstrip("/\\"))
+            if parent and parent not in dirs:
+                dirs.append(parent)
+        for d in dirs[:8]:
+            try:
+                self._resync_dir(d)
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py _resync_touched")
 
     def _refresh_flat_view(self):
         try:
@@ -3831,7 +4048,8 @@ class BrowserPanel(QWidget):
                        "Advanced copy: %d item(s) (Ctrl+Z to undo)") % len(results))
         self._run_file_op(tr("高度なコピー", "Advanced Copy"), work, done,
                           total=len(specs),
-                          busy_paths=[s for s, _d in specs] + [dest_dir])
+                          busy_paths=([s for s, _d in specs] + [dest_dir]
+                                      + [d for _s, d in specs]))
 
     def _on_files_dropped(self, paths: List[str], dest_dir: str,
                           forced=None, gpos=None):
@@ -3949,7 +4167,9 @@ class BrowserPanel(QWidget):
                     % (label, len(results), dest_dir))
             self._refresh_flat_view()
 
-        self._run_file_op(label, work, done, total=len(srcs))
+        # 移動元・移動先の «結果のパス» も走っている間は触らせない
+        self._run_file_op(label, work, done, total=len(srcs),
+                          busy_paths=(list(srcs) + [dest_dir]))
 
     def _duplicate_selected(self, paths: List[str] = None):
         """Ctrl+D / 右クリック「複製」: 同じ場所へ «元名_Copy» で複製（r67）。
@@ -3993,7 +4213,11 @@ class BrowserPanel(QWidget):
                 self.status_message.emit(
                     tr("複製: %d 件（Ctrl+Z で元に戻せます）",
                        "Duplicated %d item(s) (Ctrl+Z to undo)") % len(results))
-        self._run_file_op("複製", work, done, total=len(specs))
+        # r146（ユーザー報告 2026-10-15「複製先をリネーム出来てしまいました」）:
+        # 走っている間は **複製元も複製先も** 触らせない。
+        self._run_file_op("複製", work, done, total=len(specs),
+                          busy_paths=([s for s, _d in specs]
+                                      + [d for _s, d in specs]))
 
     def _operation_targets(self) -> List[str]:
         """キーボード操作（Ctrl+C/X/V, Delete）の対象。

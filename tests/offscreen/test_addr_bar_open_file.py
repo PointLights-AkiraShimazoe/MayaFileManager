@@ -49,7 +49,10 @@ def s1():
     _settle(600)
     assert opened == [os.path.normpath(target)], ("開かれていない", opened)
     # アドレス欄は直前のパスへ戻る
-    assert b._addr_bar.text() == b._current_path, \
+    # r146: アドレス欄は «/» で表示する（Maya に貼れる形）。突き合わせは
+    # 区切りを揃えてから行う。
+    assert b._addr_bar.text().replace("\\", "/") == \
+        b._current_path.replace("\\", "/"), \
         ("アドレス欄が戻っていない", b._addr_bar.text(), b._current_path)
     # 現在地もカラム構成も «一切» 変わらない
     assert _state() == before, ("カラムが動いている", before, _state())

@@ -1164,7 +1164,10 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
                 return                  # 起こされたわけではない
             if not c.accepts_activation():
                 return                  # 畳んだ直後の余熱
-            c.expand()
+            # r146（ユーザー指示 2026-10-15）: ここで開いてはいけない。
+            # カーソルはタスクバーにあるので、開いた直後の監視でまた畳まれ、
+            # «一瞬出て消える» ＝ バグに見える。開かずにパックを光らせる。
+            c.notice()
         except RuntimeError:
             return                      # 窓がもう無い
         except Exception as _e:

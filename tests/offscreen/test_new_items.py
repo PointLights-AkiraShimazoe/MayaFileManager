@@ -15,7 +15,7 @@ b.navigate_to(d)
 
 
 def _editor():
-    return [e for e in b._column_view.findChildren(QLineEdit)
+    return [e for e in b.findChildren(QLineEdit)
             if e.isVisible() and e.objectName() == "mfmInlineRename"]
 
 

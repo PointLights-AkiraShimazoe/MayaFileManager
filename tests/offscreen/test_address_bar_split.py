@@ -6,13 +6,15 @@
     フィールドを分けてください。その上で、一番右側にフルパスのコピー
     ボタンを付けてください。」
   「ファイル名とディレクトリ名の間に幅を調整出来るバーをください。」
-ユーザー報告 2026-10-14:
+ユーザー報告 2026-10-14 / 指示 2026-10-15:
   「起動時にパスが \\ になってます。一度でも選択すれば / になりますが、
     これはバグですね？」
+  「そもそも Manager のパスが \\ になっています。MayaFileManager なので、
+    全ての状況で / にしてください。」
 
 ここで固定すること:
   1) フォルダは左の欄だけ／ファイルは左＝親・右＝ファイル名
-  2) **区切り文字は OS に揃える**（Windows で \\ と / が混ざって見えない）
+  2) **区切り文字は / に揃える**（Maya へそのまま貼れる形）
   3) 入れた文字列は（区切りを揃えた上で）そのまま返る。組み直して
      «末尾が消える／引用符が落ちる» ようなことはしない
   4) 2 つの欄の間に掴めるバーがあり、幅が設定に残って次回も同じになる
@@ -61,15 +63,15 @@ check(ab.dir_edit.text() == disp(d) and ab.file_edit.text() == "scene_a.ma",
       % (ab.dir_edit.text(), ab.file_edit.text()))
 
 # ── 2) 区切り文字は OS に揃う ───────────────────────────────────
-ab.setText("C:/a/b.ma")
-check(os.sep not in ("\\",) or "/" not in ab.dir_edit.text(),
-      "Windows では / を残さない（%r）" % (ab.dir_edit.text(),))
+ab.setText("C:\\a\\b.ma")
+check(os.sep not in ("\\",) or "\\" not in ab.dir_edit.text(),
+      "Windows では \\ を残さない（%r）" % (ab.dir_edit.text(),))
 ab.setText("C:/a/b.ma")
 mixed = ab.text()
 ab.setText("C:\\a\\b.ma")
 if os.sep == "\\":
-    check(ab.text() == mixed,
-          "/ でも \\ でも同じ見え方になる（%r / %r）" % (mixed, ab.text()))
+    check(ab.text() == mixed and "\\" not in ab.text(),
+          "/ でも \\ でも «/» で同じ見え方（%r / %r）" % (mixed, ab.text()))
 else:
     # POSIX では \ はファイル名に使える «普通の文字» なので触ってはいけない。
     # ここで / に直すと、本当に \ を含む名前のファイルへ行けなくなる。

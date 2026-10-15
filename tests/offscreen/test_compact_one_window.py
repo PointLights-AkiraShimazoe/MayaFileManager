@@ -127,16 +127,32 @@ hides = [x for x in ast.walk(col or ast.Module(body=[], type_ignores=[]))
          and x.func.value.attr == "_win"]
 check(not hides, "畳む時に本体を hide() しない（タスクバーから消える）")
 
-# ── 3) タスクバーから起こされたら «開いた» 扱い ─────────────────
+# ── 3) タスクバーから起こされても «開かない»。パックを光らせる ──
+# ユーザー指示 2026-10-15:
+#   「タスクバーをコンパクトでクリックすると通常ウィンドウは一瞬でるだけで
+#     バグに見えるので、コンパクトのままオレンジ色なりの蛍光色を一度
+#     ユーザーに視認させるために光らせるでお願いします。」
 c._collapsed_at = 0.0           # 畳んだ直後の猶予を明けておく
 w.activateWindow()
 QTest.qWait(150)
 app.processEvents()
 w._compact_follow_window_state()
 app.processEvents()
-check(c.is_expanded(), "起こされたら開いた扱いになる")
-check(c._puck is None or not c._puck.isVisible(), "その時パックは引っ込む")
-check(not c.is_parked(), "本体が画面の中に戻る")
+check(not c.is_expanded(), "起こされても開かない（一瞬出て消えない）")
+check(c.is_parked(), "本体は画面の外のまま")
+check(c._puck is not None and c._puck.isVisible(), "パックは出たまま")
+check(getattr(c._puck, "_flash_timer", None) is not None,
+      "パックが光って «ここに居ます» と知らせる")
+from core.theme_engine import qss_vars as _qv
+warn = _qv().get(c._puck.FLASH_KEY, "")
+qss = c._puck.styleSheet()
+check(bool(warn) and warn in qss,
+      "光る色はテーマの注意色（%r / %r）" % (warn, qss[:70]))
+
+# 開く道（アイコンに乗せる）はそのまま効く
+c.expand()
+app.processEvents()
+check(c.is_expanded() and not c.is_parked(), "乗せれば今までどおり開く")
 
 # ── 4) 閉じたらパックも閉じる ───────────────────────────────────
 # （コンパクトは入ったまま。開いている状態から畳み直す）

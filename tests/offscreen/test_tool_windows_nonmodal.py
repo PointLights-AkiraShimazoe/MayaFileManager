@@ -106,6 +106,27 @@ def s1():
         "Manager を止める理由がコードに書かれていないモーダル:\n" + "\n".join(bad))
     print("every remaining modal dialog states why it must block: OK")
 
+    # ── r146（ユーザー指示 2026-10-15）: 保存ダイアログも拘束しない ──
+    #   「maya のシーン保存の際に manager 本体を触れなくなっています。
+    #     全てのウィンドウで拘束するなと伝えたはずですが？」
+    import ast as _ast
+    tree2 = _ast.parse(open(os.path.join(ROOT, "ui", "main_window_dcc.py"),
+                            encoding="utf-8").read())
+    fn = None
+    for n in _ast.walk(tree2):
+        if isinstance(n, _ast.FunctionDef) and n.name == "_dcc_save_dialog":
+            fn = n
+    assert fn is not None, "_dcc_save_dialog が見つからない"
+    execs = [x for x in _ast.walk(fn)
+             if isinstance(x, _ast.Call) and isinstance(x.func, _ast.Attribute)
+             and x.func.attr in ("exec", "exec_")]
+    assert not execs, "保存ダイアログを exec で開いている（本体が触れなくなる）"
+    calls = {x.func.attr for x in _ast.walk(fn)
+             if isinstance(x, _ast.Call) and isinstance(x.func, _ast.Attribute)}
+    assert "show" in calls, "非モーダルで出していない"
+    assert "connect" in calls, "押された時に続きをやる形になっていない"
+    print("save dialog is non-modal: OK")
+
     w.close()
     finish(True)
 

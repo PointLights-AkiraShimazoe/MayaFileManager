@@ -31,7 +31,8 @@ def s2():
     ok = b._rename_inline()
     assert ok, "inline editor did not open"
     cv, _, _ = find_item(b, "old_name.ma")
-    eds = [e for e in cv.findChildren(QLineEdit) if e.isVisible()
+    # r146: 編集欄はカラムの子ではなくパネルの子（作り直しの巻き添えを避ける）
+    eds = [e for e in b.findChildren(QLineEdit) if e.isVisible()
            and e.objectName() == "mfmInlineRename"]
     assert eds, "no inline editor widget"
     ed = eds[0]

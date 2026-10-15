@@ -20,6 +20,7 @@ Layout (default)
 """
 from core.diag import swallow as _swallow  # r112
 from core.diag import diag_off as _diag_off  # r146 切り分け用
+from core.compat import is_alive as _is_alive
 
 import os
 from pathlib import Path
@@ -1792,30 +1793,47 @@ class MainWindowDccMixin:
             initial = self._connected_scene_name(dcc)
         dlg = SaveDialog(dcc, mode, folder, initial, self._sm,
                          parent=self.window(), initial_is_selection=picked)
-        # モーダルのまま（例外）: 決まった保存先を使って直後に DCC へ
-        # 保存/書き出しを送る。返り値を待たないと処理が組めない。
-        try:
-            ret = dlg.exec_()
-        except AttributeError:
-            ret = dlg.exec()
-        if ret != QDialog.Accepted:
-            return
-        path, code = dlg.result_path(), dlg.dcc_code()
-        label = (tr("選択を書き出し %s", "Export Selection %s") if mode == "export"
-                 else tr("シーンを保存 %s", "Save Scene %s")) % Path(path).name
-        act = (tr("選択を書き出し", "Export Selection") if mode == "export"
-               else tr("シーンを保存", "Save Scene"))
-        # r123: ここにはガードが無かった。ダイアログの OK が二重に届けば
-        # 二度保存／二度書き出しになる（上書きなので実害は小さいが、
-        # «1 操作 = 1 回» の原則からは外れている）。共通ガードを通す。
-        kind = "export" if mode == "export" else "save"
-        if not self._dcc_once(kind, path, dcc):
-            return
-        self._dcc_begin_op(kind, path, dcc)
-        try:
-            self._dcc_save_send(dcc, code, label, act, path)
-        finally:
-            self._dcc_end_op()
+        # r146（ユーザー指示 2026-10-15）:
+        #   「maya のシーン保存の際に manager 本体を触れなくなっています。
+        #     全てのウィンドウで拘束するなと伝えたはずですが？」
+        # そのとおり。ここだけ «返り値を待たないと処理が組めない» という理由で
+        # モーダルにしていたが、待つ必要は無い。**押された時に続きをやる**
+        # 形に変えれば、開いている間もマネージャーを普通に使える。
+        dlg.setWindowModality(Qt.NonModal)
+        dlg.setModal(False)
+
+        def _accepted():
+            path, code = dlg.result_path(), dlg.dcc_code()
+            if not path:
+                return
+            label = (tr("選択を書き出し %s", "Export Selection %s")
+                     if mode == "export"
+                     else tr("シーンを保存 %s", "Save Scene %s")) % Path(path).name
+            act = (tr("選択を書き出し", "Export Selection") if mode == "export"
+                   else tr("シーンを保存", "Save Scene"))
+            # r123: ダイアログの OK が二重に届けば二度保存／二度書き出しに
+            # なる（«1 操作 = 1 回» の原則）。共通ガードを通す。
+            kind = "export" if mode == "export" else "save"
+            if not self._dcc_once(kind, path, dcc):
+                return
+            self._dcc_begin_op(kind, path, dcc)
+            try:
+                self._dcc_save_send(dcc, code, label, act, path)
+            finally:
+                self._dcc_end_op()
+
+        dlg.accepted.connect(_accepted)
+        # 非モーダルなので、参照を持っていないと回収されて消える
+        self._save_dialogs = [d for d in getattr(self, "_save_dialogs", [])
+                              if d is not None and _is_alive(d)]
+        self._save_dialogs.append(dlg)
+        dlg.finished.connect(
+            lambda _r=0, d=dlg: self._save_dialogs.remove(d)
+            if d in self._save_dialogs else None)
+        # show() だけで Qt が前に出す。activateWindow は呼ばない
+        # （«前面化はコンパクトの開閉だけ» という決まりを崩さないため）。
+        dlg.show()
+        dlg.raise_()
 
     def _dcc_save_send(self, dcc, code, label, act, path):
         if dcc == "blender":
