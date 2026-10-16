@@ -153,6 +153,11 @@ class RenameMixin:
         """リネーム本体（r98）。Windows の «アクセスが拒否されました» は
         監視ハンドル／OneDrive 同期が原因のことが多いので、手放し＋再試行＋
         シェル経由フォールバックまで面倒を見る。"""
+        try:
+            from core import fast_stat as _fs
+            _fs.invalidate(src, dst)
+        except Exception:
+            pass
         from core.file_operations import rename_path as _rn
         ok, err = _rn(src, dst,
                       release_cb=lambda lv=1: self._release_fs_handles(src, lv))

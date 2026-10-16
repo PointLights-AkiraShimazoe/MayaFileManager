@@ -10,6 +10,7 @@ from core.diag import diag_off as _diag_off  # r146 切り分け用
 from core.i18n import tr  # r118: モジュールレベルで提供（ローカル import 不要）
 
 import os
+from core import fast_stat as _fs  # r146: UI スレッドで待たない stat
 import struct
 import threading
 from pathlib import Path
@@ -550,7 +551,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
 
     def _sync_quick_look(self, path: str):
         """選択変更時、Quick Look が開いていれば内容を追従させる。"""
-        if self._quick_look and self._quick_look.isVisible() and os.path.isfile(path):
+        if self._quick_look and self._quick_look.isVisible() and _fs.isfile(path):
             # 選択追従ではクラウドの実体をダウンロードさせない（r83）
             self._quick_look.show_for(path, allow_download=False)
 
@@ -678,7 +679,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         self._addr_bar.setText(path)
         _timed("sync_drive_combo", lambda: self._sync_drive_combo(path))
 
-        is_dir = _timed("isdir", lambda: os.path.isdir(path))
+        is_dir = _timed("isdir", lambda: _fs.isdir(path))
         target_dir = path if is_dir else str(Path(path).parent)
 
         # 経路上の隠しフォルダ(AppData等)を強制表示にしてカラムチェーンを構築可能にする
@@ -1333,7 +1334,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         折りたたまれる。islink / readlink は最終要素のみを見るため安全。
         """
         try:
-            if os.path.islink(path):      # symlink（最終要素のみ・ターゲット未接続でもTrue）
+            if _fs.islink(path):      # symlink（最終要素のみ・ターゲット未接続でもTrue）
                 return True
         except OSError:
             pass
@@ -1441,7 +1442,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         # Windows .lnk / .url ショートカット → 参照先をドライブ最上位から全カラム再表示
         if self._maybe_follow_shortcut(path):
             return
-        if os.path.isdir(path):
+        if _fs.isdir(path):
             # r124: 今いる階層の «祖先（または現在地そのもの）» をクリック
             # → そこまで戻る。従来は何も起きず、«親階層の別フォルダを選ばないと
             # 上に戻れない» 状態だった（ユーザー報告 2026-10-06）。
@@ -1514,7 +1515,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         # Windows .lnk / .url ショートカット → 参照先をドライブ最上位から全カラム再表示
         if self._maybe_follow_shortcut(path):
             return
-        if os.path.isdir(path):
+        if _fs.isdir(path):
             if self._column_view.isVisible() and self._is_native_expandable(proxy_index, path):
                 self._set_current_path(path)  # カラム展開を維持（ルート不変）
                 # r72: 子カラムの生成は本体 current に依存する。実機の
@@ -1570,8 +1571,8 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
             return False
         target = resolve_windows_shortcut(path)
         _mfm_log("follow_shortcut: path=%r -> target=%r exists=%s"
-                 % (path, target, (os.path.exists(target) if target else None)))
-        if target and os.path.exists(target):
+                 % (path, target, (_fs.exists(target) if target else None)))
+        if target and _fs.exists(target):
             self.status_message.emit(
                 tr("ショートカット解決: %s → %s",
                    "Shortcut resolved: %s -> %s") % (path, target))
@@ -1967,7 +1968,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
 
     def _on_flat_request(self, dirs):
         """平坦カラムの表示要求。dirs があれば選択カラムの直後へ詰めて表示する。"""
-        dirs = [d for d in (dirs or []) if d and os.path.isdir(d)]
+        dirs = [d for d in (dirs or []) if d and _fs.isdir(d)]
         if dirs:
             self._merge_panel.hide()
             self._on_archive_request("")        # r97: 書庫カラムとは排他
@@ -2037,7 +2038,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
                 _swallow(_e, "ui/browser_panel.py:1550 _rebuild_common_columns")
         del self._common_cols[level:]
         del self._common_srcs[level:]
-        sources = [s for s in (sources or []) if os.path.isdir(s)]
+        sources = [s for s in (sources or []) if _fs.isdir(s)]
         # レベル0（最初のカラム）は複数選択時のみ。深い階層は単一ソースでも掘れる
         if not sources or (level == 0 and len(sources) < 2):
             return
@@ -2150,7 +2151,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
                 if lv.isVisible() and lv.rootIndex().isValid() and \
                         (lv is fw or lv.isAncestorOf(fw)):
                     p = self._resolve_path(lv.rootIndex())
-                    if p and os.path.isdir(p):
+                    if p and _fs.isdir(p):
                         return p
         except Exception as _e:
             _swallow(_e, "ui/browser_panel.py:2038 _active_column_folder")

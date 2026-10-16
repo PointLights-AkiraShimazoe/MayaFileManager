@@ -9,6 +9,7 @@ from core.i18n import tr  # r118
 
 import os
 
+from core import fast_stat as _fs  # r146: UI スレッドで待たない stat
 from core.compat import (
     Qt, QObject,
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
@@ -1665,7 +1666,7 @@ class CappedColumnView(QColumnView):
             self._flatten_view = view
             view._mfm_flatten = True
             dirs = self._column_selected_dirs(view)
-            if not dirs and folder_path and os.path.isdir(folder_path):
+            if not dirs and folder_path and _fs.isdir(folder_path):
                 dirs = [folder_path]   # 選択無し→このカラムのフォルダ自身
             _mfm_log("toggle_flatten ON: dirs=%r cb=%s"
                      % ([os.path.basename(d) for d in dirs],
@@ -1749,7 +1750,7 @@ class CappedColumnView(QColumnView):
                     src = sm.mapToSource(src)
                     sm = sm.sourceModel()
                 fp = _safe_file_path(sm, src) if hasattr(sm, "filePath") else ""
-                if fp and os.path.isdir(fp) and fp not in out:
+                if fp and _fs.isdir(fp) and fp not in out:
                     out.append(fp)
         except Exception as _e:
             _swallow(_e, "ui/browser_column_view.py:1228 _column_selected_dirs")
@@ -1764,7 +1765,7 @@ class CappedColumnView(QColumnView):
         （数千ファイル）に化けて事実上フリーズするため、必ず除外する。"""
         out = []
         if self._selected_dir_paths:
-            out = [p for p in sorted(self._selected_dir_paths) if os.path.isdir(p)]
+            out = [p for p in sorted(self._selected_dir_paths) if _fs.isdir(p)]
         else:
             try:
                 # パンくず（現在位置までの祖先チェーン）は «選択フォルダ» では
@@ -1784,7 +1785,7 @@ class CappedColumnView(QColumnView):
                         if idx.column() != 0 or idx.parent() != view.rootIndex():
                             continue
                         fp = self._path_of_index(idx)
-                        if not (fp and os.path.isdir(fp)):
+                        if not (fp and _fs.isdir(fp)):
                             continue
                         if cur_nc:
                             nf = os.path.normcase(os.path.normpath(fp))
@@ -1837,7 +1838,7 @@ class CappedColumnView(QColumnView):
                     if (idx.isValid() and idx.column() == 0
                             and idx.parent() == view.rootIndex()):
                         fp = self._path_of_index(idx)
-                        if not (fp and os.path.isdir(fp)):
+                        if not (fp and _fs.isdir(fp)):
                             continue
                         if anc_nc:
                             nf = os.path.normcase(os.path.normpath(fp))
@@ -1867,13 +1868,13 @@ class CappedColumnView(QColumnView):
 
             merged = set(self._selected_dir_paths)
             merged.update(p for p in snap
-                          if os.path.isdir(p) and not _under_cur(p))
+                          if _fs.isdir(p) and not _under_cur(p))
             self._selected_dir_paths = set(self._drop_ancestor_dirs(sorted(merged)))
         self._restore_tracked_selection()
 
     def _restore_tracked_selection(self):
         QISM = _QtCore.QItemSelectionModel
-        paths = [p for p in self._selected_dir_paths if os.path.isdir(p)]
+        paths = [p for p in self._selected_dir_paths if _fs.isdir(p)]
         indexes = [self._proxy_index_for_path(p) for p in paths]
         indexes = [i for i in indexes if i.isValid()]
         # パンくず（現在位置までの祖先チェーン）も全モデルへ焼き込む。
@@ -2453,7 +2454,7 @@ class CappedColumnView(QColumnView):
                 # 平坦トグルON: フォルダの単一クリックは «ナビせず» 平坦カラムに出す
                 if idx.isValid() and getattr(view, "_mfm_flatten", False):
                     fp = self._path_of_index(idx)
-                    if fp and os.path.isdir(fp):
+                    if fp and _fs.isdir(fp):
                         QISM = _QtCore.QItemSelectionModel
                         sm = view.selectionModel()
                         if sm is not None:
@@ -2649,7 +2650,7 @@ class CappedColumnView(QColumnView):
             idx = view.indexAt(pos)
             if idx.isValid():
                 p = self._path_of_index(idx)
-                if p and os.path.isdir(p) and not self._is_link_path(p):
+                if p and _fs.isdir(p) and not self._is_link_path(p):
                     return p
             return self._path_for_index(view.rootIndex())
         except Exception:
@@ -2658,7 +2659,7 @@ class CappedColumnView(QColumnView):
     @staticmethod
     def _is_link_path(path: str) -> bool:
         try:
-            return os.path.islink(path)
+            return _fs.islink(path)
         except OSError:
             return False
 

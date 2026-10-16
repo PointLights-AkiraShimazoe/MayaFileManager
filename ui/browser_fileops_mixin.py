@@ -12,6 +12,7 @@ from core.diag import diag_off as _diag_off  # r146 切り分け用
 from core.i18n import tr  # r118: モジュールレベルで提供（ローカル import 不要）
 
 import os
+from core import fast_stat as _fs  # r146: UI スレッドで待たない stat
 import struct
 import threading
 from pathlib import Path
@@ -140,7 +141,7 @@ class FileOpsMixin:
         ここで読み直す（≒ 現在地なら表示が新しくなる）。"""
         m = self._fs_model
         try:
-            if not folder or not os.path.isdir(folder):
+            if not folder or not _fs.isdir(folder):
                 return
             parent = os.path.dirname(folder.rstrip("/\\")) or folder
             if os.path.normcase(os.path.normpath(parent)) == os.path.normcase(
@@ -228,11 +229,11 @@ class FileOpsMixin:
         «使用中または権限なし» で弾かれていた（ユーザー報告 2026-10-08:
         «managerを閉じてエクスプローラーで消すと消えました»）。"""
         try:
-            targets = [p for p in (paths or []) if p and os.path.isdir(p)]
+            targets = [p for p in (paths or []) if p and _fs.isdir(p)]
             if not targets:
                 # ファイルだけでも、親フォルダの監視が邪魔をすることがある
                 targets = [os.path.dirname(p.rstrip("/\\")) for p in (paths or []) if p]
-                targets = [t for t in targets if t and os.path.isdir(t)]
+                targets = [t for t in targets if t and _fs.isdir(t)]
             if not targets:
                 return
             if level >= 2:
@@ -260,7 +261,7 @@ class FileOpsMixin:
         読み込みで監視スレッドを長く止める（_release_fs_handles 参照）。
         付け直すのは «そのフォルダ» だけで足りる。"""
         try:
-            if not folder or not os.path.isdir(folder):
+            if not folder or not _fs.isdir(folder):
                 return
             self._rearm_fs_watch([folder])      # 編集中なら中で後回しになる
         except Exception as e:
@@ -325,13 +326,13 @@ class FileOpsMixin:
         # 一番困る）。その時に外れる «前の root» も読み直しておく。
         cur = self._current_path or ""
         try:
-            tgt = cur if os.path.isdir(cur) else os.path.dirname(cur or "")
+            tgt = cur if _fs.isdir(cur) else os.path.dirname(cur or "")
         except OSError:
             tgt = ""
         prev = ""
         try:
             prev = m.rootPath() or ""
-            if (tgt and os.path.isdir(tgt) and os.path.normcase(
+            if (tgt and _fs.isdir(tgt) and os.path.normcase(
                     os.path.normpath(prev or "x")) != os.path.normcase(
                     os.path.normpath(tgt))):
                 m.setRootPath(tgt)
@@ -342,9 +343,9 @@ class FileOpsMixin:
             if not d:
                 continue
             try:
-                if not os.path.isdir(d):
+                if not _fs.isdir(d):
                     d = os.path.dirname(d.rstrip("/\\"))
-                if not d or not os.path.isdir(d):
+                if not d or not _fs.isdir(d):
                     continue
             except OSError:
                 continue
@@ -373,7 +374,7 @@ class FileOpsMixin:
             if not p:
                 continue
             try:
-                d = p if os.path.isdir(p) else os.path.dirname(p)
+                d = p if _fs.isdir(p) else os.path.dirname(p)
             except OSError:
                 d = os.path.dirname(p)
             if d and d not in dirs:
@@ -556,6 +557,11 @@ class FileOpsMixin:
             # 消えた・増えたの通知は取りこぼすことがある（ネットワーク先や
             # OneDrive、短時間に大量に動かした時）。操作が終わった時点で、
             # 触ったフォルダだけ自分で読み直す。
+            # r146: 自分で動かしたパスの stat の答えは捨てる（fast_stat）
+            try:
+                _fs.invalidate(*list(busy_paths or []))
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py _run_file_op(invalidate)")
             if not _diag_off("no_post_resync"):
                 self._resync_touched(busy_paths)
                 # 見張りを «今いる場所» へ付け直す（これを忘れると、以後その
@@ -781,7 +787,7 @@ class FileOpsMixin:
             self.status_message.emit(tr("取りやめました", "Cancelled"))
             return
         if action == "advanced":
-            if os.path.isdir(dest_dir):
+            if _fs.isdir(dest_dir):
                 self._advanced_copy_to(list(paths), os.path.normpath(dest_dir))
             return
         move = (action == "move")
@@ -790,7 +796,7 @@ class FileOpsMixin:
         from core.undo_stack import MoveOp, CopyOp
 
         dest_dir = os.path.normpath(dest_dir)
-        if not os.path.isdir(dest_dir):
+        if not _fs.isdir(dest_dir):
             self.status_message.emit(tr("移動先が見つかりません", "Destination not found"))
             return
         # 自分自身・自分の中への移動、同じ場所への移動は捨てる
@@ -802,7 +808,7 @@ class FileOpsMixin:
             pn = os.path.normcase(os.path.normpath(p))
             if pn == dn:
                 continue
-            if os.path.isdir(p) and dn.startswith(pn + os.sep):
+            if _fs.isdir(p) and dn.startswith(pn + os.sep):
                 self.status_message.emit(
                     tr("フォルダを自分の中へは移動できません: %s",
                        "Cannot move a folder into itself: %s") % os.path.basename(p))
@@ -972,19 +978,19 @@ class FileOpsMixin:
         """貼り付け先: 単一フォルダ選択中ならそのフォルダ、無ければ現在地。
         r70: 空白右クリックの「貼り付け」はそのカラムのフォルダ。"""
         ov = getattr(self, "_paste_override_dir", None)
-        if ov and os.path.isdir(ov):
+        if ov and _fs.isdir(ov):
             return ov
         sel = self._operation_targets()
-        if len(sel) == 1 and os.path.isdir(sel[0]):
+        if len(sel) == 1 and _fs.isdir(sel[0]):
             return sel[0]
-        return self._current_path if os.path.isdir(self._current_path) else None
+        return self._current_path if _fs.isdir(self._current_path) else None
 
     def _clipboard_paste(self):
         mime = QApplication.clipboard().mimeData()
         if not mime or not mime.hasUrls():
             return
         paths = [u.toLocalFile() for u in mime.urls() if u.toLocalFile()]
-        paths = [p for p in paths if os.path.exists(p)]
+        paths = [p for p in paths if _fs.exists(p)]
         if not paths:
             return
 
@@ -1077,7 +1083,7 @@ class FileOpsMixin:
 
     def _set_clipboard(self, paths: List[str], move: bool):
         """選択ファイルをクリップボードへ。Explorer と相互にペースト可能な形式で格納。"""
-        paths = [p for p in paths if p and os.path.exists(p)]
+        paths = [p for p in paths if p and _fs.exists(p)]
         if not paths:
             return
         mime = QMimeData()
@@ -1129,7 +1135,7 @@ class FileOpsMixin:
                 out.append(p)
         for p in paths:
             try:
-                is_dir = os.path.isdir(p)
+                is_dir = _fs.isdir(p)
             except OSError:
                 continue
             _add(p)

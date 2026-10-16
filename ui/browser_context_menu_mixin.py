@@ -12,6 +12,7 @@ from core.diag import diag_off as _diag_off  # r146 切り分け用
 from core.i18n import tr  # r118: モジュールレベルで提供（ローカル import 不要）
 
 import os
+from core import fast_stat as _fs  # r146: UI スレッドで待たない stat
 import struct
 import threading
 from pathlib import Path
@@ -172,7 +173,7 @@ class ContextMenuMixin:
         dcc_cb = getattr(self, "_dcc_callback", None)
         if not callable(dcc_cb) or not target:
             return False
-        ext = "" if os.path.isdir(target) else Path(target).suffix.lower()
+        ext = "" if _fs.isdir(target) else Path(target).suffix.lower()
         app = self.current_dcc_target()
         if ext:
             app = dcc_for_path(target, app)
@@ -296,7 +297,7 @@ class ContextMenuMixin:
         **失敗を黙って握り潰さない。** 以前はここで例外が出ると «押しても
         何も起きない» になり、原因が追えなかった。"""
         try:
-            if not directory or not os.path.isdir(directory):
+            if not directory or not _fs.isdir(directory):
                 QMessageBox.information(
                     self, "表示名",
                     "対象のフォルダを特定できませんでした。")
@@ -319,10 +320,10 @@ class ContextMenuMixin:
             if paths:
                 first = paths[0].rstrip("/\\")
                 parent = os.path.dirname(first)
-                if parent and os.path.isdir(parent):
+                if parent and _fs.isdir(parent):
                     return parent
             cur = self._current_path or ""
-            return cur if os.path.isdir(cur) else ""
+            return cur if _fs.isdir(cur) else ""
         except Exception as _e:
             _swallow(_e, "ui/browser_panel.py _display_name_target")
             return ""
@@ -331,10 +332,10 @@ class ContextMenuMixin:
         menu = _bp().QMenu(self)
         is_maya = all(Path(p).suffix.lower() in MAYA_EXTENSIONS for p in paths)
         is_single = len(paths) == 1
-        is_dir = is_single and os.path.isdir(paths[0])
+        is_dir = is_single and _fs.isdir(paths[0])
 
         # ── 複数フォルダの平坦結果表示（2つ以上フォルダ選択時） ─────────
-        sel_dirs = [p for p in paths if os.path.isdir(p)]
+        sel_dirs = [p for p in paths if _fs.isdir(p)]
         if len(sel_dirs) >= 2:
             flat_act = menu.addAction(glyph_icon("▤"), tr("選択フォルダを平坦結果表示", "Show selection as flat list"))
             flat_act.triggered.connect(lambda: self._on_flat_request(sel_dirs))
