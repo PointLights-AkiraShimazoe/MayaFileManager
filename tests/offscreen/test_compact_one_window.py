@@ -209,6 +209,21 @@ QTest.qWait(100)
 app.processEvents()
 check(w2.geometry() == before_rect,
       "開くと退ける前の位置に戻る（%r → %r）" % (before_rect, w2.geometry()))
+# A-12 再（ユーザー報告 2026-10-16「展開するとコンパクトのボタンが勝手に
+# OFF になる」）: 安全弁の時間内に開いても、コンパクトは解除されない
+c2._pre_park_safety()
+app.processEvents()
+check(c2.is_active(), "安全弁の後もコンパクトは有効のまま（開いただけ）")
+check(c2.is_expanded() and not c2.is_parked(), "本体は開いたまま")
+# 本当に失敗した時（畳んでいるのにパックが無い）だけ介入する
+c2.collapse()
+QTest.qWait(50)
+app.processEvents()
+c2._puck.hide()
+c2._pre_park_safety()
+app.processEvents()
+check(not c2.is_active() and not c2.is_parked(),
+      "畳んだのにパックが無ければコンパクトを諦めて本体を画面へ")
 w2.close()
 app.processEvents()
 

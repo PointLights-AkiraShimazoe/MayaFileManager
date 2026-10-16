@@ -980,11 +980,24 @@ class CompactController(QObject):
             _swallow(_e, "ui/compact_mode.py pre_park")
 
     def _pre_park_safety(self):
-        """起動時に退けたまま、パックが出ていなければ引き戻す（見失わない）。"""
+        """起動時に退けたまま、パックが出ていなければ引き戻す（見失わない）。
+
+        ユーザー報告 2026-10-16（A-12 再）「コンパクトを展開すると何故か
+        コンパクトモードのボタンが勝手に OFF にされる」: 安全弁が «パックが
+        見えているか» だけで判定していたので、3 秒以内にユーザーが開く
+        （＝パックは隠れる）と失敗扱いにしてコンパクトを解除していた。
+        介入するのは **本体が退けたままで、誰も見えていない** 時だけ:
+          * コンパクト有効で開いている → 正常
+          * コンパクト有効で畳んでいてパックが見える → 正常
+          * それ以外（畳んでいるのにパックが無い／無効なのに退けたまま）→ 介入"""
         try:
             puck = self._puck
-            ok = self._active and puck is not None and puck.isVisible()
-            if ok:
+            if self._active:
+                if self._expanded:
+                    return
+                if puck is not None and puck.isVisible():
+                    return
+            elif not self.is_parked():
                 return
             self._win._log_quiet("compact: 起動時の復元が終わらないので本体を画面へ戻す")
             if self._active:
