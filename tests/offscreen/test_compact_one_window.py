@@ -34,6 +34,7 @@ import os
 
 from _common import *  # noqa: F401,F403
 from _common import app, sm, finish, QTest
+from core.compat import Qt, QRect, QPoint
 
 from ui.main_window import MainWindow
 from ui.compact_mode import CompactController
@@ -173,8 +174,23 @@ check(bool(closes), "closeEvent がパックを閉じる")
 
 # ── 5) 起動時の復元で «両方出ている» にならない ─────────────────
 sm.set(CompactController.ACTIVE_KEY, True, save=False)
+sm.set(CompactController.PUCK_POS_KEY, [120, 140], save=False)
+# 保存されている本体の位置を «画面の中の普通の場所» にしておく
+# （オフスクリーンは x=1 のような端の位置を枠ぶん押し戻すため）
+from core.compat import QWidget as _QW
+_probe = _QW()
+_probe.setGeometry(120, 90, 560, 400)
+_probe.show()
+app.processEvents()
+sm.set("window_geometry", _probe.saveGeometry().toHex().data().decode(), save=False)
+_probe.close()
 w2 = MainWindow(settings_manager=sm)
-w2.resize(900, 600)
+# A-12: 出す前に退けてあり、出しても活性化しない
+check(w2._compact().is_parked(), "出す前から本体は画面の外（一瞬も見せない）")
+check(w2.testAttribute(Qt.WA_ShowWithoutActivating), "出してもフォーカスを奪わない")
+before_rect = QRect(w2._compact()._win_rect) if w2._compact()._win_rect else None
+check(before_rect is not None and app.primaryScreen().availableGeometry().intersects(before_rect),
+      "開く時に戻す矩形は «退ける前» の画面内の位置（%r）" % (before_rect,))
 w2.show()
 QTest.qWait(600)
 app.processEvents()
@@ -184,17 +200,42 @@ both = (not c2.is_parked()
 check(not both, "本体とパックが «両方出たまま» にならない")
 check(c2.is_active(), "コンパクトは復元されている")
 check(c2.is_parked(), "本体は表に出ていない（画面の外）")
+check(c2._puck is not None and c2._puck.pos() == QPoint(120, 140),
+      "パックは覚えていた場所に出る（%r）" % (c2._puck.pos() if c2._puck else None,))
+check(getattr(c2._puck, "_flash_timer", None) is not None, "出た直後に光る")
+c2._cursor_inside = lambda: True
+c2.expand()
+QTest.qWait(100)
+app.processEvents()
+check(w2.geometry() == before_rect,
+      "開くと退ける前の位置に戻る（%r → %r）" % (before_rect, w2.geometry()))
 w2.close()
 app.processEvents()
 
 # ── 7) 見失わないこと（r146、ユーザー報告 2026-10-15）──────────
 #   「起動時に画面外に出て戻ってこなくなりました。」
+# r146（ユーザー指示 2026-10-16、A-12「一瞬本体がでてからコンパクトになる」）:
+# «出す前に退ける»（pre_park）は戻した。その代わり **安全弁** を必須にする:
+#   pre_park が一定時間後にパックの有無を確かめ、無ければ本体を引き戻す。
 mwt = _src("ui", "main_window.py")
 init = _func(mwt, "__init__")
 pre = [x for x in ast.walk(init or ast.Module(body=[], type_ignores=[]))
        if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)
        and x.func.attr == "pre_park"]
-check(not pre, "起動時に «出す前に退ける» をしない（戻れなくなる）")
+check(bool(pre), "起動時に «出す前に退ける»（本体を一瞬見せない）")
+cm_tree = _src("ui", "compact_mode.py")
+pp = _func(cm_tree, "pre_park")
+pp_calls = {x.func.attr for x in ast.walk(pp)
+            if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)}
+check("singleShot" in pp_calls and "_pre_park_safety" in
+      {getattr(a, "attr", None) for x in ast.walk(pp) if isinstance(x, ast.Call)
+       for a in x.args},
+      "pre_park は安全弁（_pre_park_safety）を予約する")
+saf = _func(cm_tree, "_pre_park_safety")
+saf_calls = {x.func.attr for x in ast.walk(saf)
+             if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)}
+check("pull_window_onto_screen" in saf_calls,
+      "安全弁はパックが無ければ本体を画面へ引き戻す")
 rest = _func(mwt, "_restore_compact_mode")
 calls = {x.func.attr for x in ast.walk(rest)
          if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)}

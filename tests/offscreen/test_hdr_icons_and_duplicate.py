@@ -60,18 +60,65 @@ print("duplicate dialog: OK")
 # サブフォルダ以下にも適用 ON なら、中身の名前がどう変わるかもプレビューに出る。
 from ui.toggle_switch import ToggleSwitch
 assert isinstance(dlg._mode_btn, ToggleSwitch), type(dlg._mode_btn)
-assert "ON" in dlg._mode_text.text()
+# r146（ユーザー指示 2026-10-16）: 呼び名は «一括リネーム»。ON/OFF の文字と説明は無い
+assert dlg._mode_label.text() == "一括リネーム", dlg._mode_label.text()
+assert not hasattr(dlg, "_mode_text")
 dlg2 = DuplicateDialog([os.path.join(d, "chr_A")])
 dlg2._mode_btn.setChecked(True)
 dlg2._search_edit.setText("chr_A"); dlg2._replace_edit.setText("chr_C")
-assert "chr_A_model.ma" not in dlg2._preview.text(), dlg2._preview.text()
+assert "chr_A_model.ma" not in dlg2.preview_text(), dlg2.preview_text()
 dlg2._recursive_cb.setChecked(True)
-pv = dlg2._preview.text()
+pv = dlg2.preview_text()
 assert "chr_A/chr_A_model.ma → chr_C_model.ma" in pv, pv
 assert "chr_A/sub/chr_A_rig.ma → chr_C_rig.ma" in pv, pv
+# リネーム後の名前は緑（テーマの success）
+from core.theme_engine import qss_vars
+assert qss_vars()["success"] in dlg2._preview.toHtml(), "リネーム後の名前が success 色でない"
 dlg2._recursive_cb.setChecked(False)
-assert "sub/chr_A_rig.ma" not in dlg2._preview.text()
+assert "sub/chr_A_rig.ma" not in dlg2.preview_text()
+# 名前が変わるものは全部出す（以前は 6 件＋«…他 N 件» で打ち切っていた）
+many = os.path.join(d, "many")
+os.makedirs(many)
+for i in range(30):
+    open(os.path.join(many, "chr_A_%02d.ma" % i), "w").close()
+dlg4 = DuplicateDialog([os.path.join(many, "chr_A_%02d.ma" % i) for i in range(30)])
+dlg4._mode_btn.setChecked(True)
+dlg4._search_edit.setText("chr_A"); dlg4._replace_edit.setText("chr_B")
+pv4 = dlg4.preview_text()
+assert all(("chr_A_%02d.ma → chr_B_%02d.ma" % (i, i)) in pv4 for i in range(30)), pv4
+assert "他" not in pv4 and "more" not in pv4, pv4
 print("duplicate dialog switch + inside preview: OK")
+
+# r146（ユーザー報告 2026-10-16）: スイッチを押してもスイッチの場所が動かない。
+# モードの行を show/hide していたせいでダイアログの高さが伸び縮みし、
+# 縮んだ余白が上の行に配られてスイッチが下へずれていた。
+dlg3 = DuplicateDialog([os.path.join(d, "chr_A")])
+dlg3.show()
+QTest.qWait(150)
+app.processEvents()
+
+
+def _switch_pos(dlg):
+    b = dlg._mode_btn
+    return b.mapToGlobal(b.rect().topLeft())
+
+
+p0, g0 = _switch_pos(dlg3), dlg3.geometry()
+for on in (True, False, True, False):
+    dlg3._mode_btn.setChecked(on)
+    QTest.qWait(120)
+    app.processEvents()
+    assert _switch_pos(dlg3) == p0, ("スイッチが動いた", on, p0, _switch_pos(dlg3))
+    assert dlg3.geometry() == g0, ("ダイアログの大きさが変わった", on, g0, dlg3.geometry())
+# サブフォルダ込みプレビューで下が伸びても、スイッチは動かない
+dlg3._mode_btn.setChecked(True)
+dlg3._search_edit.setText("chr_A"); dlg3._replace_edit.setText("chr_Z")
+dlg3._recursive_cb.setChecked(True)
+QTest.qWait(150)
+app.processEvents()
+assert _switch_pos(dlg3) == p0, ("プレビューが伸びるとスイッチが動く", p0, _switch_pos(dlg3))
+dlg3.close()
+print("duplicate dialog: switch stays put: OK")
 
 # 5) Tab で次の項目の名前変更へ
 b = make_panel()

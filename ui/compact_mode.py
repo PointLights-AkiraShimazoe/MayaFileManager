@@ -35,6 +35,7 @@
   * 本体から開いたツールウィンドウの上にカーソルがいる
 """
 from core.diag import swallow as _swallow
+from core.diag import diag_off as _diag_off  # r146 切り分け用（MFM_DIAG=no_native_cursor）
 
 from core.compat import (
     Qt, QObject, QTimer, QWidget, QHBoxLayout, QToolButton, QSize,
@@ -567,6 +568,13 @@ class CompactController(QObject):
         if not want or self._active:
             return False
         self.set_active(True)
+        # A-12（ユーザー指示 2026-10-16）: 起動時は本体を見せず、
+        # «直接コンパクトが出て光る»
+        if self._active and self._puck is not None:
+            try:
+                self._puck.flash()
+            except Exception as _e:
+                _swallow(_e, "ui/compact_mode.py restore_from_settings(flash)")
         return self._active
 
     # ── パック ───────────────────────────────────────────────────
@@ -821,7 +829,10 @@ class CompactController(QObject):
         # パックを動かされていたら、その差分だけずらす。
         # これなら枠の厚みが何 px でも 1 px もずれない。
         try:
-            self._win_rect = QRect(self._win.geometry())
+            # 退けてある最中（起動時の pre_park）は、覚えた矩形を上書きしない
+            # （今の geometry は画面の外。それを戻すと開いた瞬間に画面外へ出る）
+            if not self.is_parked():
+                self._win_rect = QRect(self._win.geometry())
             self._puck_anchor = QPoint(puck.pos())
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py collapse(remember)")
@@ -850,6 +861,11 @@ class CompactController(QObject):
         # r146（ユーザー指示 2026-10-16）: 出す時は必ず «丸ごと見える» 場所に。
         # 本体の角が画面の外にある状態で畳んでも、パックは一番近い画面の中へ。
         self._pull_puck_onto_screen()
+        # 開く時の差分の基準は «実際に出した位置»（引き戻した後）
+        try:
+            self._puck_anchor = QPoint(puck.pos())
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py collapse(anchor)")
         # 出すたびに掛け直す。Qt がネイティブ窓を作り直すと拡張スタイルが
         # 戻ってしまい、またタスクバーに出てしまう（冪等なので安い）。
         try:
@@ -932,16 +948,50 @@ class CompactController(QObject):
             _swallow(_e, "ui/compact_mode.py pull_window_onto_screen")
             return False
 
+    PRE_PARK_SAFETY_MS = 3000   # 退けたまま復元が終わらなければ引き戻す
+
     def pre_park(self):
         """起動時、本体を **出す前に** 画面の外へ置く（r146 後半）。
 
+        ユーザー報告 2026-10-16（A-12）:
+          「一瞬本体がでてからコンパクトになります。直接コンパクトが出て
+            光るという挙動にしてください。」
         出してから退けると、起動のたびに本体が一瞬ちらついて消える。
-        前回コンパクトのまま終了していた時だけ通る道。"""
+        前回コンパクトのまま終了していた時だけ通る道。
+
+        2026-10-15 に一度撤去した（「起動時に画面外に出て戻ってこない」）。
+        戻すにあたり **必ず戻れる** ようにする:
+          * 開く時に使う «本体の矩形» は、退ける前（復元したジオメトリ）を
+            ここで覚える（collapse は退け中なら上書きしない）
+          * PRE_PARK_SAFETY_MS 後にパックが出ていなければ、コンパクトを
+            諦めて本体を画面の中へ引き戻す（_pre_park_safety）"""
         try:
+            self._win_rect = QRect(self._win.geometry())
+            pos = self._sm.get(self.PUCK_POS_KEY, None)
+            self._puck_anchor = (QPoint(int(pos[0]), int(pos[1]))
+                                 if isinstance(pos, (list, tuple)) and len(pos) == 2
+                                 else None)
             self._win.setAttribute(Qt.WA_ShowWithoutActivating, True)
+            self._set_win_transitions(False)
             self._win.move(self._park_pos())
+            self._pre_parked = True
+            QTimer.singleShot(self.PRE_PARK_SAFETY_MS, self._pre_park_safety)
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py pre_park")
+
+    def _pre_park_safety(self):
+        """起動時に退けたまま、パックが出ていなければ引き戻す（見失わない）。"""
+        try:
+            puck = self._puck
+            ok = self._active and puck is not None and puck.isVisible()
+            if ok:
+                return
+            self._win._log_quiet("compact: 起動時の復元が終わらないので本体を画面へ戻す")
+            if self._active:
+                self.set_active(False)
+            self.pull_window_onto_screen()
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _pre_park_safety")
 
     def _park_window(self):
         """本体を画面の外へ退ける（隠さない・最小化しない）。"""
@@ -1169,6 +1219,18 @@ class CompactController(QObject):
         for x in QApplication.topLevelWidgets():
             if x is not self._win and x.isVisible() and self._owned_by_win(x):
                 wins.append(x)
+        # r146（ユーザー報告 2026-10-16「ディスプレイを跨いでいると、別
+        # ディスプレイにマウスが移動するとコンパクトに戻る」）: 画面ごとに
+        # DPI が違うと Qt の論理座標は画面ごとに別物になり、跨いだ窓の
+        # 向こう側が «外» に見える。Windows では物理ピクセルで判定する。
+        if not _diag_off("no_native_cursor"):
+            try:
+                from core.win_topmost import cursor_inside_any
+                r = cursor_inside_any(wins, m)
+                if r is not None:
+                    return bool(r)
+            except Exception as _e:
+                _swallow(_e, "ui/compact_mode.py _cursor_inside(native)")
         for w in wins:
             if not w.isVisible():
                 continue

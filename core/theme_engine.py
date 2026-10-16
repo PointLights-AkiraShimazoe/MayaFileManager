@@ -321,6 +321,8 @@ def build_qss(mode="dark"):
         "error": c["error"],
         # r146: «ここに居ます» と呼びかける色（コンパクトのパックが光る）
         "warning": c.get("warning", c["error"]),
+        # r146: «うまくいく» 側の色（複製プレビューのリネーム後の名前など）
+        "success": c.get("success", c["primary"]),
         "selection": c["selection"],
         "on_selection": c["on_selection"],
         # r144: 下階層を表示中の項目（＝フォーカスの無いカラムの選択）

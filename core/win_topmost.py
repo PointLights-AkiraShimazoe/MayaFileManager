@@ -222,6 +222,57 @@ def set_restore_pos(widget, x: int, y: int) -> bool:
         return False
 
 
+def cursor_inside_any(widgets, margin: int = 0):
+    """カーソルがどれかの窓（枠込み＋余白）の上にあるか。**物理ピクセル** で判定（r146）。
+
+    ユーザー報告 2026-10-16:
+      「コンパクト状態でディスプレイを跨いでいる場合、ウィンドウの上に
+        マウスがあっても、別ディスプレイにマウスが移動するとコンパクトに
+        戻ってしまいます。」
+    Qt の QCursor.pos() と frameGeometry() は «論理ピクセル» で、画面ごとに
+    DPI（拡大率）が違うと座標系が画面ごとに別物になる。跨いでいる窓の
+    «向こう側の画面に載っている部分» は、Qt の矩形計算では外に見える。
+    Win32 の GetCursorPos / GetWindowRect はどちらも物理ピクセルなので、
+    どの画面にいても同じ物差しで比べられる。
+
+    戻り値: True / False。判定できない（Windows 以外・失敗）なら None。
+    余白 margin は論理 px で受け、各窓の devicePixelRatio で物理へ直す。"""
+    if not is_windows():
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        pt = wintypes.POINT()
+        if not u.GetCursorPos(ctypes.byref(pt)):
+            return None
+        for w in widgets:
+            try:
+                if w is None or not w.isVisible():
+                    continue
+                hwnd = int(w.winId())
+                if not hwnd:
+                    continue
+                rc = wintypes.RECT()
+                if not u.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rc)):
+                    continue
+                try:
+                    dpr = float(w.devicePixelRatioF())
+                except Exception:
+                    dpr = 1.0
+                m = int(round(margin * (dpr if dpr > 0 else 1.0)))
+                if (rc.left - m <= pt.x <= rc.right + m
+                        and rc.top - m <= pt.y <= rc.bottom + m):
+                    return True
+            except Exception as _e:
+                _swallow(_e, "core/win_topmost.py cursor_inside_any(one)")
+                continue
+        return False
+    except Exception as _e:
+        _swallow(_e, "core/win_topmost.py cursor_inside_any")
+        return None
+
+
 def foreground_hwnd():
     """今フォアグラウンドにあるウィンドウのハンドル（Windows 以外は 0）。"""
     if not is_windows():

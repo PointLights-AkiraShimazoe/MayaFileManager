@@ -140,11 +140,16 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         # だけで読み戻していなかったため。ここで復元する（本体を見せてからに
         # する。先に畳むと復元したジオメトリが確定しない）。
         if bool(self._sm.get("compact_mode", False)):
-            # r146（実機 2026-10-15、ユーザー報告「起動時に画面外に出て
-            # 戻ってこなくなりました」）: ここで «出す前に画面の外へ退ける»
-            # をしていたが **撤去した**。復元が途中で止まると、退けたまま
-            # 戻る手立てが無くなる（アプリを見失う）。起動時に一瞬ちらつく
-            # ことより、見失わないことを優先する。
+            # r146（ユーザー指示 2026-10-16、A-12「一瞬本体がでてから
+            # コンパクトになる。直接コンパクトが出て光るように」）:
+            # «出す前に画面の外へ退ける» を戻す。2026-10-15 に撤去した理由
+            # （復元が途中で止まると戻る手立てが無い）は、pre_park 側の
+            # 安全弁（PRE_PARK_SAFETY_MS 後にパックが無ければ引き戻す）と
+            # _restore_compact_mode 末尾の引き戻しで塞いである。
+            try:
+                self._compact().pre_park()
+            except Exception as _e:
+                _swallow(_e, "ui/main_window.py __init__(pre_park)")
             QTimer.singleShot(0, self._restore_compact_mode)
 
     # ------------------------------------------------------------------
