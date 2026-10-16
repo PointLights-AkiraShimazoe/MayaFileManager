@@ -128,9 +128,17 @@ class _OpenButton(QToolButton):
         """カーソルが既に乗っていたら、乗せた時と同じように待ち始める。
 
         パックは «畳んだ場所» に出るので、カーソルの下に現れることがある。
-        その時 Qt は enterEvent を出さないので、自分で見て構える。"""
+        その時 Qt は enterEvent を出さないので、自分で見て構える。
+        r146（ユーザー報告 2026-10-16「畳んだとほぼ同時につまみに
+        カーソルを乗せると、再度避けないと開かなくなる」）: 見張りの
+        tick からも毎回呼ばれる。enterEvent が来る／来ないに依存せず、
+        «乗っていれば開く» を座標だけで保証する。待ち始めは 1 回だけ
+        （毎 tick で start し直すと永遠に発火しない）。"""
         if self._cursor_on_me():
-            self._timer.start()
+            if not self._timer.isActive():
+                self._timer.start()
+        else:
+            self._timer.stop()
 
     def enterEvent(self, e):
         self._timer.start()
@@ -737,7 +745,10 @@ class CompactController(QObject):
             if rect is not None and anchor is not None and puck is not None:
                 d = puck.pos() - anchor
                 tl = QPoint(rect.left() + d.x(), rect.top() + d.y())
-                tl = self._clamp(tl, rect.size())
+                # r146（ユーザー報告 2026-10-16）: ここで 1 画面に丸めない。
+                # ディスプレイを跨いで置いてある本体が、開くたびに片方の
+                # 画面へ押し込まれていた。覚えた矩形をそのまま戻す
+                # （どの画面にも載らない時だけ pull_window_onto_screen が拾う）。
                 w.setGeometry(QRect(tl, rect.size()))
                 return
             target = self._clamp(self._window_pos_for_puck(),
@@ -786,6 +797,18 @@ class CompactController(QObject):
             _swallow(_e, "ui/compact_mode.py collapse(remember)")
             self._win_rect = None
             self._puck_anchor = None
+        # r146（ユーザー報告 2026-10-16「タスクバーから右クリックで閉じた
+        # 場合、画面左上に出ます」）: 畳んでいる間に終了すると、本体の
+        # 保存位置が «画面の外（退け先）» になり、次の起動で Qt が画面の
+        # 左上へ引き戻す→そこにパックが置かれる。退ける **前** に本体の
+        # 位置を保存しておき、閉じる時は退けた位置で上書きしない。
+        if not self.is_parked():
+            try:
+                fn = getattr(self._win, "save_window_geometry", None)
+                if callable(fn):
+                    fn()
+            except Exception as _e:
+                _swallow(_e, "ui/compact_mode.py collapse(save geometry)")
         self._expanded = False
         self._hide_tool_windows()
         self._park_window()
@@ -859,6 +882,7 @@ class CompactController(QObject):
         アプリを見失う**。最後の砦として、見える場所へ引き戻す口を持つ。"""
         w = self._win
         try:
+            self._set_win_transitions(True)
             if w.isMinimized():
                 w.showNormal()
             if not w.isVisible():
@@ -890,6 +914,10 @@ class CompactController(QObject):
         """本体を画面の外へ退ける（隠さない・最小化しない）。"""
         w = self._win
         try:
+            # r146（ユーザー報告 2026-10-16）: 画面の外に居る間は、この窓の
+            # 最小化／復元アニメーションを止める。タスクバーのボタンを押す
+            # たびに «画面外の矩形 ⇔ タスクバー» を結ぶ飛行が見えていた。
+            self._set_win_transitions(False)
             if w.isMinimized():
                 # 最小化されたまま畳みに来た時だけ、いったん普通に戻す
                 w.setAttribute(Qt.WA_ShowWithoutActivating, True)
@@ -900,6 +928,17 @@ class CompactController(QObject):
             w.move(self._park_pos())
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py _park_window")
+
+    def _set_win_transitions(self, enabled: bool):
+        """本体の最小化／復元アニメーションの入切（畳んでいる間だけ切る）。"""
+        if getattr(self, "_win_transitions", None) == bool(enabled):
+            return
+        self._win_transitions = bool(enabled)
+        try:
+            from core.win_topmost import set_window_transitions
+            set_window_transitions(self._win, bool(enabled))
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _set_win_transitions")
 
     def is_parked(self) -> bool:
         """本体が画面の外に退けてあるか（＝畳んでいる）。"""
@@ -956,11 +995,16 @@ class CompactController(QObject):
         return out
 
     def _hide_tool_windows(self):
+        # r146（ユーザー報告 2026-10-16「畳まれた後に開いた場合、設定関連の
+        # UI だけ中央に戻る」）: 隠す前に «中身の矩形» を覚える。QDialog は
+        # 動かされた印（WA_Moved）が無いと show のたびに親の中央へ置き直す。
+        # 本体と同じく、変換に頼らず setGeometry で元の場所へ戻す。
         self._tool_windows = []
         for w in self._tool_window_list():
             try:
+                rect = QRect(w.geometry())
                 w.hide()
-                self._tool_windows.append(w)
+                self._tool_windows.append((w, rect))
             except RuntimeError:
                 pass                      # 破棄済み
             except Exception as _e:
@@ -968,9 +1012,14 @@ class CompactController(QObject):
 
     def _show_tool_windows(self):
         kept, self._tool_windows = self._tool_windows, []
-        for w in kept:
+        for item in kept:
+            w, rect = item if isinstance(item, tuple) else (item, None)
             try:
+                if rect is not None:
+                    w.setAttribute(Qt.WA_Moved, True)   # 中央へ置き直させない
                 w.show()
+                if rect is not None and w.geometry() != rect:
+                    w.setGeometry(rect)
                 w.raise_()
             except RuntimeError:
                 pass                      # 畳んでいる間に閉じられた
@@ -1001,6 +1050,7 @@ class CompactController(QObject):
         w = self._win
         # 1) 出す前に置き場所を決める（出してから動かさない）
         self._restore_window_at_puck()
+        self._set_win_transitions(True)
         # r146（ユーザー報告 2026-10-13）:
         #   「Premiere でスペースを押しても効かず、Manager を閉じたら
         #     反応するようになりました。アクティブではないとユーザーが
@@ -1102,7 +1152,17 @@ class CompactController(QObject):
     # 判断は _cursor_inside() 一本に絞る。
 
     def _tick(self):
-        if not self._active or not self._expanded:
+        if not self._active:
+            return
+        if not self._expanded:
+            # 畳んでいる間: パックのアイコンにカーソルが乗っていれば開く
+            # （enterEvent 任せにしない。クラス _OpenButton.arm_if_hovered）
+            try:
+                puck = self._puck
+                if puck is not None and puck.isVisible():
+                    puck.btn.arm_if_hovered()
+            except Exception as _e:
+                _swallow(_e, "ui/compact_mode.py _tick(hover)")
             return
         # r146（ユーザー報告 2026-10-13「コンパクト時に最小化が出来ない」）:
         # 最小化したウィンドウはカーソルの «外» にいるので、r145 はそのまま

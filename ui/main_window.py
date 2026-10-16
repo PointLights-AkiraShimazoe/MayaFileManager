@@ -1462,10 +1462,27 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         except Exception:
             pass
 
+    def save_window_geometry(self):
+        """本体の位置と大きさを設定に書く（保存は呼び出し側）。"""
+        self._sm.set("window_geometry", self.saveGeometry().toHex().data().decode(),
+                     save=False)
+
+    def _parked_in_compact(self) -> bool:
+        """コンパクトで画面の外に退けてある最中か。"""
+        try:
+            c = getattr(self, "_compact_ctl", None)
+            return bool(c is not None and c.is_active() and not c.is_expanded()
+                        and c.is_parked())
+        except Exception:
+            return False
+
     def closeEvent(self, event):
         # version=3: ナビツールバー廃止（プリセット行はエリア内へ移動）に伴い
         # 旧ツールバー状態を無効化
-        self._sm.set("window_geometry", self.saveGeometry().toHex().data().decode(), save=False)
+        # r146（ユーザー報告 2026-10-16）: 畳んで退けてある最中は «退け先»
+        # を保存しない（畳む前に保存してある。compact_mode.collapse）。
+        if not self._parked_in_compact():
+            self.save_window_geometry()
         self._sm.set("window_state",    self.saveState(4).toHex().data().decode(), save=False)
         try:
             self._sm.set("last_path", self._browser.current_path(), save=False)

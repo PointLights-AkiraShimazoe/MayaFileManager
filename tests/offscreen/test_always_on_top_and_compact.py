@@ -32,8 +32,13 @@ import os
 from _common import *  # noqa: F401,F403
 from _common import app, sm, finish, run, QTest
 
-from core.compat import Qt
+from core.compat import Qt, QApplication, QWidget
 from core.win_topmost import is_windows as _is_windows
+
+
+class _Probe(QWidget):
+    """保存されたジオメトリを読むだけの窓。"""
+    pass
 from ui.main_window import MainWindow
 
 fails = []
@@ -124,6 +129,17 @@ def s1():
           "コンパクトに入っても最前面表示を勝手に入れない")
     check(ctl.puck_topmost() is False,
           "最前面 OFF ならパックも手前に居座らない（%r）" % (ctl.puck_topmost(),))
+    # r146（ユーザー報告 2026-10-16）: 退けている最中の終了は位置を上書きしない
+    check(w._parked_in_compact(), "退けている最中だと分かる（閉じる時に保存しない）")
+    try:
+        probe = _Probe()
+        probe.restoreGeometry(bytes.fromhex(sm.get("window_geometry")))
+        saved_rect = probe.frameGeometry()
+        on_any = any(s.availableGeometry().intersects(saved_rect)
+                     for s in QApplication.screens())
+        check(on_any, "保存されている本体の位置は画面の中（%r）" % ((saved_rect.x(), saved_rect.y()),))
+    except Exception as e:
+        check(False, "保存位置の検査に失敗: %r" % (e,))
     if not _is_windows():
         check(not (puck.windowFlags() & Qt.WindowStaysOnTopHint),
               "（Qt フラグでも）パックは常に手前ではない")

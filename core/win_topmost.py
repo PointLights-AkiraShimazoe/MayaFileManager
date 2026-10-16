@@ -138,6 +138,38 @@ def set_taskbar_button(widget, on: bool = True) -> bool:
         return False
 
 
+DWMWA_TRANSITIONS_FORCEDISABLED = 3
+
+
+def set_window_transitions(widget, enabled: bool) -> bool:
+    """最小化／復元のアニメーション（DWM の遷移）を窓単位で入切する（r146）。
+
+    ユーザー報告 2026-10-16（コンパクト中にタスクバーを押すと
+    「何か他の UI が画面外へ飛んでいくさまが見える。もう一度押すと戻る」）:
+    畳んでいる間、本体は **画面の外** に置いてある。その状態でタスクバーの
+    ボタンを押すと Windows が最小化／復元を切り替え、DWM が «タスクバー ⇔
+    窓の矩形（画面外）» を結ぶ飛行アニメーションを描く。それが «飛んでいく
+    UI» の正体。畳んでいる間だけこの窓の遷移を止める
+    （DwmSetWindowAttribute / DWMWA_TRANSITIONS_FORCEDISABLED）。
+
+    Windows 以外は何もしない（False を返す）。"""
+    if widget is None or not is_windows():
+        return False
+    try:
+        import ctypes
+        hwnd = int(widget.winId())
+        if not hwnd:
+            return False
+        flag = ctypes.c_int(0 if enabled else 1)
+        hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd), ctypes.c_uint(DWMWA_TRANSITIONS_FORCEDISABLED),
+            ctypes.byref(flag), ctypes.sizeof(flag))
+        return int(hr) == 0
+    except Exception as _e:
+        _swallow(_e, "core/win_topmost.py set_window_transitions")
+        return False
+
+
 def set_restore_pos(widget, x: int, y: int) -> bool:
     """**最小化されたウィンドウの «戻る場所»** を決める（r146）。
 
