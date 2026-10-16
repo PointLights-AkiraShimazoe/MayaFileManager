@@ -350,6 +350,9 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         self._thumb_view.setViewMode(QListView.IconMode)
         self._thumb_view.setResizeMode(QListView.Adjust)
         self._thumb_view.setSpacing(4)
+        # r146: 項目の大きさは揃っている（並べ直しで全項目に data() を
+        # 聞かせない。理由は browser_column_view.createColumn）
+        self._thumb_view.setUniformItemSizes(True)
         self._thumb_delegate = ThumbnailDelegate(
             self._thumb_mgr,
             self._sm.get("thumbnail_size", 128)

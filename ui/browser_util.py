@@ -253,13 +253,23 @@ class _SafeIconProvider(QFileIconProvider):
         種類名を聞きに行き、外付け／ネットワークのボリュームでは 1 件ごとに
         待たされる。フォルダ移動のあと数十秒固まった（実機 2026-10-16
         16:00、Python 側のスタックは app.exec() のみ＝C++ の中）要因の
-        一つとして切る。種類は拡張子から決めるだけで十分。"""
+        一つとして切る。種類は拡張子から決めるだけで十分。
+
+        **答えは拡張子だけで決め、二度聞かれても同じ答えを返す**（r146、
+        実機計測 2026-10-16 22:30）。ここで _isdir_nowait（仮の答え →
+        後で本当の答え）を使っていたところ、QFileSystemModel は再読のたびに
+        «種類（displayType）» を前回と比べ、違えば dataChanged を出す。
+        仮の答えが外れた項目（拡張子の無いファイル、名前に . を含む
+        フォルダ）が 7,500 件中 1,700 件あった Temp では、フォルダが
+        少し変わるたびに dataChanged が 1,700 回出て、その都度カラムの
+        組み直し（7,500 件 × 8 役割の data()）が走り、1 回の移動で
+        2 分固まった（Windows 回帰スイートの BrowserPanel 系が軒並み
+        100 秒超）。種類の文字列は見た目だけのものなので、正確さより
+        «揺れない» ことを取る。"""
         try:
             if isinstance(info, QFileInfo):
                 ext = info.suffix()
-                if self._isdir_nowait(info.filePath(), bool(ext)):
-                    return "File Folder"
-                return (ext.upper() + " File") if ext else "File"
+                return (ext.upper() + " File") if ext else "File Folder"
         except Exception as _e:
             _swallow(_e, "ui/browser_util.py _SafeIconProvider.type")
         try:

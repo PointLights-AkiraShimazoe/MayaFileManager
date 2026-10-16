@@ -929,6 +929,18 @@ class CappedColumnView(QColumnView):
         except Exception as _e:
             _swallow(_e, "ui/browser_column_view.py:656 createColumn")
         folder_path = self._path_for_index(index)
+        # r146（実機計測 2026-10-16 22:30）: **項目の大きさは揃っている**と
+        # Qt に教える。これが無いと QListView は並べ直すたびに全項目へ
+        # sizeHint（＝ data() を 8 役割ぶん、Python 経由）を聞きに来る。
+        # 7,500 件のカラムで 1 回 0.07 秒、dataChanged のたびに走るので、
+        # 親フォルダが少し変わるだけで 2 分固まった（Windows 回帰スイートの
+        # BrowserPanel 系が軒並み 100 秒超）。揃えると最初の 1 件だけ聞く
+        # （1.9 秒に縮んだ）。リスト／サムネともデリゲートの sizeHint は
+        # 項目に依らないので正しい前提。平坦ビューは最初からこうしている。
+        try:
+            view.setUniformItemSizes(True)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py createColumn uniform")
         # r85: 保存済みの «リスト表示のアイコンサイズ» を適用（既定 16px）
         try:
             view.setIconSize(QSize(self.column_item_size(view),
