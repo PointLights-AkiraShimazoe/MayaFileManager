@@ -207,10 +207,15 @@ class _DragListView(QListView):
         self.last_mime = mime
         drag = QDrag(self)
         drag.setMimeData(mime)
+        from ui.browser_util import mfm_drag_begin, mfm_drag_end
+        mfm_drag_begin()       # コンパクトの見張りに «自分のドラッグ中» を伝える
         try:
-            drag.exec(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
-        except AttributeError:
-            drag.exec_(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+            try:
+                drag.exec(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+            except AttributeError:
+                drag.exec_(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+        finally:
+            mfm_drag_end()
         self.drag_finished.emit(list(paths))
 
 

@@ -388,6 +388,28 @@ def mfm_blocking_reason() -> str:
     return _MFM_BLOCKING["why"] if _MFM_BLOCKING["n"] > 0 else ""
 
 
+# r146（ユーザー報告 2026-10-16「コンパクトモードのとき、manager 外への
+# D&D が死んでいます」）: **自分が始めたドラッグ** を数える。
+# QDrag.exec（OLE DoDragDrop）の最中もタイマーは回るので、コンパクトの
+# 見張り（ui/compact_mode.py _tick）はこれを見て «畳んでもドラッグを
+# 殺さない» 畳み方に切り替える。mouseButtons() は外部ドラッグで信用
+# できない（_busy の注記）が、こちらは自分で立てる旗なので確か。
+_MFM_DRAG = {"n": 0}
+
+
+def mfm_drag_begin():
+    _MFM_DRAG["n"] += 1
+
+
+def mfm_drag_end():
+    _MFM_DRAG["n"] = max(0, _MFM_DRAG["n"] - 1)
+
+
+def mfm_drag_active() -> bool:
+    """このアプリが始めたドラッグ（QDrag.exec）が進行中か。"""
+    return _MFM_DRAG["n"] > 0
+
+
 def _mfm_timeline(msg: str):
     """起動から120秒間だけ、経過秒つきでイベントを記録する。"""
     try:

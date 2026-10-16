@@ -42,6 +42,7 @@ from ui.browser_util import (  # noqa: F401  （再エクスポート）
     _safe_file_path, _SafeIconProvider, _mfm_slow_note, _MFM_UI_LOG,
     _MFM_UILOG_ON, _mfm_warn, _mfm_uilog, _MFM_BLOCKING,
     mfm_blocking_begin, mfm_blocking_end, mfm_blocking_reason,
+    mfm_drag_begin as _mfm_drag_begin, mfm_drag_end as _mfm_drag_end,
     _mfm_timeline, _MFM_LOG_PATH, _MFM_DEBUG, _mfm_log,
 )
 from ui.browser_delegates import (  # noqa: F401  （再エクスポート）
@@ -928,7 +929,6 @@ class CappedColumnView(QColumnView):
             view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         except Exception as _e:
             _swallow(_e, "ui/browser_column_view.py:656 createColumn")
-        folder_path = self._path_for_index(index)
         # r146（実機計測 2026-10-16 22:30）: **項目の大きさは揃っている**と
         # Qt に教える。これが無いと QListView は並べ直すたびに全項目へ
         # sizeHint（＝ data() を 8 役割ぶん、Python 経由）を聞きに来る。
@@ -941,6 +941,7 @@ class CappedColumnView(QColumnView):
             view.setUniformItemSizes(True)
         except Exception as _e:
             _swallow(_e, "ui/browser_column_view.py createColumn uniform")
+        folder_path = self._path_for_index(index)
         # r85: 保存済みの «リスト表示のアイコンサイズ» を適用（既定 16px）
         try:
             view.setIconSize(QSize(self.column_item_size(view),
@@ -2911,9 +2912,11 @@ class CappedColumnView(QColumnView):
             # exec を直接呼ぶと AttributeError でドラッグが «無かったこと» になる。
             _exec = getattr(drag, "exec", None) or getattr(drag, "exec_", None)
             mfm_blocking_begin("ドラッグ中（OLE DoDragDrop）")
+            _mfm_drag_begin()      # コンパクトの見張りに «自分のドラッグ中» を伝える
             try:
                 _exec(Qt.CopyAction | Qt.MoveAction, Qt.MoveAction)
             finally:
+                _mfm_drag_end()
                 mfm_blocking_end()
             # ドラッグ終了後: ドロップ先がMayaのウィンドウなら通知する
             self._notify_drag_finished(paths, mime)

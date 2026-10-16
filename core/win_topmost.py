@@ -285,6 +285,42 @@ def foreground_hwnd():
         return 0
 
 
+def foreign_window_at_cursor():
+    """カーソルの下にある **他プロセス** の最上位ウィンドウ（無ければ 0）。
+
+    r146（ユーザー報告 2026-10-16「コンパクトモードのとき、manager 外への
+    D&D が死んでいます」）: ドラッグの最中に畳んだ後、落とし終えた時点で
+    フォアグラウンドがまだこちら（画面の外に退けた本体）に残っていると、
+    落とし先のアプリでキーが効かない。落とした場所＝カーソルの下の窓へ
+    返すための口。Windows 以外は 0。"""
+    if not is_windows():
+        return 0
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        k = ctypes.windll.kernel32
+        pt = wintypes.POINT()
+        if not u.GetCursorPos(ctypes.byref(pt)):
+            return 0
+        u.WindowFromPoint.restype = ctypes.c_void_p
+        u.WindowFromPoint.argtypes = [wintypes.POINT]
+        h = u.WindowFromPoint(pt)
+        if not h:
+            return 0
+        u.GetAncestor.restype = ctypes.c_void_p
+        u.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        root = u.GetAncestor(ctypes.c_void_p(h), 2) or h      # GA_ROOT
+        pid = wintypes.DWORD(0)
+        u.GetWindowThreadProcessId(ctypes.c_void_p(root), ctypes.byref(pid))
+        if int(pid.value) == int(k.GetCurrentProcessId()):
+            return 0
+        return int(root)
+    except Exception as _e:
+        _swallow(_e, "core/win_topmost.py foreign_window_at_cursor")
+        return 0
+
+
 def app_is_foreground() -> bool:
     """**このアプリ** が今フォアグラウンドか（r146）。
 

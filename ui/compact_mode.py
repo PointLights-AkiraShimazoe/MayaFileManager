@@ -414,6 +414,8 @@ class CompactController(QObject):
         self._drag_until = 0.0       # ドラッグで開いた猶予の期限
         self._prev_foreground = 0    # 開く前に前にいたウィンドウ（返す先）
         self._mouse_busy_since = 0.0  # «ボタンが押されている» が続き始めた時刻
+        self._drag_seen = False      # 自分のドラッグ（QDrag.exec）を見ていたか
+        self._collapsed_in_drag = False  # そのドラッグの最中に畳んだか
         self._tool_windows = []      # 畳む時に一緒に隠した道具窓
         self._win_rect = None        # 畳む前の本体の «中身の矩形»
         self._puck_anchor = None     # その時のパックの位置（差分の起点）
@@ -796,8 +798,19 @@ class CompactController(QObject):
             _swallow(_e, "ui/compact_mode.py _restore_window_at_puck")
 
     # ── 畳む／開く ───────────────────────────────────────────────
-    def collapse(self):
+    def collapse(self, during_drag: bool = False):
         """本体を «左上の角» へ畳んでパックだけにする。
+
+        during_drag=True … 自分が始めたドラッグ（QDrag.exec ＝ OLE
+        DoDragDrop）の最中に畳む時。**フォアグラウンドを動かさない。**
+        r146（ユーザー報告 2026-10-16「コンパクトモードのとき、manager 外
+        への D&D が死んでいます。コンパクトに戻しつつも、生きたままに
+        してください」）: 畳む時に元のアプリへフォアグラウンドを返すと
+        （_return_foreground）、OLE のドラッグはマウスの捕捉を失って
+        その場で終わる。本体を画面の外へ置く・道具窓を隠す・パックを
+        出す（WA_ShowWithoutActivating）は OLE に影響しないので、それだけ
+        行い、フォアグラウンドは **落とし終えてから** 落とし先へ返す
+        （_tick → _after_drag_collapsed）。
 
         r146（ユーザー指示 2026-10-13）:
           「コンパクトモードでオプションの設定等の UI が開かれていると、
@@ -853,7 +866,10 @@ class CompactController(QObject):
         self._expanded = False
         self._hide_tool_windows()
         self._park_window()
-        self._return_foreground()
+        if during_drag:
+            self._collapsed_in_drag = True     # 返す先は落とし終えてから決める
+        else:
+            self._return_foreground()
         import time
         self._collapsed_at = time.time()
         puck.show()
@@ -1046,6 +1062,26 @@ class CompactController(QObject):
         except Exception:
             return False
 
+    def _after_drag_collapsed(self):
+        """ドラッグの最中に畳んだ後、落とし終えた時の後始末（r146）。
+
+        フォアグラウンドがまだこちら（画面の外の本体）にあれば、落とした
+        場所＝カーソルの下の他アプリの窓へ返す。そこが取れなければ、開く
+        前に前にいたアプリへ返す。本体は開かない・活性化しない。"""
+        self._collapsed_in_drag = False
+        try:
+            from core.win_topmost import (app_is_foreground, set_foreground,
+                                          foreign_window_at_cursor)
+            if not app_is_foreground():
+                self._prev_foreground = 0
+                return
+            target = foreign_window_at_cursor() or getattr(self, "_prev_foreground", 0)
+            self._prev_foreground = 0
+            if target:
+                set_foreground(target)
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _after_drag_collapsed")
+
     def _return_foreground(self):
         """畳む時、元いたアプリへフォーカスを返す（r146）。
 
@@ -1139,6 +1175,7 @@ class CompactController(QObject):
 
           * **隠れているうちに位置を決める。** 出した後に動かさない。
         """
+        self._collapsed_in_drag = False   # 開いたら «ドラッグ中に畳んだ» は終わり
         if not self._active or self._expanded:
             return
         self._expanded = True
@@ -1262,6 +1299,19 @@ class CompactController(QObject):
     def _tick(self):
         if not self._active:
             return
+        # 自分のドラッグ（QDrag.exec）の進行中／終わった直後を先に見る。
+        # 畳んだ後は下の «畳んでいる間» で return するので、ここで見ないと
+        # 落とし終えた後始末（フォアグラウンドを落とし先へ返す）が走らない。
+        try:
+            from ui.browser_util import mfm_drag_active
+            dragging = mfm_drag_active()
+        except Exception:
+            dragging = False
+        if not dragging and self._drag_seen:
+            self._drag_seen = False
+            if self._collapsed_in_drag:
+                self._after_drag_collapsed()
+                return
         if not self._expanded:
             # 畳んでいる間: パックのアイコンにカーソルが乗っていれば開く
             # （enterEvent 任せにしない。クラス _OpenButton.arm_if_hovered）
@@ -1291,6 +1341,18 @@ class CompactController(QObject):
             if time.time() - self._restored_at < self.RESTORE_GRACE_SEC:
                 return
             self._restored_at = 0.0
+        # r146（ユーザー報告 2026-10-16「コンパクトモードのとき、manager 外
+        # への D&D が死んでいます」）: **自分が始めたドラッグ** の最中は、
+        # カーソルが外へ出たら畳むが、フォアグラウンドには触らない
+        # （collapse(during_drag=True)）。落とし終えたら、落とし先へ
+        # フォアグラウンドを返して畳んだままにする（本体は開かない。
+        # 「ドロップした後は manager のアクティブな状況は残さず
+        #   コンパクト化したままで OK」）。
+        if dragging:
+            self._drag_seen = True
+            if not self._cursor_inside():
+                self.collapse(during_drag=True)
+            return
         if getattr(self, "_drag_until", 0.0):
             import time
             if time.time() < self._drag_until:
