@@ -218,7 +218,6 @@ class BrowserArea(QWidget):
             b.setToolTip(tip)
             b.setFixedSize(24, 22)
             b.clicked.connect(slot)
-            sl.addWidget(b, 0, Qt.AlignHCenter)
             return b
 
         self._add_btn = _btn(
@@ -230,6 +229,9 @@ class BrowserArea(QWidget):
                               lambda _c=False: self.move_down_requested.emit(self))
         self._close_btn = _btn("✕", tr("このエリアを閉じる", "Close this area"),
                                lambda _c=False: self.remove_requested.emit(self))
+        # r146（ユーザー指示 2026-10-16、配置のみ）: ✕ は一番上、＋ は一番下、
+        # ＋ の上に ▼ ▲（下から ＋・▼・▲）。真ん中にエリア名／タブ列と表示切替。
+        sl.addWidget(self._close_btn, 0, Qt.AlignHCenter)
         sl.addStretch(1)
 
         # r130: 並列表示時は従来通り «エリア N» の縦ラベル。
@@ -254,6 +256,9 @@ class BrowserArea(QWidget):
         self._view_mode = "split"
         self._update_mode_btn()
         sl.addStretch(1)
+        sl.addWidget(self._up_btn, 0, Qt.AlignHCenter)
+        sl.addWidget(self._down_btn, 0, Qt.AlignHCenter)
+        sl.addWidget(self._add_btn, 0, Qt.AlignHCenter)
         outer.addWidget(strip, 0)
 
         # ── 右側: プリセット行＋本体 ─────────────────────────────────
