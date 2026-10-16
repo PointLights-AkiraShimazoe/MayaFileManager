@@ -85,6 +85,8 @@ class _Grip(QWidget):
 
     def mouseReleaseEvent(self, e):
         self._from = None
+        # 画面の外へ置いてしまったら、一番近い画面の中へ戻す（触れなくなる）
+        self._puck.controller._pull_puck_onto_screen()
         self._puck.controller.remember_puck_pos()
         super().mouseReleaseEvent(e)
 
@@ -613,20 +615,24 @@ class CompactController(QObject):
             _swallow(_e, "ui/compact_mode.py sync_topmost")
 
     def _pull_puck_onto_screen(self):
-        """パックがどの画面にも載っていなければ主画面の左上寄りへ戻す。"""
+        """パックが画面に «丸ごと» 載っていなければ、一番近い画面の中へ
+        最小の移動で入れる（r146、ユーザー指示 2026-10-16）。
+
+        以前は «どこにも載っていなければ主画面の左上» だったので、
+        サブ画面のすぐ外に出ただけで主画面へ飛んでいた。パックは
+        «触れる» ことが全てなので、はみ出し（半分だけ見えている）も直す。"""
         puck = self._puck
         if puck is None:
             return
         try:
             g = puck.frameGeometry()
             for sc in QApplication.screens():
-                if sc.availableGeometry().intersected(g).isValid():
+                if sc.availableGeometry().contains(g):
                     return
-            sc = QApplication.primaryScreen()
-            if sc is None:
+            target = self._clamp(puck.pos(), puck.size())
+            if target == puck.pos():
                 return
-            av = sc.availableGeometry()
-            puck.move(av.left() + 40, av.top() + 40)
+            puck.move(target)
             self.remember_puck_pos()
             self._win._log_quiet(
                 "compact: パックが画面外だったので戻した %r" % (g,))
@@ -697,22 +703,46 @@ class CompactController(QObject):
         return QPoint(x, y)
 
     @staticmethod
-    def _clamp(top_left, size):
-        """画面からはみ出さない位置に丸める。"""
+    def _nearest_screen(rect):
+        """rect（または点）に一番近い画面（r146、ユーザー指示 2026-10-16）。
+
+        「コンパクトが起動時にどのディスプレイにも入っていない場合は、
+          一番近いところに強制的にズレるという仕様が必要」
+        載っている画面があればそれ。無ければ、各画面の作業領域までの
+        距離（x・y の足りない分の和）が最小の画面。主画面に飛ばさない。"""
         try:
-            sc = None
-            try:
-                sc = QApplication.screenAt(top_left)
-            except Exception:
-                sc = None
-            sc = sc or QApplication.primaryScreen()
+            if isinstance(rect, QPoint):
+                rect = QRect(rect, QSize(1, 1))
+            best, best_d = None, None
+            for sc in QApplication.screens():
+                av = sc.availableGeometry()
+                if av.intersects(rect):
+                    return sc
+                dx = max(av.left() - rect.right(), rect.left() - av.right(), 0)
+                dy = max(av.top() - rect.bottom(), rect.top() - av.bottom(), 0)
+                d = dx + dy
+                if best_d is None or d < best_d:
+                    best, best_d = sc, d
+            return best or QApplication.primaryScreen()
+        except Exception:
+            return QApplication.primaryScreen()
+
+    @classmethod
+    def _clamp(cls, top_left, size):
+        """«一番近い画面» からはみ出さない位置に丸める。
+
+        r146: 以前は screenAt(top_left) が外れると主画面に丸めていたので、
+        サブ画面の端から少し出ただけで主画面まで飛んでいた。"""
+        try:
+            sc = cls._nearest_screen(QRect(top_left, size))
             if sc is None:
                 return top_left
             av = sc.availableGeometry()
+            # QRect の right/bottom は «含む» 端なので +1
             x = min(max(top_left.x(), av.left()),
-                    max(av.left(), av.right() - size.width()))
+                    max(av.left(), av.right() + 1 - size.width()))
             y = min(max(top_left.y(), av.top()),
-                    max(av.top(), av.bottom() - size.height()))
+                    max(av.top(), av.bottom() + 1 - size.height()))
             return QPoint(x, y)
         except Exception:
             return top_left
@@ -817,6 +847,9 @@ class CompactController(QObject):
         self._collapsed_at = time.time()
         puck.show()
         puck.raise_()
+        # r146（ユーザー指示 2026-10-16）: 出す時は必ず «丸ごと見える» 場所に。
+        # 本体の角が画面の外にある状態で畳んでも、パックは一番近い画面の中へ。
+        self._pull_puck_onto_screen()
         # 出すたびに掛け直す。Qt がネイティブ窓を作り直すと拡張スタイルが
         # 戻ってしまい、またタスクバーに出てしまう（冪等なので安い）。
         try:
