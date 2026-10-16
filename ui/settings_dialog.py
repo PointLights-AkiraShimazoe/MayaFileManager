@@ -719,10 +719,10 @@ class SettingsDialog(QDialog):
         # フォールバックだったが、それは «プリセット毎設定を後から足した際の
         # 後方互換» であって、ユーザー向けの意図は無かった（指摘 2026-10-08）。
         # 二重管理をやめ、規則はプリセットエディタに一本化する。
-        # ここには全体のキルスイッチだけを残す。
-        self._auto_naming_enabled_cb = QCheckBox(
-            tr("自動命名を有効にする", "Enable auto naming"))
-        layout.addWidget(self._auto_naming_enabled_cb)
+        # r146（ユーザー指示 2026-10-16）: ここにあった «全体のキルスイッチ»
+        # も廃止。プリセット側の「自動命名を有効にする」と同じ文言で、
+        # ここが OFF だとプリセット側を ON にしても効かない罠になっていた
+        # （実機で規則が効かなかった正体）。有効／無効はプリセット側だけ。
 
         info = QLabel(tr(
             "指定ディレクトリ以下で新規ファイルを保存する際、\n"
@@ -793,7 +793,6 @@ class SettingsDialog(QDialog):
         self._last_maya_ver_edit.setText(sm.get("last_maya_version", ""))
 
         # 自動命名（r139: ルールの編集はプリセットエディタへ一本化。ここは入/切）
-        self._auto_naming_enabled_cb.setChecked(sm.get("auto_naming_enabled", True))
 
     def _apply(self):
         sm = self._sm
@@ -836,7 +835,6 @@ class SettingsDialog(QDialog):
         sm.set("maya_launch_args", args_text.split() if args_text else [], save=False)
 
         # 自動命名（r139: 全体のキルスイッチだけ。ルールは触らない）
-        sm.set("auto_naming_enabled", self._auto_naming_enabled_cb.isChecked(), save=False)
 
         sm.save()
         self.settings_changed.emit()

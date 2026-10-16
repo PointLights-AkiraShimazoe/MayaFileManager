@@ -100,11 +100,17 @@ def s1():
           "より深いルートが勝つ（%r / %r）" % (rule, src))
     sm.save_auto_naming_for_preset("P2", {"/root2": P2R}, enabled=True)
 
-    # 全体のキルスイッチ
+    # r146（ユーザー指示 2026-10-16）: 全体のキルスイッチは廃止。
+    # 設定ファイルに古い auto_naming_enabled=False が残っていても効く
     sm.set("auto_naming_enabled", False, save=False)
-    check(sm.resolve_auto_name_rule("/root1/S17/c008")[0] is None,
-          "全体を無効にすれば何も効かない")
+    check(sm.resolve_auto_name_rule("/root1/S17/c008")[0] is not None,
+          "全体スイッチの残骸（False）があっても規則は効く")
     sm.set("auto_naming_enabled", True, save=False)
+    # 無効にできるのはプリセット側だけ
+    sm.save_auto_naming_for_preset("P1", {"/root1": P1R}, enabled=False)
+    check(sm.resolve_auto_name_rule("/root1/S17/c008")[0] is None,
+          "プリセット側を無効にすればそのプリセットの規則は効かない")
+    sm.save_auto_naming_for_preset("P1", {"/root1": P1R}, enabled=True)
     print("rules belong to the folder, not to the selected preset: OK",
           flush=True)
 

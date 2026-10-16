@@ -6,8 +6,8 @@
     → ルートをキーにした辞書だったので、同じルートの 2 本目が 1 本目を
       上書きしていた。一覧 [(root, rule)] で持つ（古い辞書形式も読める）
   「ルール通りの場所で保存しようとしてもルールが適用されず」
-    → 実機では設定の全体スイッチが OFF だった。プリセットエディタに
-      注意と «全体を有効にする» を出す
+    → 実機では設定の全体スイッチが OFF だった（同じ文言のスイッチが
+      2 か所）。全体スイッチは廃止し、プリセット側だけにする
   「畳んだ時の高さがデカすぎる。内容に合わせて」
   「ルールを複製するボタンも ✕ の左隣に」
 """
@@ -83,13 +83,14 @@ check(len(ed._naming_rows) == 3 and ed._naming_rows[1].get_data()[1]["levels"] =
 saved = ed._collect_naming()["rules"]
 check(len(saved) == 3, "複製した分も保存対象に入る（%d）" % len(saved))
 
-# ── 3) 全体スイッチが OFF なら注意が出る ─────────────────────────
-sm.set("auto_naming_enabled", False, save=False)
-ed._refresh_naming_global_note()
-check(not ed._naming_global_note.isHidden(), "全体 OFF の時は注意が出る")
-check(sm.resolve_auto_name_rule("/proj/Seq01/Layout")[0] is None, "全体 OFF では規則が効かない（現状の仕様）")
-ed._enable_naming_globally()
-check(ed._naming_global_note.isHidden() and sm.get("auto_naming_enabled"),
-      "«全体を有効にする» で有効になり注意が消える")
+# ── 3) 全体スイッチは廃止（ユーザー指示 2026-10-16）─────────────
+sm.set("auto_naming_enabled", False, save=False)      # 設定ファイルの残骸
+check(sm.resolve_auto_name_rule("/proj/Seq01/Layout")[0] is not None,
+      "設定の残骸 auto_naming_enabled=False があっても規則は効く")
+check(not hasattr(ed, "_naming_global_note"), "エディタに全体スイッチの注意は無い")
+from ui.settings_dialog import SettingsDialog
+sd = SettingsDialog(sm)
+check(not hasattr(sd, "_auto_naming_enabled_cb"), "設定ダイアログに全体スイッチが無い")
+sd.close()
 ed.close()
 finish(not fails)

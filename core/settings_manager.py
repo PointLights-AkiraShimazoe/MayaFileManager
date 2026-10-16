@@ -468,12 +468,15 @@ class SettingsManager:
         return out
 
     def get_auto_naming_enabled(self, preset: str = None) -> bool:
+        """プリセットの自動命名が有効か。自前の設定が無ければ True
+        （r146: 全体のキルスイッチは廃止した。設定ファイルに残っている
+        auto_naming_enabled は読まない）。"""
         if preset:
             per = self._global_state.get("auto_naming_by_preset", {})
             entry = per.get(preset)
             if isinstance(entry, dict) and "enabled" in entry:
                 return bool(entry.get("enabled"))
-        return bool(self.get("auto_naming_enabled", True))
+        return True
 
     def has_auto_naming_for_preset(self, preset: str) -> bool:
         """そのプリセットが «自前の» 自動命名設定を持っているか。"""
@@ -527,8 +530,8 @@ class SettingsManager:
         from core import auto_name as _an
         if not directory:
             return None, {}, ""
-        if not bool(self.get("auto_naming_enabled", True)):
-            return None, {}, ""          # 全体のキルスイッチ
+        # r146（ユーザー指示 2026-10-16）: 全体のキルスイッチは廃止。
+        # 有効／無効はプリセットごとの設定だけで決める。
         cur = self.get("quick_nav_preset", "default")
         per = self._global_state.get("auto_naming_by_preset", {}) or {}
         cands = []
