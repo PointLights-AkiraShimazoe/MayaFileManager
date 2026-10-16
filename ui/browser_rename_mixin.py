@@ -217,6 +217,19 @@ class RenameMixin:
         self._rename_dialog([path] if path else [])
         return False
 
+    def commit_inline_edit(self) -> bool:
+        """開いているその場編集があれば確定して閉じる（r146）。
+        ナビゲーション（アドレス欄・ブックマーク・履歴・クリック）の前に呼ぶ。
+        戻り値: 編集欄があったか。"""
+        fn = getattr(self, "_inline_finish", None)
+        if not callable(fn):
+            return False
+        try:
+            fn(True)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py commit_inline_edit")
+        return True
+
     def _open_inline_editor(self, view, idx, path: str):
         """項目の矩形に QLineEdit を重ねて名前を編集する。Enter=確定 / Esc=取消 /
         フォーカス喪失=確定（Explorer 準拠）。確定は os.rename（モデルの flags に
@@ -286,6 +299,14 @@ class RenameMixin:
                 _swallow(_e, "ui/browser_panel.py:2417 finish")
             self._inline_editor = None
             self._inline_editing = False
+            self._inline_finish = None
+            try:
+                app_ = QApplication.instance()
+                flt = state.pop("filter", None)
+                if app_ is not None and flt is not None:
+                    app_.removeEventFilter(flt)
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py finish(filter)")
             try:
                 self._column_view.set_inline_editing(False)
             except Exception as _e:
@@ -320,6 +341,43 @@ class RenameMixin:
                 _mfm_log("rename post error: %r" % (e,))
 
         ed.returnPressed.connect(lambda: finish(True))
+        # 外から «確定してから移る» を呼べるように（_navigate_now 等）
+        self._inline_finish = finish
+
+        # r146（ユーザー報告 2026-10-16「リネームを確定させないまま別の
+        # フォルダを表示すると、リネーム表示状態で残る。別の場所が選択された
+        # ときには確定処理をしてから移って」）: 編集欄の外を **マウスで押した**
+        # 瞬間に確定する（Explorer と同じ）。焦点の移動は «こちらの都合»
+        # （カラムの組み直し）でも起きるので確定の合図にしないが、押下は
+        # 必ずユーザーの意思。押下がビューへ届く前に確定するので、移った先で
+        # 編集欄が取り残されない。
+        class _OutsideClick(_QtCore.QObject):
+            def eventFilter(self_, obj, ev):
+                try:
+                    if ev.type() != _QtCore.QEvent.MouseButtonPress:
+                        return False
+                    if state["done"] or not is_alive(ed) or not ed.isVisible():
+                        return False
+                    try:
+                        gp = ev.globalPosition().toPoint()
+                    except AttributeError:
+                        gp = ev.globalPos()
+                    r = _QtCore.QRect(ed.mapToGlobal(_QtCore.QPoint(0, 0)), ed.size())
+                    if r.contains(gp):
+                        return False
+                    finish(True)
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_panel.py _OutsideClick")
+                return False
+
+        try:
+            app_ = QApplication.instance()
+            if app_ is not None:
+                flt = _OutsideClick(ed)
+                state["filter"] = flt
+                app_.installEventFilter(flt)
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _open_inline_editor(filter)")
 
         def _on_focus_out():
             """フォーカスが外れた＝確定（Explorer 準拠）。

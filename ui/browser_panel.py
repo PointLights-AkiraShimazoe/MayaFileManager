@@ -638,6 +638,11 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
 
     def _navigate_now(self, path: str, add_to_history: bool = True):
         _mfm_timeline("navigate_now: %r" % path)
+        # r146: 打ちかけの名前変更があれば、移る前に確定する（取り残さない）
+        try:
+            self.commit_inline_edit()
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _navigate_now(commit rename)")
         # ナビゲーションは標準挙動どおり複数選択をリセットする
         # （ブックマーク・履歴・▲・ショートカット追従すべて共通）
         # r120: «実際に移動すると決まってから» 行う。_navigate の時点でやると、
