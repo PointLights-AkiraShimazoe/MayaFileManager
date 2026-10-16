@@ -120,11 +120,28 @@ def install(window):
                         _swallow(_e, "ui/main_window_dcc.py _watch")
                     last_dump = now
                     try:
-                        frm = _sys._current_frames().get(main_id)
+                        frames = _sys._current_frames()
+                        frm = frames.get(main_id)
                         if frm is not None:
                             _dump("=== UIフリーズ検出 (%.1f秒停止) "
                                   "メインスレッド ===\n%s"
                                   % (stalled, "".join(_tb.format_stack(frm))))
+                        # r146（実機 2026-10-16 16:00、フォルダ移動後に 40 秒超）:
+                        # メインスレッドが app.exec() の中（C++）で止まっている
+                        # 時は、Python 側だけでは何も分からない。長い停止では
+                        # 他のスレッドの Python スタックも 1 回だけ出し、
+                        # «誰がロックを握っていたか» を後から追えるようにする。
+                        if stalled > 5.0 and frm is not None:
+                            names = {t.ident: t.name for t in threading.enumerate()}
+                            parts = []
+                            for tid, f in frames.items():
+                                if tid == main_id:
+                                    continue
+                                parts.append("--- thread %s (%s)\n%s" % (
+                                    tid, names.get(tid, "?"),
+                                    "".join(_tb.format_stack(f, limit=6))))
+                            if parts:
+                                _dump("=== 他スレッド（参考） ===\n" + "".join(parts))
                     except Exception as _e:
                         _swallow(_e, "ui/main_window_dcc.py _watch(dump)")
 

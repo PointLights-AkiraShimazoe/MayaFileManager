@@ -138,6 +138,7 @@ class AutoNamingRuleRow(QFrame):
     """
 
     remove_requested = Signal(object)
+    duplicate_requested = Signal(object)     # r146: この規則を複製
 
     def __init__(self, directory: str = "", rule: Dict = None, parent=None):
         super().__init__(parent)
@@ -179,6 +180,14 @@ class AutoNamingRuleRow(QFrame):
         self._title = QLabel("")
         self._title.setTextInteractionFlags(Qt.NoTextInteraction)
         hl.addWidget(self._title, 1)
+        # r146（ユーザー指示 2026-10-16）: ✕ の左隣に «複製»
+        head_dup = QToolButton()
+        head_dup.setText("\u29c9")          # ⧉
+        head_dup.setToolTip(tr("この規則を複製（すぐ下に開く）",
+                               "Duplicate this rule (opens below)"))
+        head_dup.clicked.connect(lambda: self.duplicate_requested.emit(self))
+        hl.addWidget(head_dup, 0)
+        self._dup_btn = head_dup
         head_del = QToolButton()
         head_del.setText("\u2715")
         head_del.setToolTip(tr("この規則を削除", "Remove this rule"))
@@ -186,6 +195,9 @@ class AutoNamingRuleRow(QFrame):
         hl.addWidget(head_del, 0)
         outer.addWidget(head, 0)
         self._head = head
+        # 畳んだ時は見出しの高さだけにする（縦に伸びない）
+        from core.compat import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
         self._body = QWidget()
         outer.addWidget(self._body, 1)

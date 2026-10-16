@@ -992,6 +992,23 @@ def _shell_rename(src: str, dst: str) -> bool:
         return False
 
 
+def is_case_only_rename(src: str, dst: str) -> bool:
+    """同じ項目の «大文字小文字だけ» の付け替えか（r146）。
+
+    ユーザー報告 2026-10-16「リネームの際、大文字小文字が区別されず同名と
+    されるのを解消して」: Windows のファイルシステムは大文字小文字を区別
+    しないので、abc.ma → Abc.ma は os.path.lexists(新) が True になり
+    «同名がある» と弾いていた。自分自身への付け替えは同名扱いにしない
+    （os.rename はそのまま通る）。"""
+    try:
+        if src == dst:
+            return False
+        return os.path.normcase(os.path.normpath(src)) == \
+            os.path.normcase(os.path.normpath(dst))
+    except Exception:
+        return False
+
+
 def rename_path(src: str, dst: str, release_cb=None, attempts: int = 4,
                 delay: float = 0.15):
     """src を dst へリネームする。成功なら (True, None)、失敗なら (False, 例外)。

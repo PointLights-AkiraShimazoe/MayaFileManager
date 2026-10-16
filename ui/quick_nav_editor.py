@@ -357,11 +357,34 @@ class QuickNavPresetEditor(QDialog):
             "even while another preset is selected."))
         lay.addWidget(self._naming_enabled_cb)
 
+        # r146: 全体のキルスイッチ（設定 → 自動命名）が OFF の時の注意。
+        # ここが ON でも全体が OFF なら規則は効かない（二重スイッチの罠）。
+        note_row = QHBoxLayout()
+        self._naming_global_note = QWidget()
+        nl = QHBoxLayout(self._naming_global_note)
+        nl.setContentsMargins(0, 0, 0, 0)
+        note_lbl = QLabel(tr("⚠ 「設定 → 自動命名 → 自動命名を有効にする」が OFF のため、"
+                             "この規則は効きません。",
+                             "⚠ Auto naming is turned off in Settings → Auto naming, "
+                             "so these rules will not apply."))
+        note_lbl.setWordWrap(True)
+        nl.addWidget(note_lbl, 1)
+        note_btn = QPushButton(tr("全体を有効にする", "Enable globally"))
+        note_btn.setAutoDefault(False)
+        note_btn.clicked.connect(lambda _c=False: self._enable_naming_globally())
+        nl.addWidget(note_btn, 0)
+        self._naming_global_note.hide()
+        note_row.addWidget(self._naming_global_note)
+        lay.addLayout(note_row)
+
         self._naming_container = QWidget()
         self._naming_layout = QVBoxLayout(self._naming_container)
         self._naming_layout.setContentsMargins(0, 0, 0, 0)
         self._naming_layout.setSpacing(4)
-        self._naming_layout.addStretch()
+        # r146（ユーザー報告 2026-10-16「畳んだ時の幅（高さ）がデカすぎる」）:
+        # addStretch() は伸び率 0 だったので、余った高さが各規則に配られて
+        # 畳んだ規則まで背が高くなっていた。余りは必ずこの stretch へ。
+        self._naming_layout.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidget(self._naming_container)
         scroll.setWidgetResizable(True)
@@ -391,9 +414,27 @@ class QuickNavPresetEditor(QDialog):
         if rule is not None:
             row.set_collapsed(True)
         row.remove_requested.connect(self._remove_naming_rule)
+        row.duplicate_requested.connect(self._duplicate_naming_rule)
         self._naming_rows.append(row)
         self._naming_layout.insertWidget(self._naming_layout.count() - 1, row)
         return row
+
+    def _duplicate_naming_rule(self, row):
+        """規則を複製してすぐ下に開いた状態で並べる（r146、ユーザー指示 2026-10-16）。"""
+        from ui.settings_dialog import AutoNamingRuleRow
+        try:
+            d, rule = row.get_data()
+        except Exception as _e:
+            _swallow(_e, "ui/quick_nav_editor.py _duplicate_naming_rule")
+            return None
+        new = AutoNamingRuleRow(directory=d, rule=rule)
+        new.remove_requested.connect(self._remove_naming_rule)
+        new.duplicate_requested.connect(self._duplicate_naming_rule)
+        i = self._naming_rows.index(row) + 1 if row in self._naming_rows else len(self._naming_rows)
+        self._naming_rows.insert(i, new)
+        self._naming_layout.insertWidget(self._naming_layout.indexOf(row) + 1, new)
+        new.set_collapsed(False)
+        return new
 
     def _remove_naming_rule(self, row):
         if row in self._naming_rows:
@@ -408,26 +449,48 @@ class QuickNavPresetEditor(QDialog):
         if draft is None:
             own = self._sm.has_auto_naming_for_preset(preset)
             if own:
-                rules = dict(self._sm.get_auto_naming_rules(preset))
+                rules = list(self._sm.get_auto_naming_rule_list(preset))
                 enabled = self._sm.get_auto_naming_enabled(preset)
             else:
                 # r139: 自前の設定が無いプリセットには、廃止した旧「共通ルール」を
                 # 下書きとして持ち込む（見えないまま消えるのを防ぐ）。
-                rules = dict(self._sm.get_auto_naming_rules(None) or {})
+                rules = list(self._sm.get_auto_naming_rule_list(None) or [])
                 enabled = bool(self._sm.get("auto_naming_enabled", True))
             draft = {"enabled": enabled, "rules": rules}
         self._naming_enabled_cb.setChecked(bool(draft["enabled"]))
-        for d, rule in (draft["rules"] or {}).items():
+        # r146: 規則は [(root, rule), ...] の一覧（同じルートに何本でも）
+        for d, rule in self._sm._rules_as_list(draft["rules"] or []):
             self._add_naming_rule(d, rule)
+        self._refresh_naming_global_note()
 
     def _collect_naming(self):
-        rules = {}
+        rules = []
         for row in getattr(self, "_naming_rows", []):
             d, rule = row.get_data()
             if d:
-                rules[d] = rule
+                rules.append((d, rule))
         return {"enabled": self._naming_enabled_cb.isChecked(),
                 "rules": rules}
+
+    def _refresh_naming_global_note(self):
+        """設定の «全体のキルスイッチ» が OFF なら、ここで分かるように出す（r146）。
+
+        ユーザー報告 2026-10-16「ルール通りの場所で保存しようとしてもルールが
+        適用されず」: 実機の設定では「設定 → 自動命名 → 自動命名を有効にする」
+        が OFF だった。プリセット側のチェックは ON に見えるので、二重の
+        スイッチに気付けない。ここに注意と «有効にする» ボタンを出す。"""
+        note = getattr(self, "_naming_global_note", None)
+        if note is None:
+            return
+        on = bool(self._sm.get("auto_naming_enabled", True))
+        note.setVisible(not on)
+
+    def _enable_naming_globally(self):
+        try:
+            self._sm.set("auto_naming_enabled", True)
+        except Exception as _e:
+            _swallow(_e, "ui/quick_nav_editor.py _enable_naming_globally")
+        self._refresh_naming_global_note()
 
     def _stash_naming(self):
         """表示中のプリセットの編集内容を下書きへ退避する。"""

@@ -423,15 +423,49 @@ class SettingsManager:
     # 既存の auto_naming_rules / auto_naming_enabled は «共通» として残し、
     # プリセットに設定が無い時のフォールバックにする（移行なしで動く）。
 
-    def get_auto_naming_rules(self, preset: str = None) -> Dict[str, Any]:
-        """自動命名ルール。preset 指定時はそのプリセットの設定、
-        無ければ共通設定を返す。"""
+    @staticmethod
+    def _rules_as_list(rules):
+        """保存形式（辞書 {root: rule} ／ 一覧 [{root, ...}]）を [(root, rule)] に揃える。
+
+        r146（ユーザー報告 2026-10-16「プリセットを保存しても増やした分が
+        保存されていなかった」）: 以前は root をキーにした辞書だったので、
+        **同じルートに 2 本目の規則を足すと 1 本目を上書き** していた。
+        一覧で持てば同じルートに何本でも置ける（対象階層が違えば別の規則）。
+        古い辞書形式もそのまま読める。"""
+        out = []
+        if isinstance(rules, dict):
+            for root, rule in rules.items():
+                if isinstance(rule, dict):
+                    out.append((root, dict(rule)))
+        elif isinstance(rules, (list, tuple)):
+            for item in rules:
+                if isinstance(item, dict) and "root" in item:
+                    rule = dict(item)
+                    root = rule.pop("root", "")
+                    out.append((root, rule))
+                elif isinstance(item, (list, tuple)) and len(item) == 2 \
+                        and isinstance(item[1], dict):
+                    out.append((item[0], dict(item[1])))
+        return out
+
+    def get_auto_naming_rule_list(self, preset: str = None):
+        """自動命名ルールを [(root, rule), ...] の順序付き一覧で返す（r146）。
+        同じルートの規則が複数あってもそのまま返す。"""
         if preset:
             per = self._global_state.get("auto_naming_by_preset", {})
             entry = per.get(preset)
             if isinstance(entry, dict) and "rules" in entry:
-                return entry.get("rules") or {}
-        return self._global_state.get("auto_naming_rules", {})
+                return self._rules_as_list(entry.get("rules") or [])
+        return self._rules_as_list(self._global_state.get("auto_naming_rules", {}))
+
+    def get_auto_naming_rules(self, preset: str = None) -> Dict[str, Any]:
+        """自動命名ルール（互換用の辞書 {root: rule}）。preset 指定時はその
+        プリセットの設定、無ければ共通設定。同じルートが複数ある時は
+        後のものが残る。全部欲しい時は get_auto_naming_rule_list()。"""
+        out = {}
+        for root, rule in self.get_auto_naming_rule_list(preset):
+            out[root] = rule
+        return out
 
     def get_auto_naming_enabled(self, preset: str = None) -> bool:
         if preset:
@@ -451,7 +485,9 @@ class SettingsManager:
         if not preset:
             return
         per = dict(self._global_state.get("auto_naming_by_preset", {}))
-        per[preset] = {"enabled": bool(enabled), "rules": rules or {}}
+        # r146: 一覧形式で保存（同じルートの規則を何本でも持てる）
+        items = [dict(rule, root=root) for root, rule in self._rules_as_list(rules or [])]
+        per[preset] = {"enabled": bool(enabled), "rules": items}
         self._global_state["auto_naming_by_preset"] = per
         self.save()
 
@@ -500,7 +536,7 @@ class SettingsManager:
         def _add(rules, enabled, source, prio):
             if not enabled or not rules:
                 return
-            for root, rule in (rules or {}).items():
+            for root, rule in self._rules_as_list(rules):
                 if not root or not _an.is_hier_rule(rule):
                     continue
                 values = _an.match_levels(root, directory,

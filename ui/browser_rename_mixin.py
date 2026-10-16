@@ -319,7 +319,8 @@ class RenameMixin:
                                        "The name contains characters that cannot be used."))
                 return
             new_path = os.path.join(os.path.dirname(path), new_name)
-            if os.path.lexists(new_path):
+            from core.file_operations import is_case_only_rename
+            if os.path.lexists(new_path) and not is_case_only_rename(path, new_path):
                 QMessageBox.warning(self, tr("名前変更", "Rename"),
                                     tr("同名の項目が既にあります:\n%s",
                                        "An item with that name already exists:\n%s")

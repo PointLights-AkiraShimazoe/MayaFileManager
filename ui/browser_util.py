@@ -244,6 +244,29 @@ class _SafeIconProvider(QFileIconProvider):
                 if len(self._isdir) > 20000:
                     self._isdir.clear()   # 覚えすぎない
 
+    def type(self, info):
+        """«種類» の文字列。**I/O もシェル呼び出しもしない**（r146）。
+
+        QFileSystemModel は、フォルダの変化が届くたびにメインスレッドで
+        getInfo() → iconProvider.type() を 1 ファイルずつ呼ぶ。既定の
+        QFileIconProvider.type は Windows のシェル（SHGetFileInfo）に
+        種類名を聞きに行き、外付け／ネットワークのボリュームでは 1 件ごとに
+        待たされる。フォルダ移動のあと数十秒固まった（実機 2026-10-16
+        16:00、Python 側のスタックは app.exec() のみ＝C++ の中）要因の
+        一つとして切る。種類は拡張子から決めるだけで十分。"""
+        try:
+            if isinstance(info, QFileInfo):
+                ext = info.suffix()
+                if self._isdir_nowait(info.filePath(), bool(ext)):
+                    return "File Folder"
+                return (ext.upper() + " File") if ext else "File"
+        except Exception as _e:
+            _swallow(_e, "ui/browser_util.py _SafeIconProvider.type")
+        try:
+            return super().type(info)
+        except Exception:
+            return ""
+
     def icon(self, arg):
         try:
             if isinstance(arg, QFileInfo):
