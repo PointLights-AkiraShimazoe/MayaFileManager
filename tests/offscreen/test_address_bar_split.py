@@ -154,7 +154,8 @@ seen = []
 ab.returnPressed.connect(lambda: seen.append(ab.text()))
 ab.dir_edit.setText(other)
 ab.dir_edit.returnPressed.emit()
-check(seen and seen[-1] == disp(other),
+# 打った原文（区切り文字そのまま）が返る。移動側（_navigate）が normpath する
+check(seen and seen[-1].replace("\\", "/") == other.replace("\\", "/"),
       "左欄で Enter → 行き先は左欄のフォルダだけ（%r）" % (seen[-1] if seen else None,))
 check(ab.file_edit.text() == "", "左欄で Enter するとファイル名欄は空になる")
 # 別ドライブ風の表記でも同じ（存在しなくても text() はそのまま返す）
