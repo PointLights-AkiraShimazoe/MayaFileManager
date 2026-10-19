@@ -77,7 +77,14 @@ class AddressBar(QWidget):
         self.dir_edit.setToolTip(tr("フォルダのパス（Enter で移動）",
                                     "Folder path (Enter to go)"))
         self.dir_edit.setMinimumWidth(self.DIR_MIN_W)
-        self.dir_edit.returnPressed.connect(self.returnPressed.emit)
+        # r146（ユーザー報告 2026-10-19「Windows のパスをテキストフィールドに
+        # 入れても、ドライブ違いのパスを入れてエンターしても、ディレクトリが
+        # 飛べません」）: ディレクトリ欄で Enter した時は **その欄だけ** が
+        # 行き先。ファイル名欄に前の選択（scene.ma 等）が残っていると、
+        # text() が «新しいフォルダ/古いファイル名» をつないで返し、存在
+        # しないパスとして到達確認で弾かれていた（欄を分けた 2026-10-14
+        # からの退行）。Enter の前にファイル名欄を空にする。
+        self.dir_edit.returnPressed.connect(self._on_dir_return)
         self.split.addWidget(self.dir_edit)
 
         self.file_edit = QLineEdit()
@@ -106,6 +113,16 @@ class AddressBar(QWidget):
             self.copy_btn.setText("📋")
         self.copy_btn.clicked.connect(lambda _c=False: self.copy_full_path())
         lay.addWidget(self.copy_btn, 0)
+
+    def _on_dir_return(self):
+        """ディレクトリ欄での Enter: ファイル名欄は捨てて、欄の中身を行き先にする。"""
+        try:
+            self.file_edit.setText("")
+            self._raw = None
+            self._raw_parts = (None, None)
+        except Exception as _e:
+            _swallow(_e, "ui/address_bar.py _on_dir_return")
+        self.returnPressed.emit()
 
     # ── 分割位置（覚える）───────────────────────────────────────
     def split_sizes(self):

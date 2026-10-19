@@ -142,6 +142,33 @@ ab.dir_edit.returnPressed.emit()
 ab.file_edit.returnPressed.emit()
 check(len(hits) == 2, "左右どちらの Enter でも移動の合図が出る（%d）" % len(hits))
 
+# ── 6b) ディレクトリ欄での Enter は «その欄だけ» が行き先 ───────────
+# ユーザー報告 2026-10-19「Windows のパスをテキストフィールドに入れても、
+# ドライブ違いのパスを入れてエンターしても、ディレクトリが飛べません」:
+# ファイルを選んだ後（右欄に scene.ma が残る）に左欄へ別のフォルダを
+# 打って Enter すると、text() が «新フォルダ/scene.ma» を返して弾かれていた。
+other = tempfile.mkdtemp()
+ab.setText(f)                                  # 右欄にファイル名が入る
+check(ab.file_edit.text() != "", "前提: ファイル名欄に前の選択が残っている")
+seen = []
+ab.returnPressed.connect(lambda: seen.append(ab.text()))
+ab.dir_edit.setText(other)
+ab.dir_edit.returnPressed.emit()
+check(seen and seen[-1] == disp(other),
+      "左欄で Enter → 行き先は左欄のフォルダだけ（%r）" % (seen[-1] if seen else None,))
+check(ab.file_edit.text() == "", "左欄で Enter するとファイル名欄は空になる")
+# 別ドライブ風の表記でも同じ（存在しなくても text() はそのまま返す）
+ab.dir_edit.setText("Z:\\other\\place")
+ab.dir_edit.returnPressed.emit()
+check(seen[-1].replace("\\", "/") == "Z:/other/place",
+      "ドライブ違いのパスもそのまま行き先になる（%r）" % (seen[-1],))
+# 右欄（ファイル名）で Enter した時は «左のフォルダ/ファイル名»
+ab.setText(f)
+ab.file_edit.setText("other.ma")
+ab.file_edit.returnPressed.emit()
+check(seen[-1] == disp(os.path.join(os.path.dirname(f), "other.ma")),
+      "右欄で Enter → 左のフォルダ/ファイル名（%r）" % (seen[-1],))
+
 # ── 7) ブラウザ側が今までどおり使える ───────────────────────────
 b = make_panel()
 check(isinstance(b._addr_bar, AddressBar), "パネルが新しいアドレス欄を使う")
