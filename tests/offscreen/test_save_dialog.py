@@ -3,7 +3,7 @@
 オプション記憶、空白右クリック（フォルダメニュー）とファイル右クリックの項目。"""
 import ast, os
 from _common import *  # noqa: F401,F403
-from _common import app, sm, make_panel, find_item, tmpdir, finish, run, QTimer, Qt
+from _common import app, sm, make_panel, find_item, find_item_wait, tmpdir, finish, run, QTimer, Qt
 from core import dcc_save
 from core.compat import QMenu, QComboBox, QCheckBox, QPoint
 from ui.save_dialog import SaveDialog
@@ -152,7 +152,10 @@ def s1():
     got = []
     b._popup_folder_context_menu = lambda folder, gpos: got.append(folder)
     b._popup_context_menu = lambda paths, gpos: got.append(("items", list(paths)))
-    cv, rect, _ = find_item(b, "sub"); assert cv
+    # r146: navigate 直後の _force_column_rebuild（2.6 秒）でカラムが作り直され、
+    # 新しいカラムが見えるまで一瞬の間がある。固定待ちだと Linux で間欠的に
+    # «sub が無い» で落ちた（2026-10-20）。出るまで待つ。
+    cv, rect, _ = find_item_wait(b, "sub", 8000); assert cv
     last_bottom = max(cv.visualRect(cv.model().index(r, 0, cv.rootIndex())).bottom()
                       for r in range(cv.model().rowCount(cv.rootIndex())))
     assert last_bottom + 40 < cv.viewport().height(), "空白域が無い"

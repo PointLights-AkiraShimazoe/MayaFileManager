@@ -46,7 +46,9 @@ _P.data = _data
 
 def s1():
     b.navigate_to(os.path.join(big, "sub"))
-    QTimer.singleShot(2500, s2)
+    # navigate 直後の _force_column_rebuild（2.6 秒）が過ぎてから数える
+    # （途中で走るとカラムが作り直され、掴んでいたビューが消える）
+    QTimer.singleShot(3600, s2)
 
 
 def s2():
@@ -71,7 +73,17 @@ def s2():
         app.processEvents()
         before = cnt["data"]
         for _ in range(5):
-            bigv.doItemsLayout()
+            try:
+                bigv.doItemsLayout()
+            except RuntimeError:
+                # 混んでいる環境でカラムが作り直された。掴み直して続ける
+                views = [v for v in b._column_view.findChildren(QListView) if v.isVisible()]
+                bigv = next((v for v in views if os.path.normcase(os.path.normpath(
+                    b._column_view._path_for_index(v.rootIndex()) or "")) ==
+                    os.path.normcase(os.path.normpath(big))), None)
+                if bigv is None:
+                    break
+                bigv.doItemsLayout()
             app.processEvents()
         used = cnt["data"] - before
         # 300 件 × 8 役割 × 5 回 = 12,000 以上なら «全項目に聞いている»
