@@ -22,6 +22,7 @@ import os
 import os as _os          # 旧コード互換（関数内で import os しているものがある）
 import re
 import socket
+import sys
 
 # r119: ログは «監視対象と別の故障単位» へ。従来はツールフォルダ直下
 # （= ツールを置いたドライブ）で、そのドライブが落ちると連携の記録まで
@@ -49,30 +50,84 @@ DEFAULT_PORT = 20261
 PORT_RANGE = tuple(range(20261, 20270))
 
 
+def listening_ports():
+    """この PC で **聞いている**（LISTEN 状態の）TCP ポート {port: pid}（r146）。
+
+    接続を試さずに OS の表から読む。Windows は iphlpapi の
+    GetExtendedTcpTable、Linux は /proc/net/tcp。取れない環境は None。
+
+    なぜ要るか: «繋がらない» には 2 種類ある。閉じている（誰も聞いていない）
+    のと、聞いてはいるが受け付けが詰まっている（Maya がシーン読み込み中で
+    accept が止まり、待ち行列が埋まった）の 2 つ。接続の時間切れだけでは
+    区別できない（実機 2026-10-20: この PC では閉じたポートへの接続も
+    «拒否» ではなく時間切れになった＝ファイアウォールの仕様）。"""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes as wt
+            iphlpapi = ctypes.windll.iphlpapi
+            AF_INET, TCP_TABLE_OWNER_PID_LISTENER = 2, 3
+            size = wt.DWORD(0)
+            iphlpapi.GetExtendedTcpTable(None, ctypes.byref(size), False,
+                                         AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0)
+            buf = ctypes.create_string_buffer(max(4, size.value))
+            rc = iphlpapi.GetExtendedTcpTable(buf, ctypes.byref(size), False,
+                                              AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0)
+            if rc != 0:
+                return None
+
+            class _Row(ctypes.Structure):
+                _fields_ = [("state", wt.DWORD), ("local_addr", wt.DWORD),
+                            ("local_port", wt.DWORD), ("remote_addr", wt.DWORD),
+                            ("remote_port", wt.DWORD), ("pid", wt.DWORD)]
+            n = wt.DWORD.from_buffer_copy(buf.raw[:4]).value
+            out = {}
+            off = 4
+            for _ in range(n):
+                row = _Row.from_buffer_copy(buf.raw[off:off + ctypes.sizeof(_Row)])
+                off += ctypes.sizeof(_Row)
+                port = socket.ntohs(row.local_port & 0xFFFF)
+                out[port] = int(row.pid)
+            return out
+        out = {}
+        for fn in ("/proc/net/tcp", "/proc/net/tcp6"):
+            try:
+                with open(fn) as f:
+                    next(f)
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) > 3 and parts[3] == "0A":      # LISTEN
+                            out[int(parts[1].rsplit(":", 1)[1], 16)] = 0
+            except OSError:
+                continue
+        return out
+    except Exception:
+        return None
+
+
 def scan_ports(host: str = "127.0.0.1", timeout: float = 0.15):
     """レンジ内のポートを (open, busy) に分けて返す（r146）。
 
     open … 接続できた（＝応答できる Maya がいる）
-    busy … 接続が **時間切れ**（閉じていれば即「拒否」で返るので、時間切れは
-           «聞いている相手はいるが受け付けが詰まっている» 状態）。
-           Maya はシーンの読み込み中など本体が忙しいと commandPort の accept が
-           止まり、こちらが投げた接続が待ち行列（backlog）に溜まる。溜まり
-           切ると新しい接続は時間切れになる。**閉じたのではない。**
+    busy … 聞いてはいる（LISTEN）が接続できない。Maya はシーンの読み込み中など
+           本体が忙しいと commandPort の accept が止まり、こちらが投げた接続が
+           待ち行列（backlog）に溜まる。溜まり切ると新しい接続は通らない。
+           **閉じたのではない。** 判定は OS の LISTEN 表（listening_ports）で
+           行う。接続の時間切れでは決めない（この PC では閉じたポートも
+           時間切れになる）。表が取れない環境では busy は常に空。
 
     実機 2026-10-20 15:40: 1 台目の Maya にシーンを開かせた直後、2 台目を
     起動すると 1 台目が一覧から消えた（scan: open ports=[] → [20262]）。
     1 台目は読み込み中で accept が止まり、見張りの 1.5 秒ごとの問い合わせで
-    backlog が埋まって «接続 timed out» になり、«閉じた» と見なして落として
-    いた（ユーザー報告「複数起動のコネクトリスト追加のエラー」）。"""
-    found, busy = [], []
+    backlog が埋まって繋がらなくなり、«閉じた» と見なして落としていた
+    （ユーザー報告「複数起動のコネクトリスト追加のエラー」）。"""
+    found = []
     for p in PORT_RANGE:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
         try:
             s.connect((host, p))
             found.append(p)
-        except socket.timeout:
-            busy.append(p)
         except OSError:
             pass
         finally:
@@ -80,6 +135,8 @@ def scan_ports(host: str = "127.0.0.1", timeout: float = 0.15):
                 s.close()
             except OSError:
                 pass
+    listening = listening_ports() or {}
+    busy = [p for p in PORT_RANGE if p in listening and p not in found]
     return found, busy
 
 

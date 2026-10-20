@@ -13,7 +13,8 @@
 隣のポートへ逃げる（10/19 の «起動中… のまま固まる» の遠因）。
 
 固定すること:
-  1) scan_ports は (open, busy) を返し、時間切れは busy
+  1) scan_ports は (open, busy) を返し、LISTEN しているのに繋がらない相手は busy
+     （接続の時間切れでは決めない。この PC では閉じたポートも時間切れになる）
   2) busy のポートで前回識別できていた Maya は «…» 付きで一覧に残る
   3) 本当に閉じた（open にも busy にも無い）ポートだけ落ちる
   4) find_free_port は busy も使用中と見る
@@ -57,13 +58,15 @@ def s1():
     orig_range = _mb.PORT_RANGE
     _mb.PORT_RANGE = (port, port + 1)
     try:
+        lp = _mb.listening_ports()
+        check(lp is not None and port in lp, "OS の LISTEN 表が読める（%r）" % (None if lp is None else port in lp))
         open_, busy = _mb.scan_ports(timeout=0.15)
         closed = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         closed.bind(("127.0.0.1", 0)); closed_port = closed.getsockname()[1]; closed.close()
         _mb.PORT_RANGE = (closed_port,)
         open2, busy2 = _mb.scan_ports(timeout=0.15)
         check(closed_port not in open2 and closed_port not in busy2,
-              "閉じたポートは open にも busy にも入らない（即拒否）")
+              "閉じたポートは open にも busy にも入らない（LISTEN 表に無い）")
         # 待ち行列が埋まった相手は環境によって «繋がる» か «時間切れ» のどちらかになる。
         # どちらにせよ «閉じた» 扱いにはならないことが要点。
         check(port in open_ or port in busy,
