@@ -247,14 +247,32 @@ class MainWindowDccMixin:
     LAUNCH_CLAIM_SEC = 180.0        # これを過ぎたら諦める（起動失敗等）
     LAUNCH_WATCH_MS = 4000          # 様子見の間隔（スキャン中なら即 return）
 
-    def _claim_launched_port(self, dcc: str, port: int):
-        """«このポートに起動中の DCC が来る» と予約する（r138）。"""
+    def _claim_launched_port(self, dcc: str, port: int, pid=None):
+        """«このポートに起動中の DCC が来る» と予約する（r138）。
+
+        r146（ユーザー報告 2026-10-20「起動されたMayaを認識していないのか、
+        起動時にコネクトが切り替わらなかった」「起動中のまま固まってる。
+        mayaは動いてます」）: 予約したポートに来るとは限らない。実機の
+        mfm_maya.log では、閉じかけの前の Maya が :20261 を掴んだまま
+        応答しなくなり（connect が timed out）、新しい Maya は -command の
+        commandPort :20261 に失敗して userSetup 側で :20262 を開いた。
+        予約が :20261 のまま 180 秒動かず、一覧に出ている :20262 を採らない
+        （«起動中… (:20261)» で固まる）。
+
+        そこで予約には «起動した時点で一覧にいた顔ぶれ» と «起動した
+        プロセスの PID» も持たせ、_on_conn_list で
+          * PID が一致する Maya、または
+          * 起動の後に **新しく現れた**（顔ぶれに無かった）識別済みの Maya
+        が出てきたら、ポートが違ってもそれを «起動した当人» として採る。"""
         import time as _t
         claims = getattr(self, "_launch_claims", None)
         if claims is None:
             claims = self._launch_claims = {}
+        known = dict((getattr(self, "_last_conn_items", None) or {}).get(dcc, {}))
         claims[dcc] = {"port": int(port),
-                       "until": _t.monotonic() + self.LAUNCH_CLAIM_SEC}
+                       "until": _t.monotonic() + self.LAUNCH_CLAIM_SEC,
+                       "pid": int(pid) if pid else None,
+                       "known": known}          # {port: pid} 起動時点の顔ぶれ
         t = getattr(self, "_launch_watch_timer", None)
         if t is None:
             t = QTimer(self)
@@ -488,8 +506,13 @@ class MainWindowDccMixin:
             first_ok = -1
             claim = self._launch_claim(dcc)      # r138: 起動中の予約
             claim_idx = -1
+            cinfo = (getattr(self, "_launch_claims", None) or {}).get(dcc) or {}
+            claim_pid = cinfo.get("pid")
+            known = cinfo.get("known") or {}
+            newcomer_idx = -1                    # r146: 起動後に新しく現れた Maya
             for i, it in enumerate(items):
                 port, label, identified = it[0], it[1], it[2]
+                pid = it[3] if len(it) > 3 else None
                 combo.addItem(label, port)
                 combo.setItemData(i, label, Qt.ToolTipRole)
                 if port == cur_port:
@@ -498,6 +521,24 @@ class MainWindowDccMixin:
                     first_ok = i
                 if claim is not None and port == claim and identified:
                     claim_idx = i
+                if claim is not None and identified and newcomer_idx < 0:
+                    if claim_pid and pid and int(pid) == int(claim_pid):
+                        newcomer_idx = i         # 起動したプロセスそのもの
+                    elif port not in known or (pid and known.get(port) != pid):
+                        newcomer_idx = i         # 起動の後に現れた顔
+            if claim is not None and claim_idx < 0 and newcomer_idx >= 0:
+                # r146: 予約したポートには来なかったが、起動した当人（PID 一致）
+                # か、起動の後に新しく現れた Maya がいる。そちらを採る。
+                # 前の Maya が閉じかけでポートを掴んだままだと、新しい Maya は
+                # 隣のポートを開く（実機 2026-10-20: :20261 → :20262）。
+                claim = int(combo.itemData(newcomer_idx))
+                claim_idx = newcomer_idx
+                try:
+                    from core.maya_bridge import bridge_log
+                    bridge_log("claim: 予約 :%s には来ず、新しく現れた :%d を採る"
+                               % (cinfo.get("port"), claim))
+                except Exception:
+                    pass
             if claim is not None:
                 if claim_idx >= 0:
                     # r138: 起動した当人が出てきた。ここへ向けて予約を終える。
@@ -531,6 +572,15 @@ class MainWindowDccMixin:
                 self._sm.set(port_key, int(new_port), save=False)
             combo.setCurrentIndex(sel)
         combo.blockSignals(False)
+        # r146: 次の起動予約のために «今の顔ぶれ» {port: pid} を覚える
+        try:
+            last = getattr(self, "_last_conn_items", None)
+            if last is None:
+                last = self._last_conn_items = {}
+            last[dcc] = {it[0]: (it[3] if len(it) > 3 else None)
+                         for it in (items or []) if it[2]}
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _on_conn_list(remember)")
 
     def _on_conn_changed(self, idx: int, dcc: str = None):
         dcc = dcc or self._dcc
@@ -1887,13 +1937,15 @@ class MainWindowDccMixin:
             # レンジ内の空きポートを割り当て、起動したMayaへ接続先を切り替える。
             port = find_free_port()
             extra = self._maya_launch_args()
-            launch_maya(inst, extra_args=extra or None, command_port=port,
-                        env_extra=self._maya_launch_env() or None,
-                        wrapper=self._maya_launch_wrapper())
+            proc = launch_maya(inst, extra_args=extra or None, command_port=port,
+                               env_extra=self._maya_launch_env() or None,
+                               wrapper=self._maya_launch_wrapper())
             self._bridge.set_port(port)
             self._sm.set("maya_command_port", int(port), save=False)
             # r138: 起動中のこの Maya へ接続を向けておく（待たない）
-            self._claim_launched_port("maya", port)
+            # r146: PID も渡す（予約したポートに来なくても当人を見分ける）
+            self._claim_launched_port("maya", port,
+                                      pid=getattr(proc, "pid", None))
             self.statusBar().showMessage(
                 tr("Maya %s を起動しました（連携ポート :%d）%s",
                    "Launched Maya %s (bridge port :%d)%s")

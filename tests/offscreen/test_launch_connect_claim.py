@@ -124,6 +124,57 @@ def s1():
     check(not w._launch_watch_timer.isActive(),
           "予約が無くなれば様子見も止まる（回りっぱなしにしない）")
 
+    # ── 7) 予約したポートには来ず、隣のポートで現れた（実機 2026-10-20）────
+    # 閉じかけの前の Maya が :20261 を掴んだままだと、新しい Maya は
+    # -command の commandPort :20261 に失敗して userSetup で :20262 を開く。
+    # 予約は :20261 のまま «起動中…» で固まっていた。
+    w._clear_launch_claim("maya")
+    w._bridge.set_port(20261)
+    w._on_conn_list(_items([20261]), "maya")      # 起動前の顔ぶれ: :20261 だけ
+    _settle()
+    w._bridge.set_port(20261)
+    w._claim_launched_port("maya", 20261)         # 空きと見て :20261 を予約
+    w._on_conn_list([], "maya")                   # 前の Maya が消えた
+    _settle()
+    check(w._bridge.port == 20261 and combo.isEnabled(), "待っている間は予約のまま")
+    w._on_conn_list(_items([20262]), "maya")      # 隣のポートで新しい Maya が現れた
+    _settle()
+    check(w._bridge.port == 20262,
+          "予約と違うポートでも «新しく現れた Maya» を起動した当人として採る（%r）"
+          % w._bridge.port)
+    check(combo.itemData(combo.currentIndex()) == 20262, "コンボもそちらを指す")
+    check(w._launch_claim("maya") is None, "予約は片付く")
+    check("起動中" not in combo.currentText() and "starting" not in combo.currentText(),
+          "«起動中…» で固まらない（%r）" % combo.currentText())
+
+    # ── 8) 起動前からいた Maya は «新しく現れた» とは見なさない ────────
+    w._on_conn_list(_items([20261, 20262]), "maya")
+    _settle()
+    w._bridge.set_port(20263)
+    w._claim_launched_port("maya", 20263)
+    w._on_conn_list(_items([20261, 20262]), "maya")   # 顔ぶれは変わらない
+    _settle()
+    check(w._bridge.port == 20263 and w._launch_claim("maya") == 20263,
+          "前からいる Maya へは乗り換えない（%r）" % w._bridge.port)
+    # 同じポートでも PID が変わっていれば «新しい Maya»（再起動して同じポート）
+    items = _items([20261, 20262])
+    items[1] = (20262, "Maya 2027 — new (:20262)", True, 99999, "maya")
+    w._on_conn_list(items, "maya")
+    _settle()
+    check(w._bridge.port == 20262 and w._launch_claim("maya") is None,
+          "同じポートでも PID が変わった Maya は起動した当人として採る（%r）" % w._bridge.port)
+
+    # ── 9) PID が分かっていれば、それが一番確か ───────────────────────
+    w._on_conn_list(_items([20261, 20262]), "maya")
+    _settle()
+    w._bridge.set_port(20263)
+    w._claim_launched_port("maya", 20263, pid=4242)
+    items = _items([20261, 20262, 20265])
+    items[2] = (20265, "Maya 2027 — mine (:20265)", True, 4242, "maya")
+    w._on_conn_list(items, "maya")
+    _settle()
+    check(w._bridge.port == 20265, "PID が一致する Maya を採る（%r）" % w._bridge.port)
+
     finish(not fails)
 
 
