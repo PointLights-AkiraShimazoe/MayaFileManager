@@ -64,8 +64,9 @@ def s1():
     # r118: _refresh_maya_connections の実装は r114 の分割で
     # ui.main_window_dcc へ移った。_mw 側だけ差し替えても効かない。
     import ui.main_window_dcc as _mwd
-    orig_scan, orig_send = _mwd.scan_open_ports, _mb.MayaBridge.send_python
-    _mwd.scan_open_ports = lambda *a, **k: [20261]
+    # r146: スキャンは (open, busy) を返す scan_ports になった
+    orig_scan, orig_send = _mwd.scan_ports, _mb.MayaBridge.send_python
+    _mwd.scan_ports = lambda *a, **k: ([20261], [])
     _mb.MayaBridge.send_python = fake_send
     got = []
     w._bridge_notify.conn_list.connect(lambda items, dcc: got.append((list(items), dcc)))
@@ -82,10 +83,10 @@ def s1():
     try:
         w._refresh_maya_connections(); _wait(1)
         w._refresh_maya_connections(); _wait(2)
-        _mwd.scan_open_ports = lambda *a, **k: []
+        _mwd.scan_ports = lambda *a, **k: ([], [])
         w._refresh_maya_connections(); _wait(3)
     finally:
-        _mwd.scan_open_ports, _mb.MayaBridge.send_python = orig_scan, orig_send
+        _mwd.scan_ports, _mb.MayaBridge.send_python = orig_scan, orig_send
     maya_lists = [it for it, d in got if d == "maya"]
     assert len(maya_lists) >= 3, got
     first, second, third = maya_lists[0], maya_lists[1], maya_lists[2]

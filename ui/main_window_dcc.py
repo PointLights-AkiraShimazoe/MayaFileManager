@@ -42,7 +42,8 @@ from core.maya_version import (
     launch_maya
 )
 from core.maya_bridge import (MayaBridge, escape_path, scan_open_ports,
-                              find_free_port, IDENTIFY_CODE, parse_identify)
+                              scan_ports, find_free_port, IDENTIFY_CODE,
+                              parse_identify)
 from core.blender_version import (BlenderInstallation, find_installed_blender_versions,
                                   launch_blender)
 from core import blender_bridge as _bl
@@ -347,10 +348,12 @@ class MainWindowDccMixin:
                 from core.maya_bridge import (bridge_log, usersetup_path,
                                               is_usersetup_installed,
                                               APP_DIR_CODE, parse_app_dir)
-                ports = scan_open_ports()
+                # モジュール属性を経由する（テストが差し替えられるように）
+                ports, busy_ports = scan_ports()
                 try:
-                    bridge_log("scan: open ports=%r / userSetup=%r installed=%s"
-                               % (ports, usersetup_path(), is_usersetup_installed()))
+                    bridge_log("scan: open ports=%r busy=%r / userSetup=%r installed=%s"
+                               % (ports, busy_ports, usersetup_path(),
+                                  is_usersetup_installed()))
                 except Exception as _e:
                     _swallow(_e, "ui/main_window.py:879 _run")
                 for port in ports:
@@ -396,8 +399,19 @@ class MainWindowDccMixin:
                     # (ポート, 表示ラベル, Mayaと確認できたか, PID, dcc)
                     items.append((port, label or f"Maya? (:{port})",
                                   label is not None, pid, "maya"))
+                # r146: 接続が «時間切れ» のポート（読み込み中などで accept が
+                # 止まっている Maya）は、前回識別できていれば «…» 付きで残す。
+                # 落とすと «2 台目を起動したら 1 台目が消えた» になる
+                # （実機 2026-10-20 15:40、ユーザー報告「複数起動のコネクト
+                # リスト追加のエラー」）。本当に閉じたポートは即«拒否»で返る
+                # ので busy には入らない。
+                for port in busy_ports:
+                    if port in self._known_conns["maya"] and \
+                            not any(it[0] == port for it in items):
+                        klabel, kpid = self._known_conns["maya"][port]
+                        items.append((port, klabel + " …", True, kpid, "maya"))
                 for port in list(self._known_conns["maya"]):
-                    if port not in ports:
+                    if port not in ports and port not in busy_ports:
                         self._known_conns["maya"].pop(port, None)   # ポートが閉じた
             except Exception as _e:
                 _swallow(_e, "ui/main_window.py:913 _run")
@@ -1260,6 +1274,12 @@ class MainWindowDccMixin:
             return
         if getattr(self, "_dcc_watch_busy", False):
             return
+        # r146: 応答が無かった直後は間を空ける。1.5 秒ごとに繋ぎに行くと、
+        # 読み込み中で accept が止まっている Maya の待ち行列（backlog）を
+        # こちらが埋めてしまい、スキャンまで «接続 timed out» になって
+        # 一覧から消える（実機 2026-10-20 15:40）。
+        if _t.monotonic() < getattr(self, "_dcc_watch_backoff_until", 0.0):
+            return
         port = getattr(self, "_dcc_pending_port", None)
         if not port:
             self._clear_dcc_pending()
@@ -1283,11 +1303,16 @@ class MainWindowDccMixin:
         threading.Thread(target=_run, daemon=True,
                          name="mfm-dcc-idle-watch").start()
 
+    DCC_WATCH_BACKOFF_SEC = 8.0     # 応答が無かった後、次に聞くまでの間
+
     def _on_dcc_idle(self, port: int, idle: bool):
         """見張りの結果（UIスレッド）。応答があれば «実行中» を解除する。"""
+        import time as _t
         self._dcc_watch_busy = False
         if not idle:
+            self._dcc_watch_backoff_until = _t.monotonic() + self.DCC_WATCH_BACKOFF_SEC
             return
+        self._dcc_watch_backoff_until = 0.0
         if int(port) != int(getattr(self, "_dcc_pending_port", 0) or 0):
             return
         pend_key, _t0 = getattr(self, "_dcc_pending", (None, 0.0))

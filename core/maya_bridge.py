@@ -49,16 +49,30 @@ DEFAULT_PORT = 20261
 PORT_RANGE = tuple(range(20261, 20270))
 
 
-def scan_open_ports(host: str = "127.0.0.1", timeout: float = 0.15):
-    """レンジ内で接続を受け付けているポート（=連携可能なMaya候補）を返す。
-    localhostへの接続試行は開いていれば即成功・閉じていれば即拒否のため高速。"""
-    found = []
+def scan_ports(host: str = "127.0.0.1", timeout: float = 0.15):
+    """レンジ内のポートを (open, busy) に分けて返す（r146）。
+
+    open … 接続できた（＝応答できる Maya がいる）
+    busy … 接続が **時間切れ**（閉じていれば即「拒否」で返るので、時間切れは
+           «聞いている相手はいるが受け付けが詰まっている» 状態）。
+           Maya はシーンの読み込み中など本体が忙しいと commandPort の accept が
+           止まり、こちらが投げた接続が待ち行列（backlog）に溜まる。溜まり
+           切ると新しい接続は時間切れになる。**閉じたのではない。**
+
+    実機 2026-10-20 15:40: 1 台目の Maya にシーンを開かせた直後、2 台目を
+    起動すると 1 台目が一覧から消えた（scan: open ports=[] → [20262]）。
+    1 台目は読み込み中で accept が止まり、見張りの 1.5 秒ごとの問い合わせで
+    backlog が埋まって «接続 timed out» になり、«閉じた» と見なして落として
+    いた（ユーザー報告「複数起動のコネクトリスト追加のエラー」）。"""
+    found, busy = [], []
     for p in PORT_RANGE:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
         try:
             s.connect((host, p))
             found.append(p)
+        except socket.timeout:
+            busy.append(p)
         except OSError:
             pass
         finally:
@@ -66,12 +80,23 @@ def scan_open_ports(host: str = "127.0.0.1", timeout: float = 0.15):
                 s.close()
             except OSError:
                 pass
-    return found
+    return found, busy
+
+
+def scan_open_ports(host: str = "127.0.0.1", timeout: float = 0.15):
+    """レンジ内で接続を受け付けているポート（=連携可能なMaya候補）を返す。
+    localhostへの接続試行は開いていれば即成功・閉じていれば即拒否のため高速。"""
+    return scan_ports(host, timeout)[0]
 
 
 def find_free_port(host: str = "127.0.0.1") -> int:
-    """レンジ内で未使用の最初のポートを返す（新規Maya起動用）。"""
-    used = set(scan_open_ports(host))
+    """レンジ内で未使用の最初のポートを返す（新規Maya起動用）。
+
+    r146: 接続が時間切れのポート（読み込み中で accept が止まっている Maya）も
+    «使用中»。空きと見て予約すると、起動した Maya がそのポートを開けず隣へ
+    逃げ、予約だけが残る（実機 2026-10-20、:20261 → :20262）。"""
+    open_, busy = scan_ports(host)
+    used = set(open_) | set(busy)
     for p in PORT_RANGE:
         if p not in used:
             return p
