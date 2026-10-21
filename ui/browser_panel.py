@@ -1223,12 +1223,64 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
     def _go_back(self):
         if self._history_index > 0:
             self._history_index -= 1
-            self._navigate(self._history[self._history_index], add_to_history=False)
+            self._navigate_history(self._history[self._history_index])
 
     def _go_forward(self):
         if self._history_index < len(self._history) - 1:
             self._history_index += 1
-            self._navigate(self._history[self._history_index], add_to_history=False)
+            self._navigate_history(self._history[self._history_index])
+
+    def _navigate_history(self, path: str):
+        """↶ / ↷ の移動（r146）。
+
+        ユーザー報告 2026-10-21:
+          「Undo Redo の挙動ですが、カラムが押す度にルートに戻っている様に
+            見えます。…一つ前の結果がディレクトリを一つ下がっただけや、
+            上がっただけなどでもカラムが大きくスライドするため、かなり
+            視認性が悪いです。」
+
+        従来は _navigate（到達確認 → 全カラムをルートから作り直し）だった
+        ので、1 階層の移動でも左端まで戻ってから滑ってきていた。
+        **カラムのルートが同じなら、クリックと同じ «current を動かすだけ»
+        で移る**（_select_in_columns。祖先なら下のカラムが閉じ、子孫なら
+        その分だけ開く）。ルートが違う（別ドライブ等）・フォルダが無い時は
+        従来どおり _navigate。履歴には積まない（↶↷ は履歴の中を動く操作）。"""
+        if not path:
+            return
+        light = False
+        try:
+            light = self._history_move_is_light(path)
+        except Exception as e:
+            _mfm_log("navigate_history: light check error %r" % (e,))
+        if not light:
+            self._navigate(path, add_to_history=False)
+            return
+        self.commit_inline_edit()          # 打ちかけの名前変更は確定してから移る
+        self._merge_panel.hide()
+        self._on_archive_request("")
+        self._close_multi_columns()
+        try:
+            self._column_view._mfm_user_selected = False
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _navigate_history")
+        self._select_in_columns(path)
+        _mfm_log("navigate_history(light): %r" % (path,))
+
+    def _history_move_is_light(self, path: str) -> bool:
+        """↶↷ の行き先が «今のカラム群の中» か（＝作り直さずに移れるか）。"""
+        if not _fs.isdir(path):
+            return False
+        if self._is_symlink_or_junction(path):
+            return False                    # リンクは _navigate の経路（根の決め方が違う）
+        root_idx = self._column_view.rootIndex()
+        if not root_idx.isValid():
+            return False
+        cur_root = _safe_file_path(self._fs_model, self._proxy.mapToSource(root_idx))
+        if not cur_root:
+            return False
+        if self._norm(cur_root) != self._norm(self._column_root_for(path)):
+            return False                    # 別ドライブ／別の根 → 作り直しが要る
+        return True
 
     def _go_up(self):
         # 表示中の最下層(current_path)を1つ上へ。ルート不変で深いカラムが消える。
