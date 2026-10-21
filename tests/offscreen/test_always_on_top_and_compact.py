@@ -336,10 +336,21 @@ def s1():
     w.set_compact_open_dir("dr")
     _settle(80)
 
-    # ── 7) 戻すボタンでコンパクトを抜ける ───────────────────────────
+    # ── 7) アイコンのクリックは «開く»。抜けるのはヘッダ／右クリック ──
+    # r146（ユーザー報告 2026-10-21「押した記憶が無いのに解除されている」）:
+    # アイコンのクリックで抜ける仕様をやめた（乗せれば開くのに、その前の
+    # クリックや掴み損ねで解除されていた）。
+    opened = []
+    _orig_expand = ctl.expand
+    ctl.expand = lambda *a, **k: (opened.append(True), _orig_expand(*a, **k))[1]
     puck.btn.click()
+    _settle(250)                     # カーソルは外なので見張りがまた畳む（正常）
+    ctl.expand = _orig_expand
+    check(ctl.is_active(), "開くアイコンのクリックではコンパクトを抜けない")
+    check(bool(opened), "開くアイコンのクリックで開く（expand が呼ばれる）")
+    ctl.set_active(False, reason="テスト: 右クリック相当")
     _settle(250)
-    check(not ctl.is_active(), "開くアイコンのクリックでコンパクトを抜ける")
+    check(not ctl.is_active(), "右クリック／ヘッダ相当でコンパクトを抜ける")
     check(w.isVisible(), "本体が戻る")
     check(not puck.isVisible(), "パックは消える")
     check(not lead.compact_btn.isChecked(), "ヘッダのボタンの光が消える")

@@ -1349,7 +1349,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
           * パックを **タスクバーに出す**（Qt.Tool をやめて Qt.Window に）
 
         の 2 つで «見失わない» を担保する。"""
-        self._compact().set_active(bool(on))
+        self._compact().set_active(bool(on), reason="ヘッダのボタン／メニュー（set_compact_mode）")
 
     def enter_compact_mode(self):
         self.set_compact_mode(True)
@@ -1383,7 +1383,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
             self._log_quiet("compact restore failed: %r" % (e,))
             try:
                 c = c or self._compact()
-                c.set_active(False)
+                c.set_active(False, reason="_restore_compact_mode: 復元で例外 %r" % (e,))
             except Exception as _e:
                 _swallow(_e, "ui/main_window.py _restore_compact_mode")
         # r146（ユーザー報告 2026-10-15「起動時に画面外に出て戻ってこない」）:
@@ -1394,7 +1394,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
                 puck = getattr(c, "_puck", None)
                 ok = c.is_active() and puck is not None and puck.isVisible()
                 if not ok:
-                    c.set_active(False)
+                    c.set_active(False, reason="_restore_compact_mode: 復元後にパックが見えない（安全弁）")
                     c.pull_window_onto_screen()
         except Exception as _e:
             _swallow(_e, "ui/main_window.py _restore_compact_mode(safety)")

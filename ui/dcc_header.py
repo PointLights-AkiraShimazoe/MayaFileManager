@@ -432,10 +432,17 @@ class LeadBlock(QWidget):
             "コンパクトモード（小さく畳んで、マウスを乗せると開く）",
             "Compact mode (shrink to a puck; hover to open)"))
         self.compact_btn.toggled.connect(self.compact_toggled.emit)
+        # r146（ユーザー報告 2026-10-21「押した記憶が無いのにコンパクトモードが
+        # 解除されている」）: トグルはキーボードの焦点を持たない。焦点が
+        # 乗った状態で Space / Enter を押すと（Quick Look や決定のつもりで）
+        # トグルが切り替わる。マウスでしか押せないようにする。
+        self.top_btn.setFocusPolicy(Qt.NoFocus)
+        self.compact_btn.setFocusPolicy(Qt.NoFocus)
 
         self._dir = "dr"
         self._dir_col = col
         self.dir_btn = QToolButton(self)
+        self.dir_btn.setFocusPolicy(Qt.NoFocus)
         self.dir_btn.setObjectName("mfmLeadToggle")
         self.dir_btn.setIconSize(QSize(16, 16))
         self.dir_btn.clicked.connect(lambda _c=False: self._cycle_dir())

@@ -13,7 +13,7 @@
 
 * **つまみ**: ドラッグで置き場所を変える。ここに乗せても開かない
   （以前はパック全体がホバーで開いたので «掴めない／戻せない» になっていた）。
-* **開くアイコン**: 乗せると開く。クリックするとコンパクトモードを抜ける。
+* **開くアイコン**: 乗せる／クリックで開く。抜けるのはヘッダのボタンか右クリックの「通常表示に戻す」（r146: クリックで抜けるのはやめた）。
 
 本体は «縮める» のではなく «隠す»。レイアウトを畳まないので開閉が速く、
 カラム幅やスプリッタの状態も崩れない。
@@ -42,7 +42,38 @@ from core.compat import (
     QRect, QPoint, QApplication, QLineEdit, QPainter, QColor, QCursor,
     QtCore,
 )
+import os
 from core.i18n import tr
+
+
+def _compact_log(msg: str):
+    """コンパクトの入／切を常時記録する（r146）。失敗しても何もしない。"""
+    try:
+        import datetime
+        from ui.browser_util import _MFM_LOG_DIR
+        with open(os.path.join(_MFM_LOG_DIR, "mfm_compact.log"), "a",
+                  encoding="utf-8") as f:
+            f.write("[%s pid=%d] %s\n" % (
+                datetime.datetime.now().strftime("%m-%d %H:%M:%S"),
+                os.getpid(), msg))
+    except Exception:
+        pass
+
+
+def _caller_chain(depth: int = 6) -> str:
+    """呼び出し元の連なり（compact_mode.py 以外）を短く。"""
+    try:
+        import traceback
+        parts = []
+        for fr in reversed(traceback.extract_stack()[:-2]):
+            if fr.filename.endswith("compact_mode.py"):
+                continue
+            parts.append("%s:%d %s" % (os.path.basename(fr.filename), fr.lineno, fr.name))
+            if len(parts) >= depth:
+                break
+        return " < ".join(parts) or "?"
+    except Exception:
+        return "?"
 
 
 class _Grip(QWidget):
@@ -93,7 +124,7 @@ class _Grip(QWidget):
 
 
 class _OpenButton(QToolButton):
-    """乗せると開く／押すとコンパクトモードを抜けるアイコン。
+    """乗せる／押すと開くアイコン（r146: 押しても抜けない）。
 
     r146（ユーザー報告 2026-10-13）: 触れた瞬間に開いていたので、別アプリで
     作業中にマウスが掠めただけでウィンドウが飛び出していた。**少し留まって
@@ -213,10 +244,15 @@ class _Puck(QWidget):
         self.btn.setFixedSize(26, self.HEIGHT - 4)
         self.btn.setCursor(Qt.PointingHandCursor)
         self.btn.setToolTip(tr(
-            "乗せると開く / クリックで通常表示に戻る / 右クリックでメニュー",
-            "Hover to open / click to leave compact mode / right-click for a menu"))
+            "乗せる／クリックで開く / 右クリックでメニュー（通常表示に戻す）",
+            "Hover or click to open / right-click for a menu (leave compact mode)"))
+        # r146（ユーザー報告 2026-10-21）: アイコンの **クリックで解除** を
+        # やめる。乗せれば開く（250ms）のに、その前にクリックされたり、
+        # アイコン側を掴んで動かそうとして離したりすると «押した記憶が無い
+        # のに解除» になっていた。クリックは «開く» に揃える。解除は
+        # ヘッダのボタンか右クリックの「通常表示に戻す」から。
         self.btn.clicked.connect(
-            lambda _c=False: self.controller.set_active(False))
+            lambda _c=False: self.controller.expand())
         lay.addWidget(self.btn, 0)
 
         self._lay = lay
@@ -307,7 +343,7 @@ class _Puck(QWidget):
             if act is a_open:
                 self.controller.expand()
             elif act is a_leave:
-                self.controller.set_active(False)
+                self.controller.set_active(False, reason="パック右クリック「通常表示に戻す」")
             elif act is a_min:
                 # r146（ユーザー報告 2026-10-15「最小化だけ通常ウィンドウが
                 # 開くだけになってます」）: パック自身を最小化しても意味が
@@ -433,10 +469,15 @@ class CompactController(QObject):
     def is_expanded(self) -> bool:
         return self._expanded
 
-    def set_active(self, on: bool):
+    def set_active(self, on: bool, reason: str = ""):
         on = bool(on)
         if on == self._active:
             return
+        # r146（ユーザー報告 2026-10-21「押した記憶が無いのにコンパクトモードが
+        # 解除されている事がある」）: 入／切は **理由つきで必ず記録** する
+        # （~/.maya_file_manager/logs/mfm_compact.log、常時）。次に起きた時に
+        # 「誰が切ったか」がログで分かるようにする。
+        _compact_log("set_active(%s) reason=%s" % (on, reason or _caller_chain()))
         self._active = on
         try:
             self._sm.set(self.ACTIVE_KEY, on)
@@ -473,7 +514,7 @@ class CompactController(QObject):
             _swallow(_e, "ui/compact_mode.py set_active(ui)")
 
     def toggle(self):
-        self.set_active(not self._active)
+        self.set_active(not self._active, reason="toggle")
 
     def notice(self):
         """«ここに居ます» をユーザーに見せる（開かない。r146）。
@@ -895,7 +936,7 @@ class CompactController(QObject):
         # （本体は隠れている・パックは見えない）。出せなければ畳むのをやめる。
         if not puck.isVisible():
             self._win._log_quiet("compact: パックを出せなかったので通常表示へ戻す")
-            self.set_active(False)
+            self.set_active(False, reason="collapse: パックを出せなかった（安全弁）")
             self.pull_window_onto_screen()
 
     # ── 畳んでいる間の本体の置き場所（r146 後半）────────────────────
@@ -1017,7 +1058,7 @@ class CompactController(QObject):
                 return
             self._win._log_quiet("compact: 起動時の復元が終わらないので本体を画面へ戻す")
             if self._active:
-                self.set_active(False)
+                self.set_active(False, reason="_pre_park_safety: 起動 3 秒でパックが見えない（安全弁）")
             self.pull_window_onto_screen()
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py _pre_park_safety")
