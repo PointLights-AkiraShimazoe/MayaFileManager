@@ -40,11 +40,19 @@ INFO_OUT = ("... userName akira\n... clientHost this-pc\n"
 calls = []
 
 
+# -u 無しで引くとサーバーの全クライアント（他ユーザー・Host 無し）が返る
+ALL_CLIENTS_OUT = "".join(
+    "... client jenkins_%03d\n... Root D:\\build\\%03d\n... Host \n... Owner jenkins\n\n" % (i, i)
+    for i in range(400))
+
+
 def fake_run(cmd, cwd=None, timeout=None, input_text=None):
     calls.append(list(cmd))
     if "info" in cmd:
         return 0, INFO_OUT, ""
     if "clients" in cmd:
+        if "-u" not in cmd:
+            return 0, ALL_CLIENTS_OUT, ""
         return 0, CLIENTS_OUT, ""
     if "where" in cmd:
         return 1, "", "not under client's root"
@@ -67,6 +75,20 @@ assert p.find_root(ws_b), "**他のワークスペースが管理下にならな
 assert p.find_root(ws_b_deep), "他のワークスペースの深い階層が管理下にならない"
 assert p.find_root(other) is None, "無関係なフォルダまで管理下にしている"
 print("every workspace of this user counts as managed: OK")
+
+# ── 1b) detect() をもう一度走らせても（エリアを足すと走る）壊れない ────
+# ユーザー報告 2026-10-21「P4V ですが、ワークスペースが MM のものしか反応して
+# いません」: 2 つ目のエリアを作ると detect() が info を空に戻し、以後
+# `p4 clients` が -u 無し（全 413 件、このユーザーの分は Host 付きで除外）に
+# なって、既定のワークスペース以外が管理外に戻っていた。
+p.detect()
+p.p4 = "p4"
+names = [n for _k, n, _r in p._all_clients()]
+assert "WS_A" in names and "WS_B" in names, ("detect() のやり直し後にこのユーザーのワークスペースが消えた", names)
+assert not any(n.startswith("jenkins_") for n in names), ("-u 無しで全クライアントを引いている", names[:5])
+assert p.find_root(ws_b), "detect() のやり直し後に他のワークスペースが管理外になる（報告された不具合）"
+assert all("-u" in c for c in calls if "clients" in c), ("clients を -u 無しで引いた", [c for c in calls if "clients" in c])
+print("re-detect keeps every workspace of this user: OK")
 
 # ── 2) ホストが違うワークスペースは使わない ───────────────────────────
 roots = [r for _k, _n, r in p._all_clients()]
@@ -114,5 +136,29 @@ p.invalidate_status(ws_b)
 assert p._clients is None and p._client_for_dir == {}, \
     "手動更新でワークスペース一覧が捨てられていない（新規作成が拾えない）"
 print("a manual refresh re-reads the workspace list: OK")
+
+# ── 5) 検出はプロセスで 1 回。エリアを足しても（start を何度呼んでも）
+#       やり直さない（r146、ユーザー報告 2026-10-21 の直接の引き金）──────
+import time as _time
+from core.integrations.manager import IntegrationManager
+m = IntegrationManager()
+n = {"detect": 0}
+m._do_detect = lambda: n.__setitem__("detect", n["detect"] + 1)
+m.start(True)
+m.start(True)                 # 2 つ目のエリア
+m.start(True)                 # 3 つ目
+for _ in range(50):
+    if n["detect"] >= 1:
+        break
+    _time.sleep(0.02)
+_time.sleep(0.2)
+assert n["detect"] == 1, ("エリアを足すたびに検出をやり直している", n)
+m.start(True, redetect=True)  # 明示のやり直しだけ通る
+for _ in range(50):
+    if n["detect"] >= 2:
+        break
+    _time.sleep(0.02)
+assert n["detect"] == 2, ("明示の再検出が走らない", n)
+print("detection runs once per process (areas do not re-trigger it): OK")
 
 finish(True)

@@ -105,7 +105,14 @@ class IntegrationManager(QObject):
             _swallow(_e, "core/integrations/manager.py:72 _on_action_report")
 
     # ── 起動 ─────────────────────────────────────────────────────────────
-    def start(self, enabled: bool = True):
+    def start(self, enabled: bool = True, redetect: bool = False):
+        """ワーカーを起こし、検出を **1 回だけ** 走らせる（r146）。
+
+        BrowserPanel が作られるたび（エリアを足すたび）に呼ばれる。以前は
+        そのたびに detect を積み直していたので、2 つ目のエリアを作った瞬間に
+        各プロバイダの状態が捨てられ、Perforce は «既定のワークスペース以外が
+        管理外» に戻っていた（ユーザー報告 2026-10-21）。検出は最初の 1 回、
+        やり直しは redetect=True を明示した時だけ。"""
         self.enabled = bool(enabled)
         if not self.enabled:
             return
@@ -113,7 +120,9 @@ class IntegrationManager(QObject):
             self._worker = threading.Thread(target=self._loop, daemon=True,
                                             name="mfm-integrations")
             self._worker.start()
-        self._queue.put(("detect", None))
+        if redetect or not (self._detected or getattr(self, "_detect_queued", False)):
+            self._detect_queued = True
+            self._queue.put(("detect", None))
 
     def _loop(self):
         while True:
@@ -127,6 +136,7 @@ class IntegrationManager(QObject):
                 _swallow(_e, "core/integrations/manager.py:94 _loop")
 
     def _do_detect(self):
+        self._detect_queued = False
         for p in self.providers:
             try:
                 p.detect()

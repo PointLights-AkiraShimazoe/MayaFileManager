@@ -65,6 +65,21 @@ class P4Provider(Provider):
             self._clients = None
             self._client_for_dir = {}
             self.info = {"p4": self.p4, "p4vc": self.p4vc, "p4v": self.p4v}
+            # r146（ユーザー報告 2026-10-21「P4V ですが、ワークスペースが MM の
+            # ものしか反応していません」）: ここで info を空に戻すのに
+            # _info_tried を立てたままにしていた。detect() は BrowserPanel が
+            # 作られるたび（エリアを足すたび）に走るので、2 つ目のエリアを
+            # 作った瞬間から user / host が空のまま二度と読まれず、
+            # `p4 clients` が -u 無し（サーバーの全クライアント 413 件、
+            # Host 付き＝このユーザーの分は全部除外）になり、既定の
+            # ワークスペース以外が «管理外» に戻っていた。info を捨てるなら
+            # 読み直しも仕切り直す。
+            self._info_tried = False
+            self._client_root = None
+            try:
+                self.invalidate_roots()        # 古い «管理外» の答えも捨てる
+            except Exception as _e:
+                _swallow(_e, "core/integrations/p4_provider.py detect(invalidate_roots)")
         except Exception:
             self.available = False
 
@@ -151,9 +166,20 @@ class P4Provider(Provider):
         self._client_root_via_info()          # 既定接続（_conn_args）を確定させる
         user = self.info.get("user") or ""
         host = (self.info.get("host") or "").lower()
-        args = ["-ztag", "clients"]
-        if user:
-            args += ["-u", user]
+        if not user:
+            # r146: info が古い（detect で捨てられた等）なら読み直す。
+            self._info_tried = False
+            self._client_root_via_info()
+            user = self.info.get("user") or ""
+            host = (self.info.get("host") or "").lower()
+        if not user:
+            # ユーザーが分からないのに -u 無しで引くと **サーバーの全
+            # クライアント** が返り（実機 413 件）、Host 付きのこのユーザーの
+            # ワークスペースが全部除外されて «既定以外は管理外» になる。
+            # 引かない方がまし（既定の clientRoot での判定は残る）。
+            self._log("clients: userName が取れないので一覧を引かない")
+            return self._clients
+        args = ["-ztag", "clients", "-u", user]
         rc, out, err = run([self.p4] + self._conn_args + args, timeout=10.0)
         if rc != 0:
             self._log("clients 取得失敗 rc=%s %s"
