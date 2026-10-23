@@ -631,16 +631,8 @@ class CompactController(QObject):
             pos = self._sm.get(self.PUCK_POS_KEY, None)
             if isinstance(pos, (list, tuple)) and len(pos) == 2:
                 self._puck.move(int(pos[0]), int(pos[1]))
-                # r146: 物理ピクセルの保存値があればそちらを正とする
-                # （画面ごとに DPI が違うと論理座標は起動ごとに化け得る）
-                try:
-                    ppx = self._sm.get(self.PUCK_POS_PX_KEY, None)
-                    if (self._native_geometry_on() and isinstance(ppx, (list, tuple))
-                            and len(ppx) == 2):
-                        from core.win_geometry import move_window_px
-                        move_window_px(self._puck, int(ppx[0]), int(ppx[1]))
-                except Exception as _e:
-                    _swallow(_e, "ui/compact_mode.py _ensure_puck(px)")
+                # 物理ピクセルの保存値は show() の後に _apply_puck_px が置く
+                # （隠れている窓を Win32 で動かしても show() で戻される）
             else:
                 self._puck.move(self._win.frameGeometry().topLeft())
             # r146: 覚えている置き場所が «今つながっている画面の外» なら
@@ -785,11 +777,14 @@ class CompactController(QObject):
                     wa = nearest_work_area((tl[0], tl[1], tl[0] + size[0], tl[1] + size[1]), mons)
                     if wa is not None:
                         tl = clamp_into(tl, size, wa)
-                    if move_window_px(puck, tl[0], tl[1]):
-                        self._win_rect_px = wr
-                        self._puck_anchor_px = tl
-                        _compact_log("collapse(px): win=%r -> puck=%r work=%r" % (wr, tl, wa))
-                        return True
+                    self._win_rect_px = wr
+                    self._puck_anchor_px = tl
+                    self._puck_target_px = tl       # show() の後に Win32 で置く
+                    # Qt の論理座標も «それらしい所» へ寄せておく（show() が
+                    # 置き直す位置を遠くにしない。最終位置は Win32 が決める）
+                    puck.move(self._clamp(self._puck_pos_for_window(), puck.size()))
+                    _compact_log("collapse(px): win=%r -> puck=%r work=%r" % (wr, tl, wa))
+                    return True
             except Exception as _e:
                 _swallow(_e, "ui/compact_mode.py _place_puck_at_window")
         self._win_rect_px = None
@@ -797,6 +792,31 @@ class CompactController(QObject):
         puck.move(self._clamp(self._puck_pos_for_window(), puck.size()))
         _compact_log("collapse(qt): win=%r -> puck=%r" % (self._win.frameGeometry(), puck.pos()))
         return False
+
+    def _apply_puck_px(self):
+        """パックを Win32 で置く（必ず show() の後に呼ぶ）。
+
+        目標（この collapse で計算した本体の角）があればそこへ。無ければ
+        （起動時の復元で本体が退けてある時）保存してある物理位置へ。"""
+        if not self._native_geometry_on() or self._puck is None:
+            return
+        try:
+            from core.win_geometry import move_window_px, window_rect_px
+            target = getattr(self, "_puck_target_px", None)
+            if target is None:
+                ppx = self._sm.get(self.PUCK_POS_PX_KEY, None)
+                if isinstance(ppx, (list, tuple)) and len(ppx) == 2:
+                    target = (int(ppx[0]), int(ppx[1]))
+            if target is None:
+                return
+            pr = window_rect_px(self._puck)
+            if pr and (pr[0], pr[1]) == tuple(target):
+                return
+            if move_window_px(self._puck, target[0], target[1]):
+                self._puck_anchor_px = tuple(target)
+                _compact_log("puck(px): placed at %r (was %r)" % (tuple(target), pr[:2] if pr else None))
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _apply_puck_px")
 
     def _restore_window_at_puck_px(self) -> bool:
         """畳む前の本体の矩形（物理ピクセル）へ、パックの移動差分だけずらして戻す。"""
@@ -1001,6 +1021,7 @@ class CompactController(QObject):
         # «本体の角» からパックの位置を決めると、画面外の座標になり、
         # _clamp で主画面の左上へ引き戻されて、しかもそれが保存されていた。
         # 退けてある時は触らない（覚えている置き場所をそのまま使う）。
+        self._puck_target_px = None
         if self._win.isVisible() and not self.is_parked():
             self._place_puck_at_window()
         # r146 後半（ユーザー報告 2026-10-14）:
@@ -1046,12 +1067,23 @@ class CompactController(QObject):
         self._collapsed_at = time.time()
         puck.show()
         puck.raise_()
+        # r146（ユーザー報告 2026-10-23「どこに移動してもコンパクトは同じ位置
+        # から動かなくなりました」）: Win32 で動かすのは **show() の後**。
+        # 隠れている窓を SetWindowPos で動かしても、Qt は show() の時に
+        # 自分が覚えている位置（前回の論理座標）を置き直すので、Win32 の
+        # 移動が毎回なかったことになり、パックが同じ場所に出続けた。
+        self._apply_puck_px()
         # r146（ユーザー指示 2026-10-16）: 出す時は必ず «丸ごと見える» 場所に。
         # 本体の角が画面の外にある状態で畳んでも、パックは一番近い画面の中へ。
         self._pull_puck_onto_screen()
         # 開く時の差分の基準は «実際に出した位置»（引き戻した後）
         try:
             self._puck_anchor = QPoint(puck.pos())
+            if self._native_geometry_on():
+                from core.win_geometry import window_rect_px
+                pr = window_rect_px(puck)
+                if pr:
+                    self._puck_anchor_px = (pr[0], pr[1])
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py collapse(anchor)")
         # 出すたびに掛け直す。Qt がネイティブ窓を作り直すと拡張スタイルが

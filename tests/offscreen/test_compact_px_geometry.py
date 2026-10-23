@@ -77,7 +77,7 @@ def fake_monitors():
 def fake_move(widget, x, y):
     l, t, r, b = world.get(widget, (0, 0, 60, 30))
     world[widget] = (x, y, x + (r - l), y + (b - t))
-    calls.append(("move", widget, x, y))
+    calls.append(("move", widget, x, y, bool(widget.isVisible())))
     return True
 
 
@@ -114,7 +114,12 @@ try:
     QTest.qWait(80); app.processEvents()
     pr = world[puck]
     check(pr[:2] == (2300, 300), "2) パックは本体の左上の角（物理 px）に置かれる（%r）" % (pr,))
-    check(any(c[0] == "move" and c[1] is puck for c in calls), "2) パックは Win32 で動かした（Qt 座標を混ぜない）")
+    pm = [c for c in calls if c[0] == "move" and c[1] is puck]
+    check(bool(pm), "2) パックは Win32 で動かした（Qt 座標を混ぜない）")
+    # ユーザー報告 2026-10-23「どこに移動しても同じ位置から動かない」:
+    # 隠れたまま Win32 で動かすと show() で Qt が前の位置を置き直す。
+    # 必ず show() の後に動かす。
+    check(pm and all(c[4] for c in pm), "2) Win32 の移動は show() の後（見えている状態）で行う")
     check(ctl._win_rect_px == (2300, 300, 3100, 900), "2) 畳む前の本体の矩形（物理 px）を覚える")
     # 退け: 論理の退け先が画面に載っているふりをしても、物理で外へ出される
     # （fake の world[win] は退け後も同じなので «載っている» と判定され、物理で退く）
@@ -134,6 +139,35 @@ try:
     calls[:] = []
     ctl._pull_puck_onto_screen()
     check(world[puck][:2] == (6340, 1930), "4) はみ出したパックは一番近い作業領域の中へ（物理 px）（%r）" % (world[puck],))
+    # もう一度開いて、本体を別の場所へ動かしてから畳む → パックもそこへ
+    world[puck] = (2300, 300, 2360, 330)
+    world[win] = (-9000, 380, -8200, 980)
+    ctl.expand()
+    QTest.qWait(80); app.processEvents()
+    world[win] = (4000, 600, 4800, 1200)            # 右画面の中へ動かした
+    calls[:] = []
+    ctl.collapse()
+    QTest.qWait(80); app.processEvents()
+    check(world[puck][:2] == (4000, 600), "2) 本体を動かして畳み直すとパックもそこへ（同じ位置に居座らない）（%r）" % (world[puck],))
+    # 角が画面の外（右画面の右端より外）→ パックは引き戻されるが、開く時の
+    # 本体は «引き戻した分» ずれない（基準は実際に出した位置）
+    world[puck] = (4000, 600, 4060, 630)
+    world[win] = (-9000, 380, -8200, 980)
+    ctl.expand()
+    QTest.qWait(80); app.processEvents()
+    world[win] = (6380, 600, 7180, 1200)            # 右端からはみ出している
+    calls[:] = []
+    ctl.collapse()
+    QTest.qWait(80); app.processEvents()
+    check(world[puck][:2] == (6340, 600), "2) 角が画面外なら一番近い作業領域の中へ（%r）" % (world[puck],))
+    check(ctl._puck_anchor_px == (6340, 600), "2) 開く時の基準は実際に出した位置（引き戻した後）")
+    world[win] = (-9000, 380, -8200, 980)
+    calls[:] = []
+    ctl.expand()
+    QTest.qWait(80); app.processEvents()
+    rects = [c for c in calls if c[0] == "rect" and c[1] is win]
+    check(rects and rects[-1][2] == (6380, 600, 7180, 1200),
+          "3) はみ出していた本体も «その位置のまま» 戻る（%r）" % (rects[-1][2] if rects else None,))
     ctl.set_active(False, reason="テスト終了")
 finally:
     (wg.is_windows, wg.window_rect_px, wg.monitors_px, wg.move_window_px, wg.set_window_rect_px) = orig
