@@ -86,8 +86,9 @@ check(any("set_active(False)" in m and "ヘッダのボタン" in m for m in log
 # 理由を渡さなくても呼び出し元が残る
 log_lines[:] = []
 ctl.set_active(True)
-check(log_lines and "reason=" in log_lines[-1] and "test_compact_no_accidental_leave" in log_lines[-1],
-      "c) 理由が無ければ呼び出し元を残す（%r）" % (log_lines[-1:],))
+_sa = [m for m in log_lines if m.startswith("set_active(True)")]
+check(_sa and "reason=" in _sa[-1] and "test_compact_no_accidental_leave" in _sa[-1],
+      "c) 理由が無ければ呼び出し元を残す（%r）" % (_sa[-1:],))
 ctl.set_active(False, reason="テスト終了")
 
 # 原文の検査: set_active(False) を理由なしで呼ぶ箇所が無い

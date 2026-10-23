@@ -431,6 +431,7 @@ class CompactController(QObject):
 
     ACTIVE_KEY = "compact_mode"
     PUCK_POS_KEY = "compact_puck_pos"
+    PUCK_POS_PX_KEY = "compact_puck_pos_px"   # r146: 物理ピクセルでも覚える
     OPEN_DIR_KEY = "compact_open_dir"
     POLL_MS = 60            # 「離れた直後に閉じて」（指示 2026-10-09）
     MARGIN = 4              # 枠のすぐ外は «まだ中» とみなす余白
@@ -630,6 +631,16 @@ class CompactController(QObject):
             pos = self._sm.get(self.PUCK_POS_KEY, None)
             if isinstance(pos, (list, tuple)) and len(pos) == 2:
                 self._puck.move(int(pos[0]), int(pos[1]))
+                # r146: 物理ピクセルの保存値があればそちらを正とする
+                # （画面ごとに DPI が違うと論理座標は起動ごとに化け得る）
+                try:
+                    ppx = self._sm.get(self.PUCK_POS_PX_KEY, None)
+                    if (self._native_geometry_on() and isinstance(ppx, (list, tuple))
+                            and len(ppx) == 2):
+                        from core.win_geometry import move_window_px
+                        move_window_px(self._puck, int(ppx[0]), int(ppx[1]))
+                except Exception as _e:
+                    _swallow(_e, "ui/compact_mode.py _ensure_puck(px)")
             else:
                 self._puck.move(self._win.frameGeometry().topLeft())
             # r146: 覚えている置き場所が «今つながっている画面の外» なら
@@ -675,6 +686,9 @@ class CompactController(QObject):
         puck = self._puck
         if puck is None:
             return
+        r = self._pull_puck_onto_screen_px()
+        if r is not None:
+            return
         try:
             g = puck.frameGeometry()
             for sc in QApplication.screens():
@@ -696,6 +710,9 @@ class CompactController(QObject):
         try:
             p = self._puck.pos()
             self._sm.set(self.PUCK_POS_KEY, [p.x(), p.y()])
+            from core.win_geometry import window_rect_px
+            pr = window_rect_px(self._puck) if self._native_geometry_on() else None
+            self._sm.set(self.PUCK_POS_PX_KEY, [pr[0], pr[1]] if pr else None)
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py remember_puck_pos")
 
@@ -733,6 +750,114 @@ class CompactController(QObject):
             self._puck.set_mirrored(d in ("dl", "ul"))
         # パックは動かさない。«次に開く向き» が変わるだけ。
         # （開いている最中に変えた時も、畳む先はパックに合わせて決まる）
+
+    # ── 物理ピクセル（Win32）での置き場所（r146、ユーザー報告 2026-10-23）──
+    #
+    # 「画面を跨いでコンパクトの開閉をすると、訳がわからないところに閉じます」
+    # 画面ごとに DPI が違うと、Qt の論理座標は画面ごとに別の物差しになる。
+    # 本体の角（本体が属する画面の物差し）をパック（別の窓）の move() に渡すと、
+    # 同じ数字が別の物理位置に化ける（A-17 のカーソル判定と同じ原因）。
+    # パックの置き場所・本体の戻し先・退けたかの判定を全部 Win32 の物理
+    # ピクセルで行い、Qt の座標は混ぜない。Windows 以外／ネイティブ窓が無い
+    # （オフスクリーン）時は None を返して従来の Qt 計算に落ちる。
+    # MFM_DIAG=no_native_geometry で切れる（切り分け用）。
+    def _native_geometry_on(self) -> bool:
+        try:
+            from core.win_geometry import is_windows
+            return is_windows() and not _diag_off("no_native_geometry")
+        except Exception:
+            return False
+
+    def _place_puck_at_window(self) -> bool:
+        """本体の角にパックを置く。物理ピクセルで置けたら True（Qt は触らない）。"""
+        puck = self._ensure_puck()
+        if self._native_geometry_on():
+            try:
+                from core.win_geometry import (window_rect_px, monitors_px,
+                                               move_window_px, corner_of,
+                                               top_left_for, nearest_work_area,
+                                               clamp_into)
+                wr, pr, mons = window_rect_px(self._win), window_rect_px(puck), monitors_px()
+                if wr and pr and mons and pr[2] > pr[0] and pr[3] > pr[1]:
+                    pc, wc = self._corner_names()
+                    size = (pr[2] - pr[0], pr[3] - pr[1])
+                    tl = top_left_for(pc, corner_of(wr, wc), size)
+                    wa = nearest_work_area((tl[0], tl[1], tl[0] + size[0], tl[1] + size[1]), mons)
+                    if wa is not None:
+                        tl = clamp_into(tl, size, wa)
+                    if move_window_px(puck, tl[0], tl[1]):
+                        self._win_rect_px = wr
+                        self._puck_anchor_px = tl
+                        _compact_log("collapse(px): win=%r -> puck=%r work=%r" % (wr, tl, wa))
+                        return True
+            except Exception as _e:
+                _swallow(_e, "ui/compact_mode.py _place_puck_at_window")
+        self._win_rect_px = None
+        self._puck_anchor_px = None
+        puck.move(self._clamp(self._puck_pos_for_window(), puck.size()))
+        _compact_log("collapse(qt): win=%r -> puck=%r" % (self._win.frameGeometry(), puck.pos()))
+        return False
+
+    def _restore_window_at_puck_px(self) -> bool:
+        """畳む前の本体の矩形（物理ピクセル）へ、パックの移動差分だけずらして戻す。"""
+        rect = getattr(self, "_win_rect_px", None)
+        anchor = getattr(self, "_puck_anchor_px", None)
+        if not (self._native_geometry_on() and rect and anchor and self._puck is not None):
+            return False
+        try:
+            from core.win_geometry import window_rect_px, set_window_rect_px
+            pr = window_rect_px(self._puck)
+            if not pr:
+                return False
+            dx, dy = pr[0] - anchor[0], pr[1] - anchor[1]
+            target = (rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy)
+            if set_window_rect_px(self._win, target):
+                _compact_log("expand(px): puck=%r anchor=%r -> win=%r" % (pr[:2], anchor, target))
+                return True
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _restore_window_at_puck_px")
+        return False
+
+    def _pull_puck_onto_screen_px(self):
+        """パックが画面に丸ごと載っていなければ一番近い作業領域へ（物理ピクセル）。
+        判定できたら True/False（動かしたか）、できなければ None。"""
+        if not self._native_geometry_on() or self._puck is None:
+            return None
+        try:
+            from core.win_geometry import (window_rect_px, monitors_px, move_window_px,
+                                           rect_contains, nearest_work_area, clamp_into)
+            pr, mons = window_rect_px(self._puck), monitors_px()
+            if not pr or not mons:
+                return None
+            if any(rect_contains(m, pr) for m in mons):
+                return False
+            size = (pr[2] - pr[0], pr[3] - pr[1])
+            wa = nearest_work_area(pr, mons)
+            if wa is None:
+                return None
+            tl = clamp_into((pr[0], pr[1]), size, wa)
+            if tl != (pr[0], pr[1]) and move_window_px(self._puck, tl[0], tl[1]):
+                self.remember_puck_pos()
+                _compact_log("pull_puck(px): %r -> %r work=%r" % (pr, tl, wa))
+                return True
+            return False
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _pull_puck_onto_screen_px")
+            return None
+
+    def _is_parked_px(self):
+        """本体がどの画面にも載っていないか（物理ピクセル）。判定できなければ None。"""
+        if not self._native_geometry_on():
+            return None
+        try:
+            from core.win_geometry import window_rect_px, monitors_px, rect_intersects
+            wr, mons = window_rect_px(self._win), monitors_px()
+            if not wr or not mons:
+                return None
+            return not any(rect_intersects(wr, m) for m in mons)
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _is_parked_px")
+            return None
 
     def _corner_names(self):
         """(パック側, 本体側) の «揃える角» を取る関数名。"""
@@ -822,6 +947,12 @@ class CompactController(QObject):
         rect = getattr(self, "_win_rect", None)
         anchor = getattr(self, "_puck_anchor", None)
         puck = self._puck
+        # r146（ユーザー報告 2026-10-23「画面を跨いでコンパクトの開閉をすると、
+        # 訳がわからないところに閉じます」）: 画面ごとに DPI が違うと Qt の
+        # 論理座標は画面ごとに別の物差しになる。本体とパックは別の窓なので、
+        # 同じ数字が別の物理位置に化ける。**物理ピクセル（Win32）で戻す。**
+        if self._restore_window_at_puck_px():
+            return
         try:
             if rect is not None and anchor is not None and puck is not None:
                 d = puck.pos() - anchor
@@ -871,7 +1002,7 @@ class CompactController(QObject):
         # _clamp で主画面の左上へ引き戻されて、しかもそれが保存されていた。
         # 退けてある時は触らない（覚えている置き場所をそのまま使う）。
         if self._win.isVisible() and not self.is_parked():
-            puck.move(self._clamp(self._puck_pos_for_window(), puck.size()))
+            self._place_puck_at_window()
         # r146 後半（ユーザー報告 2026-10-14）:
         #   「コンパクト⇔通常を繰り返すだけで、どんどん UI が左上に
         #     上がっていきます。閉じる起点と開く起点が合っていない証拠では
@@ -1079,6 +1210,20 @@ class CompactController(QObject):
                 w.setAttribute(Qt.WA_ShowWithoutActivating, True)
                 w.show()
             w.move(self._park_pos())
+            # r146: 論理座標の退け先が、DPI の違う画面の上に化けることがある。
+            # 物理ピクセルで «どの画面にも載っていない» を確かめ、載って
+            # いれば物理ピクセルで左の外へ出す。
+            if self._is_parked_px() is False:
+                from core.win_geometry import (window_rect_px, monitors_px,
+                                               move_window_px)
+                wr, mons = window_rect_px(w), monitors_px()
+                if wr and mons:
+                    left = min(m[0] for m in mons)
+                    top = min(m[1] for m in mons)
+                    move_window_px(w, left - (wr[2] - wr[0]) - self.PARK_MARGIN * 2,
+                                   top + 80)
+                    _compact_log("park(px): 論理の退け先が画面に載っていたので物理で退けた %r"
+                                 % (window_rect_px(w),))
         except Exception as _e:
             _swallow(_e, "ui/compact_mode.py _park_window")
 
@@ -1099,6 +1244,9 @@ class CompactController(QObject):
             w = self._win
             if not w.isVisible() or w.isMinimized():
                 return True
+            px = self._is_parked_px()
+            if px is not None:
+                return px
             return not self._virtual_rect().intersects(w.frameGeometry())
         except Exception:
             return False
