@@ -2329,6 +2329,20 @@ class CappedColumnView(QColumnView):
                 d = event.angleDelta().y() or event.angleDelta().x()
                 hbar.setValue(hbar.value() - d)
                 return True
+        elif et == _QtCore.QEvent.Wheel:
+            # r146（ユーザー指摘 2026-10-23「サムネ表示の時の縦スクロールの
+            # 遅さ」）: カラムのサムネイル表示も件数に応じた量で送る。
+            # カラムの QListView は QColumnView が作る素の Qt 部品なので、
+            # ビューポートのイベントフィルタで受ける。
+            view = obj.parent() if getattr(obj, "_mfm_header", None) is None else obj
+            if view is not None and getattr(view, "_mfm_header", None) is not None \
+                    and view.viewMode() == QListView.IconMode:
+                try:
+                    from ui.wheel_speed import handle_wheel
+                    if handle_wheel(view, event):
+                        return True
+                except Exception as _e:
+                    _swallow(_e, "ui/browser_column_view.py eventFilter(wheel)")
         elif et == _QtCore.QEvent.MouseButtonDblClick:
             # ── ダブルクリック（r66） ──────────────────────────────────
             # 本パネルは1回目のプレスを自前で消費するため、QAbstractItemView の

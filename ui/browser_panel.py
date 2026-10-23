@@ -490,6 +490,8 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         # N-2: Space Quick Look 用イベントフィルタ
         self._column_view.installEventFilter(self)
         self._thumb_view.installEventFilter(self)
+        # r146: 本体のサムネイル表示もホイールを件数に応じた量で送る
+        self._thumb_view.viewport().installEventFilter(self)
 
         # Ctrl+C / Ctrl+X / Ctrl+V / Delete（子ビューにフォーカスがあっても発火）
         self._install_clipboard_actions()
@@ -541,6 +543,14 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
                 and obj in (self._column_view, self._thumb_view)):
             self._toggle_quick_look()
             return True
+        if (event.type() == _QtCore.QEvent.Wheel
+                and obj is self._thumb_view.viewport()):
+            try:
+                from ui.wheel_speed import handle_wheel
+                if handle_wheel(self._thumb_view, event):
+                    return True
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py eventFilter(wheel)")
         return super().eventFilter(obj, event)
 
     def _toggle_quick_look(self):

@@ -72,8 +72,7 @@ class _DragListView(QListView):
     # 平坦ビューは «フォルダを跨いで» 全部並ぶため、カラムと同じ 3 行/ノッチだと
     # 件数に比例してホイールが終わらない。端まで WHEEL_TARGET_NOTCHES 回程度で
     # 行けるように 1 ノッチの行数を増やし、行き過ぎは上限で止める。
-    WHEEL_TARGET_NOTCHES = 100
-    WHEEL_MAX_ROWS = 32
+    from ui.wheel_speed import WHEEL_TARGET_NOTCHES, WHEEL_MAX_ROWS   # 互換（r144）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -84,38 +83,22 @@ class _DragListView(QListView):
         self._path_role = _PATH_ROLE
 
     def wheel_rows(self) -> int:
-        """このホイールノッチで送る行数。件数が少ない時は OS 設定のまま。"""
-        try:
-            base = max(1, int(QApplication.wheelScrollLines()))
-        except Exception:
-            base = 3
-        try:
-            n = self.model().rowCount() if self.model() is not None else 0
-        except Exception:
-            n = 0
-        want = n // max(1, self.WHEEL_TARGET_NOTCHES)
-        return max(base, min(want, self.WHEEL_MAX_ROWS))
+        """このホイールノッチで送る行数。件数が少ない時は OS 設定のまま。
+        r146: 物差しは ui/wheel_speed（サムネイル表示も同じ）。"""
+        from ui.wheel_speed import rows_per_notch
+        return rows_per_notch(self)
 
     def wheelEvent(self, e):
-        # 行送り（リスト表示）だけを対象にする。サムネイル表示や修飾キー付き
-        # （Ctrl＝サイズ変更など）は標準の挙動に任せる。
+        # r146（ユーザー指摘 2026-10-23「サムネ表示の時の縦スクロールの遅さが
+        # 解消していません」）: リスト表示だけだったのをサムネイル表示にも。
+        # 修飾キー付き（Ctrl＝サイズ変更など）は標準の挙動に任せる。
         try:
-            if (self.viewMode() != QListView.ListMode
-                    or self.verticalScrollMode() != QAbstractItemView.ScrollPerItem
-                    or e.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier
-                                        | Qt.AltModifier)):
-                return super().wheelEvent(e)
-            dy = int(e.angleDelta().y())
-            if not dy:
-                return super().wheelEvent(e)
-            notches = dy / 120.0
-            rows = self.wheel_rows()
-            sb = self.verticalScrollBar()
-            sb.setValue(int(round(sb.value() - notches * rows)))
-            e.accept()
+            from ui.wheel_speed import handle_wheel
+            if handle_wheel(self, e):
+                return
         except Exception as _e:
             _swallow(_e, "ui/flat_column.py _DragListView.wheelEvent")
-            return super().wheelEvent(e)
+        return super().wheelEvent(e)
 
     def _selected_paths(self):
         out = []
