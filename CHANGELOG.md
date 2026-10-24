@@ -10,6 +10,34 @@
 > したがって本リリースが最初の公開版です。
 > 仕様が固まるまでは `0.x`（互換性の保証なし）として扱います。
 
+## [未リリース] - 0.9.10（r146）
+
+### 修正（重要）
+- **Maya 連携のセットアップが Maya を起動不能にすることがあった** —
+  別の PC へ GitHub の zip から入れて連携をセットアップしたところ、Maya が
+  通常起動できなくなりました（ユーザー報告 2026-10-24）。
+
+  原因: 連携の仕掛けを **Maya の `userSetup.py` に直接書き込んで** いました。
+  その際に文字コードを捨てて（UTF-8・置換あり）書き戻していたため、
+  CP932 の `userSetup.py` を使っている環境では日本語が全部 `�` に化け、
+  coding 宣言と中身が食い違って Maya 起動時に SyntaxError になり、その後ろの
+  `userSetup.py`（スタジオのパイプライン）まで走らなくなりました。
+
+  対策（根本）: **他人の `userSetup.py` には一切書き込まない**。Maya の
+  モジュール機構を使い、Manager 専用のファイルだけを置きます:
+  `<Maya 設定フォルダ>/modules/MayaFileManagerBridge.mod` と
+  `<同>/modules/MayaFileManagerBridge/scripts/userSetup.py`。専用ファイルは
+  ASCII のみで、全体を try/except で包んであるため Maya を止めません。
+  旧方式のブロックが `userSetup.py` に残っている環境では、起動時に移行を
+  促し、**バックアップ（`userSetup.py.mfm_bak_<日時>`）を取ってから**
+  ブロックだけを文字コード・改行を保って取り除きます。文字コードが判別
+  できないファイルには触りません。
+
+  復旧（既に壊れた環境）: `<Maya 設定フォルダ>/scripts/userSetup.py` の
+  `# >>> MayaFileManager bridge >>>` 〜 `# <<< MayaFileManager bridge <<<`
+  を含む範囲を削除し、`�` が残っていれば OneDrive 等の版履歴から復元して
+  ください。
+
 ## [0.9.9] - 2026-10-06
 
 ### 修正（重要）

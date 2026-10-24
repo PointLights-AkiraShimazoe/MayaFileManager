@@ -23,7 +23,7 @@ import os
 import time
 
 from _common import *  # noqa: F401,F403
-from _common import app, sm, make_panel, tmpdir, finish, QTest, find_item, columns
+from _common import app, sm, make_panel, tmpdir, finish, QTest, find_item, columns, find_item_wait
 from core.compat import (Qt, QWidget, QDialog, QLineEdit, QPoint, QRect,
                          QMessageBox, QProgressDialog, QApplication)
 
@@ -151,8 +151,11 @@ for n in ("del_me.ma", "dup_src.ma", "ed_1.ma", "ed_2.ma", "br_1.ma", "br_2.ma",
 
 b = make_panel(1300, 700)
 b.navigate_to(d)
-settle(700)
-check(find_item(b, "del_me.ma")[0] is not None, "前提: カラムに項目が出ている")
+# navigate 直後 2.6 秒でカラムが作り直される（_force_column_rebuild）。
+# それより前に掴んだ項目は消えるので、作り直しを越えてから待つ
+# （Linux で間欠失敗 2026-10-24。test_save_dialog と同じ対処）。
+settle(3600)
+check(find_item_wait(b, "del_me.ma")[0] is not None, "前提: カラムに項目が出ている")
 
 # ── C-1 削除 → 表示から即消える ───────────────────────────────────
 _orig_warn = QMessageBox.warning

@@ -15,12 +15,22 @@ from _common import finish
 
 from core import maya_bridge as _mb
 from core.maya_bridge import (_US_SNIPPET, _US_BEGIN, _US_END,
-                              open_port_snippet, install_usersetup,
+                              MODULE_SNIPPET, MOD_FILE_TEXT, MODULE_NAME,
+                              open_port_snippet, install_bridge,
                               is_usersetup_installed, usersetup_path,
                               PORT_RANGE)
 
-BODIES = {"userSetup スニペット": _US_SNIPPET,
+BODIES = {"モジュール用 userSetup.py": MODULE_SNIPPET,
+          "旧 userSetup スニペット（検出用）": _US_SNIPPET,
           "スクリプトエディタ用": open_port_snippet()}
+
+# 0) r146: Maya の設定フォルダに置くファイルは ASCII のみ（文字コード事故の根絶）
+assert MODULE_SNIPPET.isascii(), "モジュール用 userSetup.py に非 ASCII が混入"
+assert MOD_FILE_TEXT.isascii() and MOD_FILE_TEXT.startswith("+ %s " % MODULE_NAME)
+assert "./%s" % MODULE_NAME in MOD_FILE_TEXT, "モジュールのパスは .mod からの相対で書く（日本語ユーザー名を避ける）"
+assert _mb.PORT_SNIPPET_BODY.isascii(), "ポート本体に非 ASCII（モジュール用に流れる）"
+print("module files are pure ASCII: OK")
+
 
 # 1) Manager 側の名前が混ざっていないこと（Maya では NameError になる）
 FORBIDDEN = ("_swallow", "core.diag", "from core", "import core",
@@ -33,8 +43,12 @@ print("snippet has no manager-side names: OK")
 # 2) 単体で構文が通ること（userSetup.py は丸ごと exec される）
 for name, body in BODIES.items():
     ast.parse(body)
-# マーカーに挟まれていること（install_usersetup の置換が成立する条件）
+# 旧ブロックはマーカーに挟まれていること（remove_legacy_block の除去が成立する条件）
 assert _US_SNIPPET.startswith(_US_BEGIN) and _US_END in _US_SNIPPET
+# r146: モジュール用は **全体が try で包まれている**（Maya を止めない）
+_mod_tree = ast.parse(MODULE_SNIPPET)
+assert len(_mod_tree.body) == 1 and isinstance(_mod_tree.body[0], ast.Try), \
+    "モジュール用 userSetup.py は 1 つの try/except で全体を包むこと"
 print("snippet parses standalone and keeps its markers: OK")
 
 # 3) except は «素の pass» であること（将来の一括変換への歯止め）
@@ -88,7 +102,7 @@ def _run_snippet(taken, mine=None):
     sys.modules["maya.cmds"] = mod_cmds
     try:
         ns = {}
-        body = re.sub(r"^#.*$", "", _US_SNIPPET, flags=re.M)
+        body = re.sub(r"^#.*$", "", _mb.PORT_SNIPPET_BODY, flags=re.M)
         exec(compile(body, "<usersetup>", "exec"), ns)   # noqa: S102
         return ns["_mfm_open_bridge_port"](), fake
     finally:
@@ -124,48 +138,6 @@ print("a Maya that already has a port does not open a second one: OK")
 port3, _ = _run_snippet(taken=list(PORT_RANGE), mine=[])
 assert port3 is None, port3
 print("all ports taken -> returns None without raising: OK")
-
-# 5) install_usersetup は書いた内容を is_usersetup_installed が認識すること
-import tempfile
-tmp_home = tempfile.mkdtemp(prefix="mfm_usersetup_")
-os.environ["MAYA_APP_DIR"] = tmp_home
-p = install_usersetup()
-assert os.path.isfile(p) and p == usersetup_path(), p
-assert is_usersetup_installed()
-with open(p, encoding="utf-8") as f:
-    written = f.read()
-assert "_swallow" not in written, "書き込んだ userSetup.py に _swallow が入っている"
-ast.parse(written)
-# 二重実行で重複しない（既存ブロックの置換）
-install_usersetup()
-with open(p, encoding="utf-8") as f:
-    again = f.read()
-assert again.count(_US_BEGIN) == 1, "再インストールでブロックが増えた"
-print("install_usersetup writes a clean, idempotent block: OK")
-
-# r119b: «古い版が入ったまま» を検出できること。
-# 0.9.2 が書いた版は Maya 側で NameError になり、入れ直さない限り
-# «入っているのにポートが開かない» ままだった。
-assert _mb.SNIPPET_VERSION >= 3
-assert _mb.installed_snippet_version() == _mb.SNIPPET_VERSION
-assert not _mb.usersetup_is_outdated() and _mb.outdated_targets() == []
-with io.open(p, encoding="utf-8") as f:
-    cur = f.read()
-# 版表記の無い «古い» ブロックに差し替える
-old_block = cur.split(_US_BEGIN, 1)[1].split(_US_END, 1)[0]
-stale_block = old_block.replace("mfm-snippet-version: %d" % _mb.SNIPPET_VERSION,
-                                "")
-io.open(p, "w", encoding="utf-8").write(
-    cur.split(_US_BEGIN)[0] + _US_BEGIN + stale_block + _US_END + "\n")
-assert _mb.is_usersetup_installed(), "古くても «入っている» ことは変わらない"
-assert _mb.installed_snippet_version() == 0
-assert _mb.usersetup_is_outdated(), "古い版を検出できていない"
-assert _mb.outdated_targets() == [None], _mb.outdated_targets()
-# 入れ直すと解消する
-_mb.install_usersetup()
-assert not _mb.usersetup_is_outdated() and _mb.outdated_targets() == []
-print("an outdated snippet is detected and fixed by reinstalling: OK")
-
 
 # ---------------------------------------------------------------------------
 # r119: userSetup.py の «置き場» を推測で決めない
@@ -236,9 +208,290 @@ print("falls back to the candidate that actually looks like Maya's dir: OK")
 
 
 # ---------------------------------------------------------------------------
-# r119: 全バージョン共通 / バージョン別 を選べること
-#   セットアップ時に Maya は起動していないことの方が多いので、
-#   «実在するバージョンフォルダ» を見て対象を出す。
+# r146: モジュール方式のインストール（零接触）
+#   実機事故 2026-10-24: 旧方式は他人の userSetup.py を書き換え、文字コードを
+#   捨てて書き戻したため Maya が起動不能になった。新方式は Manager 専用の
+#   2 ファイル（.mod ＋ モジュール内 userSetup.py）だけを書き、既存の
+#   userSetup.py には **1 バイトも触らない**。
+# ---------------------------------------------------------------------------
+import tempfile
+import shutil
+tmp_home = tempfile.mkdtemp(prefix="mfm_module_")
+os.environ["MAYA_APP_DIR"] = tmp_home
+_mb._app_dir_confirmed = None
+_mb._app_dir_override = None
+
+# 既存の userSetup.py（ユーザーのもの）: CP932・CRLF・coding 宣言・日本語
+user_us = usersetup_path()
+os.makedirs(os.path.dirname(user_us))
+USER_BYTES = (u"# -*- coding: cp932 -*-\r\n"
+              u"# スタジオのパイプライン\r\n"
+              u"import sys\r\n"
+              u"sys.path.append(u'D:/パイプライン/scripts')\r\n"
+              u"print('existing')\r\n").encode("cp932")
+with open(user_us, "wb") as f:
+    f.write(USER_BYTES)
+user_mtime = os.stat(user_us).st_mtime_ns
+
+assert not is_usersetup_installed() and not _mb.is_module_installed()
+mod = install_bridge()
+assert mod == _mb.bridge_mod_path(), mod
+assert os.path.isfile(mod)
+mus = _mb.bridge_module_usersetup()
+assert os.path.isfile(mus), mus
+assert mus.startswith(os.path.join(tmp_home, "modules", MODULE_NAME)), mus
+with open(mod, "rb") as f:
+    mod_bytes = f.read()
+assert mod_bytes == MOD_FILE_TEXT.encode("ascii"), mod_bytes
+with open(mus, "rb") as f:
+    mus_bytes = f.read()
+mus_bytes.decode("ascii")                        # 非 ASCII が無いこと
+compile(mus_bytes, mus, "exec")                  # 単体で構文が通ること
+assert _mb.is_module_installed() and is_usersetup_installed()
+assert _mb.module_snippet_version() == _mb.SNIPPET_VERSION
+assert _mb.installed_snippet_version() == _mb.SNIPPET_VERSION
+assert not _mb.usersetup_is_outdated() and _mb.outdated_targets() == []
+print("install_bridge writes .mod + module userSetup.py (ASCII, compiles): OK")
+
+# 本丸: 既存の userSetup.py は 1 バイトも変わらず、バックアップも作られない
+with open(user_us, "rb") as f:
+    assert f.read() == USER_BYTES, "既存の userSetup.py が書き換えられた"
+assert os.stat(user_us).st_mtime_ns == user_mtime, "既存の userSetup.py に触れた"
+assert not [n for n in os.listdir(os.path.dirname(user_us)) if "mfm_bak" in n], \
+    "触っていないのにバックアップができた"
+print("install_bridge never touches the user's userSetup.py: OK")
+
+# 再インストールは同じ内容（増殖しない・壊れない）
+install_bridge()
+with open(mus, "rb") as f:
+    assert f.read() == mus_bytes
+assert sorted(os.listdir(os.path.join(tmp_home, "modules"))) == [MODULE_NAME, MODULE_NAME + ".mod"]
+print("install_bridge is idempotent: OK")
+
+# 古い版のモジュールは «要更新» と判定される
+with open(mus, "w", encoding="ascii", newline="\n") as f:
+    f.write(MODULE_SNIPPET.replace("mfm-snippet-version: %d" % _mb.SNIPPET_VERSION,
+                                   "mfm-snippet-version: 1"))
+assert _mb.module_snippet_version() == 1
+assert _mb.usersetup_is_outdated() and _mb.outdated_targets() == [None]
+install_bridge()
+assert not _mb.usersetup_is_outdated()
+print("an old module version is detected and refreshed: OK")
+
+# uninstall は Manager のファイルだけを消す
+assert _mb.uninstall_bridge()
+assert not os.path.exists(mod) and not os.path.exists(_mb.bridge_module_root())
+with open(user_us, "rb") as f:
+    assert f.read() == USER_BYTES
+assert not _mb.uninstall_bridge(), "何も無いのに True"
+print("uninstall_bridge removes only the manager's files: OK")
+
+
+# ---------------------------------------------------------------------------
+# r146: Maya のモジュール機構の再現 — .mod が指す scripts/ が sys.path に
+#   乗り、Maya が sys.path 上の userSetup.py を順に実行する。そこで
+#   専用 userSetup.py がポートを開くこと。ユーザーの userSetup.py が例外を
+#   出しても、専用側は自分の try で守られていて Maya を止めないこと。
+# ---------------------------------------------------------------------------
+import sys
+import types
+
+
+def _mod_file_target(mod_path):
+    """.mod の «+ 名前 版 パス» からモジュールフォルダを解く（相対は .mod 基準）。"""
+    with open(mod_path, "rb") as f:
+        line = f.read().decode("ascii").splitlines()[0]
+    parts = line.split()
+    assert parts[0] == "+" and parts[1] == MODULE_NAME, line
+    rel = parts[3]
+    return os.path.normpath(os.path.join(os.path.dirname(mod_path), rel))
+
+
+def _fake_maya(taken, mine=None, deferred_runs=True):
+    fake = _FakeCmds(taken, mine)
+    mod_cmds = types.ModuleType("maya.cmds")
+    mod_cmds.commandPort = fake.commandPort
+    mod_utils = types.ModuleType("maya.utils")
+    ran = []
+
+    def executeDeferred(fn, *a, **k):
+        ran.append(fn)
+        if deferred_runs:
+            fn(*a, **k)
+    mod_utils.executeDeferred = executeDeferred
+    mod_maya = types.ModuleType("maya")
+    mod_maya.cmds = mod_cmds
+    mod_maya.utils = mod_utils
+    return fake, ran, {"maya": mod_maya, "maya.cmds": mod_cmds, "maya.utils": mod_utils}
+
+
+def _maya_like_startup(app_dir, taken=(), mine=None, extra_paths=()):
+    """Maya の起動を真似る: modules/*.mod → scripts を sys.path へ、
+    その後 sys.path 上の userSetup.py を全部 exec。"""
+    fake, ran, mods = _fake_maya(taken, mine)
+    saved_mods = {k: sys.modules.get(k) for k in mods}
+    sys.modules.update(mods)
+    saved_path = list(sys.path)
+    try:
+        paths = [os.path.join(app_dir, "scripts")] + list(extra_paths)
+        mdir = os.path.join(app_dir, "modules")
+        if os.path.isdir(mdir):
+            for n in sorted(os.listdir(mdir)):
+                if n.endswith(".mod"):
+                    paths.append(os.path.join(_mod_file_target(os.path.join(mdir, n)), "scripts"))
+        sys.path[:0] = paths
+        executed, errors = [], []
+        for d in list(sys.path):
+            us = os.path.join(d, "userSetup.py")
+            if os.path.isfile(us):
+                try:
+                    with open(us, "rb") as f:
+                        code = compile(f.read(), us, "exec")
+                    exec(code, {"__name__": "__main__"})   # noqa: S102
+                    executed.append(us)
+                except Exception as e:
+                    errors.append((us, e))
+        return fake, ran, executed, errors
+    finally:
+        sys.path[:] = saved_path
+        for k, v in saved_mods.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+
+install_bridge()
+fake, ran, executed, errors = _maya_like_startup(tmp_home, taken=[PORT_RANGE[0]])
+assert errors == [], errors
+assert any(os.path.normcase(e) == os.path.normcase(mus) for e in executed), executed
+assert len(ran) == 1, "executeDeferred が 1 回でない: %r" % (ran,)
+assert fake.opened == [PORT_RANGE[1]], fake.opened
+print("module userSetup.py runs through Maya's module path and opens a port: OK")
+
+# ユーザーの userSetup.py が壊れていても（SyntaxError）専用側は走り、ポートが開く。
+# ※ Maya 本体は 1 つの userSetup.py の例外で残りを止めることがあるが、
+#   それはユーザー側のファイルの問題。Manager 側が **原因になる** 経路を断つのが目的。
+with open(user_us, "wb") as f:
+    f.write(b"# -*- coding: cp932 -*-\r\nthis is not python\r\n")
+fake, ran, executed, errors = _maya_like_startup(tmp_home)
+assert fake.opened == [PORT_RANGE[0]], fake.opened
+assert len(errors) == 1 and errors[0][0] == user_us, errors
+with open(user_us, "wb") as f:
+    f.write(USER_BYTES)
+print("a broken user userSetup.py does not stop the module bridge: OK")
+
+# maya が import できない環境（mayapy 以外で exec された等）でも例外を外に出さない
+saved = {k: sys.modules.get(k) for k in ("maya", "maya.cmds", "maya.utils")}
+for k in saved:
+    sys.modules.pop(k, None)
+import builtins
+_real_import = builtins.__import__
+
+
+def _no_maya(name, *a, **k):
+    if name == "maya" or name.startswith("maya."):
+        raise ImportError("no maya here")
+    return _real_import(name, *a, **k)
+builtins.__import__ = _no_maya
+try:
+    exec(compile(MODULE_SNIPPET, "<module userSetup>", "exec"), {})   # noqa: S102
+finally:
+    builtins.__import__ = _real_import
+    for k, v in saved.items():
+        if v is not None:
+            sys.modules[k] = v
+print("module userSetup.py never raises even without maya: OK")
+
+
+# ---------------------------------------------------------------------------
+# r146: 旧方式のブロックの除去 — 文字・文字コード・改行を 1 つも変えない
+# ---------------------------------------------------------------------------
+_mb.uninstall_bridge()
+OLD_BLOCK = (_US_BEGIN + "\n# MayaFileManager: old\n# mfm-snippet-version: 4\n"
+             "def _mfm_open_bridge_port():\n    pass\n" + _US_END + "\n")
+LEGACY = (u"# -*- coding: cp932 -*-\r\n"
+          + OLD_BLOCK.replace("\n", "\r\n")
+          + u"\r\n# スタジオのパイプライン\r\n"
+          u"import sys\r\n"
+          u"sys.path.append(u'D:/パイプライン/scripts')\r\n"
+          u"print('existing')\r\n")
+EXPECT = (u"# -*- coding: cp932 -*-\r\n"
+          u"\r\n# スタジオのパイプライン\r\n"
+          u"import sys\r\n"
+          u"sys.path.append(u'D:/パイプライン/scripts')\r\n"
+          u"print('existing')\r\n")
+with open(user_us, "wb") as f:
+    f.write(LEGACY.encode("cp932"))
+assert _mb.legacy_block_present() and _mb.legacy_targets() == [None]
+assert is_usersetup_installed(), "旧方式でも «入っている» ことは変わらない"
+assert _mb.installed_snippet_version() == 4
+assert _mb.usersetup_is_outdated() and _mb.outdated_targets() == [None], \
+    "旧方式が残っているのに «要更新» にならない（移行の入口が無い）"
+print("legacy block is detected as installed-but-outdated: OK")
+
+p = _mb.remove_legacy_block()
+assert p == user_us, p
+with open(user_us, "rb") as f:
+    after = f.read()
+assert after == EXPECT.encode("cp932"), after
+baks = [n for n in os.listdir(os.path.dirname(user_us)) if n.startswith("userSetup.py.mfm_bak_")]
+assert len(baks) == 1, baks
+with open(os.path.join(os.path.dirname(user_us), baks[0]), "rb") as f:
+    assert f.read() == LEGACY.encode("cp932"), "バックアップが原本と違う"
+assert not _mb.legacy_block_present() and not is_usersetup_installed()
+assert _mb.remove_legacy_block() is None, "無いのに何かした"
+print("remove_legacy_block keeps every other byte (cp932, CRLF) and backs up: OK")
+
+# 旧ブロックが末尾にある場合（r120 以前の «末尾追記» 版）
+with open(user_us, "wb") as f:
+    f.write((u"# -*- coding: utf-8 -*-\nprint('a')\n\n" + OLD_BLOCK).encode("utf-8"))
+_mb.remove_legacy_block()
+with open(user_us, "rb") as f:
+    assert f.read() == b"# -*- coding: utf-8 -*-\nprint('a')\n\n", f
+print("tail-appended legacy block is removed too: OK")
+
+# ブロックしか無いファイル（元々 Manager が作った）→ ファイルごと消え、バックアップは残る
+for n in os.listdir(os.path.dirname(user_us)):
+    if "mfm_bak" in n:
+        os.remove(os.path.join(os.path.dirname(user_us), n))
+with open(user_us, "wb") as f:
+    f.write(OLD_BLOCK.encode("utf-8"))
+assert _mb.remove_legacy_block() == user_us
+assert not os.path.exists(user_us)
+assert [n for n in os.listdir(os.path.dirname(user_us)) if "mfm_bak" in n]
+print("a userSetup.py that held only our block is removed (backup kept): OK")
+
+# 終端マーカーが欠けた壊れたブロック → マーカー以降を捨てる（手前は保つ）
+with open(user_us, "wb") as f:
+    f.write(("print('keep')\n" + _US_BEGIN + "\nbroken\n").encode("utf-8"))
+_mb.remove_legacy_block()
+with open(user_us, "rb") as f:
+    assert f.read() == b"print('keep')\n", f
+print("a block without its end marker is cut off safely: OK")
+
+# 文字コードが判別できないファイルは **触らない**（ValueError、バックアップも作らない）
+for n in os.listdir(os.path.dirname(user_us)):
+    if "mfm_bak" in n:
+        os.remove(os.path.join(os.path.dirname(user_us), n))
+garbage = b"# -*- coding: utf-8 -*-\n" + _US_BEGIN.encode() + b"\n\xff\xfe\x81\x39\n" + _US_END.encode() + b"\nprint(1)\n"
+with open(user_us, "wb") as f:
+    f.write(garbage)
+assert _mb.legacy_block_present()
+try:
+    _mb.remove_legacy_block()
+    raise AssertionError("読めないのに書き換えた")
+except ValueError:
+    pass
+with open(user_us, "rb") as f:
+    assert f.read() == garbage
+assert not [n for n in os.listdir(os.path.dirname(user_us)) if "mfm_bak" in n]
+print("an undecodable userSetup.py is left untouched: OK")
+os.remove(user_us)
+
+
+# ---------------------------------------------------------------------------
+# r119/r146: 全バージョン共通 / バージョン別 を選べること（モジュール方式）
 # ---------------------------------------------------------------------------
 _mb._app_dir_confirmed = None
 _mb._app_dir_override = None
@@ -250,219 +503,41 @@ os.makedirs(os.path.join(appdir, "scripts"))
 _mb.set_maya_app_dir(appdir, confirmed=True)
 
 assert _mb.installed_versions() == ["2026", "2025", "2024"], _mb.installed_versions()
-common = _mb.usersetup_path()
-per = _mb.usersetup_path("2026")
-assert common == os.path.join(appdir, "scripts", "userSetup.py"), common
-assert per == os.path.join(appdir, "2026", "scripts", "userSetup.py"), per
-assert common != per
-print("version folders are listed and each has its own userSetup path: OK")
+common = _mb.bridge_mod_path()
+per = _mb.bridge_mod_path("2026")
+assert common == os.path.join(appdir, "modules", MODULE_NAME + ".mod"), common
+assert per == os.path.join(appdir, "2026", "modules", MODULE_NAME + ".mod"), per
+print("each target has its own .mod location: OK")
 
-assert not _mb.is_usersetup_installed() and not _mb.is_usersetup_installed("2026")
+assert not is_usersetup_installed() and not is_usersetup_installed("2026")
 assert _mb.installed_targets() == []
-_mb.install_usersetup("2026")
-assert _mb.is_usersetup_installed("2026")
-assert not _mb.is_usersetup_installed(), "バージョン別が共通まで «済み» にしている"
+assert _mb.ineffective_versions() == ["2026", "2025", "2024"]
+install_bridge("2026")
+assert is_usersetup_installed("2026")
+assert not is_usersetup_installed(), "バージョン別が共通まで «済み» にしている"
 assert _mb.installed_targets() == ["2026"], _mb.installed_targets()
-_mb.install_usersetup()
+assert _mb.bridge_effective_for("2026") and not _mb.bridge_effective_for("2025")
+assert _mb.ineffective_versions() == ["2025", "2024"]
+install_bridge()
 assert _mb.installed_targets() == [None, "2026"], _mb.installed_targets()
-for t in (None, "2026"):
-    with open(_mb.usersetup_path(t), encoding="utf-8") as f:
-        body = f.read()
-    assert "_swallow" not in body
-    ast.parse(body)
-print("install targets are independent and both write a clean snippet: OK")
+assert _mb.ineffective_versions() == []
+# 共通側のモジュールが実際に Maya 流の読み方で動く
+fake, ran, executed, errors = _maya_like_startup(appdir)
+assert errors == [] and fake.opened == [PORT_RANGE[0]], (errors, fake.opened)
+print("common / per-version module targets behave independently: OK")
 
-# 対象を選ぶダイアログ: 共通＋実在バージョンが並び、既定は «共通» だけ
-from ui.maya_bridge_dialog import MayaBridgeDialog
-_mb._app_dir_confirmed = None
-_mb.set_maya_app_dir(appdir, confirmed=True)
-fresh = tempfile.mkdtemp(prefix="mfm_appdir3_")
-os.makedirs(os.path.join(fresh, "2027"))
-_mb._app_dir_confirmed = None
-_mb.set_maya_app_dir(fresh, confirmed=True)
-d = MayaBridgeDialog()
-vers = [v for v, _cb in d._targets]
-assert vers == [None, "2027"], vers
-assert d.selected_targets() == [None], d.selected_targets()
-# バージョン別だけを選べる
-d._targets[0][1].setChecked(False)
-d._targets[1][1].setChecked(True)
-assert d.selected_targets() == ["2027"], d.selected_targets()
-# 設定済みのものは既定でチェックしない（勝手に上書きしない）
-_mb.install_usersetup(None)
-d2 = MayaBridgeDialog()
-assert d2.selected_targets() == [], d2.selected_targets()
-d.deleteLater(); d2.deleteLater()
-print("dialog offers all-versions + each version and never pre-checks "
-      "what is already installed: OK")
+# 旧方式が共通に残っている状態で outdated_targets が共通を指す（移行の入口）
+with open(_mb.usersetup_path(), "wb") as f:
+    f.write(OLD_BLOCK.encode("utf-8"))
+assert _mb.outdated_targets() == [None], _mb.outdated_targets()
+assert _mb.legacy_targets() == [None]
+_mb.remove_legacy_block()
+assert _mb.outdated_targets() == []
+print("legacy block in the common userSetup.py is offered for migration: OK")
 
-
-# ---------------------------------------------------------------------------
-# r120: **Maya は見つかった userSetup.py を «全部» 実行する**。
-#   r119c では「最初に見つかった 1 つだけ」という前提で、自前の userSetup.py を
-#   持つバージョンを «共通を隠している» と警告していたが、これは誤りだった。
-#   2026-10-02 の実機ログで、1 回の Maya 起動に対してスニペットの痕跡が
-#   2 行（共通＋バージョン別）出ることを確認している。
-#   したがって共通に 1 つ入っていれば、どのバージョンでも効く。
-# ---------------------------------------------------------------------------
 _mb._app_dir_confirmed = None
 _mb._app_dir_override = None
-os.environ.pop("MAYA_APP_DIR", None)
-sh = tempfile.mkdtemp(prefix="mfm_shared_")
-for v in ("2026", "2025"):
-    os.makedirs(os.path.join(sh, v, "scripts"))
-os.makedirs(os.path.join(sh, "scripts"))
-_mb.set_maya_app_dir(sh, confirmed=True)
-
-_mb.install_usersetup(None)
-assert _mb.bridge_effective_for("2026") and _mb.bridge_effective_for("2025")
-assert _mb.ineffective_versions() == []
-print("the shared userSetup.py covers every version: OK")
-
-# 2026 が «自前の userSetup.py» を持っていても、共通は効いたまま
-other = os.path.join(sh, "2026", "scripts", "userSetup.py")
-io.open(other, "w", encoding="utf-8").write("# 既存のユーザー設定\nprint('hi')\n")
-assert _mb.has_own_usersetup("2026")
-assert _mb.bridge_effective_for("2026"), \
-    "自前の userSetup.py があるだけで «効かない» 判定にしてはいけない"
-assert _mb.ineffective_versions() == []
-print("a version with its own userSetup.py does NOT disable the shared one: OK")
-
-# バージョン別に入れることもできる（既存の中身は残る）
-_mb.install_usersetup("2026")
-body = io.open(other, encoding="utf-8").read()
-assert "print('hi')" in body, "既存の userSetup.py の中身を消している"
-assert _US_BEGIN in body
-assert body.index(_US_BEGIN) < body.index("print('hi')"), "先頭に入っていない"
-ast.parse(body)
-print("installing into a single version keeps that file's content: OK")
-
-# 共通がまだ無い時だけ «全バージョン共通» が既定でチェックされること。
-# 隠し警告（QLabel#warn）はもう出してはいけない。
-from ui.maya_bridge_dialog import MayaBridgeDialog
-from core.compat import QLabel
-sh2 = tempfile.mkdtemp(prefix="mfm_dialog_")
-for v in ("2026", "2025"):
-    os.makedirs(os.path.join(sh2, v, "scripts"))
-_mb._app_dir_confirmed = None
-_mb.set_maya_app_dir(sh2, confirmed=True)
-d3 = MayaBridgeDialog()
-picked = d3.selected_targets()
-assert picked == [None], ("共通だけが既定で選ばれるべき", picked)
-warns = [w for w in d3.findChildren(QLabel) if w.objectName() == "warn"]
-assert not warns, "誤った «隠し» 警告がまだ出ている"
-d3.deleteLater()
-
-# 共通を入れた後は、何も既定でチェックされない
-_mb.install_usersetup(None)
-d4 = MayaBridgeDialog()
-assert d4.selected_targets() == [], d4.selected_targets()
-d4.deleteLater()
-print("the dialog pre-checks only the shared target, and warns about nothing: OK")
-
-# ---------------------------------------------------------------------------
-# r120: 連携ブロックは userSetup.py の «先頭» に入ること
-#   実機障害: 全バージョンに Bridge=True が入っているのに open ports: [] で、
-#   Maya 側の userSetup 読込元も空だった。原因は «末尾追記»。userSetup.py は
-#   Python の import で読まれるので、既存の中身が途中で例外を出すと
-#   そこで打ち切られ、末尾の連携ブロックへ永久に到達しない。
-# ---------------------------------------------------------------------------
-tmp_head = tempfile.mkdtemp(prefix="mfm_headinsert_")
-_mb._app_dir_confirmed = None
-_mb._app_dir_override = None
-_mb.set_maya_app_dir(tmp_head, confirmed=True)
-hp = _mb.usersetup_path()
-os.makedirs(os.path.dirname(hp), exist_ok=True)
-
-# 1) 途中で死ぬ既存 userSetup.py でも、連携ブロックは «その前» にある
-io.open(hp, "w", encoding="utf-8").write(
-    u"# -*- coding: utf-8 -*-\n"
-    u"import maya.cmds as cmds\n"
-    u"raise RuntimeError('他人のコードが死ぬ')\n"
-    u"print('ここには来ない')\n")
-_mb.install_usersetup()
-hb = io.open(hp, encoding="utf-8").read()
-assert hb.splitlines()[0].startswith("# -*- coding"), \
-    ("coding 宣言を 1 行目から動かしてはいけない", hb.splitlines()[:3])
-assert hb.index(_US_BEGIN) < hb.index("raise RuntimeError"), \
-    "連携ブロックが既存コードより後ろにある（末尾追記のまま）"
-assert "print('ここには来ない')" in hb, "既存の中身を消している"
-ast.parse(hb)
-print("the bridge block is inserted ahead of existing code: OK")
-
-# 2) 末尾に «旧位置» のブロックが残っているファイルを入れ直すと先頭へ移る
-io.open(hp, "w", encoding="utf-8").write(
-    u"print('existing')\n\n" + _US_SNIPPET)
-_mb.install_usersetup()
-hb2 = io.open(hp, encoding="utf-8").read()
-assert hb2.count(_US_BEGIN) == 1, "ブロックが増えた"
-assert hb2.index(_US_BEGIN) < hb2.index("print('existing')"), \
-    "旧位置（末尾）のブロックが先頭へ移動していない"
-ast.parse(hb2)
-print("an old tail-placed block is moved to the top: OK")
-
-# 3) shebang + coding の両方を持つファイルでも順序を壊さない
-io.open(hp, "w", encoding="utf-8").write(
-    u"#!/usr/bin/env python\n# -*- coding: utf-8 -*-\nprint('x')\n")
-_mb.install_usersetup()
-hl = io.open(hp, encoding="utf-8").read().splitlines()
-assert hl[0].startswith("#!") and hl[1].startswith("# -*- coding"), hl[:3]
-assert hl[2].startswith(_US_BEGIN), hl[:4]
-print("shebang and coding lines stay first, block comes right after: OK")
-
-# 4) スニペットが «実行された» 痕跡を残すこと（切り分け不能だったのを解消）
-assert "_mfm_trace" in _US_SNIPPET
-assert "mfm_maya.log" in _US_SNIPPET, "Maya 側から記録する先が無い"
-assert _mb.SNIPPET_VERSION >= 4, "挙動を変えたのに版を上げていない"
-print("the snippet records that it ran: OK")
-
-# 5) r146（実機事故 2026-10-24「他の環境でインストールしたら Maya を通常起動
-#    することが出来なくなった」）: 既存の userSetup.py を **壊さない**。
-#    以前は utf-8 / errors="replace" で読んで utf-8 で書き戻していたので、
-#    CP932 の userSetup.py（日本語のコメント／パス、coding 宣言は cp932）が
-#    «�» 混じりの UTF-8 になり、Maya 起動時に SyntaxError → その後ろの全ての
-#    userSetup.py（スタジオのパイプライン）が走らなくなった。
-import glob as _glob
-tmp_home2 = tempfile.mkdtemp(prefix="mfm_usersetup_cp932_")
-os.environ["MAYA_APP_DIR"] = tmp_home2
-p2 = usersetup_path()
-os.makedirs(os.path.dirname(p2), exist_ok=True)
-jp_src = ("# -*- coding: cp932 -*-\r\n"
-          "# スタジオの起動設定\r\n"
-          "import os\r\n"
-          "PROJ = r'D:\\作業\\プロジェクト'\r\n"
-          "print('起動')\r\n")
-raw_before = jp_src.encode("cp932")
-with open(p2, "wb") as f:
-    f.write(raw_before)
-_mb.install_usersetup()
-raw_after = open(p2, "rb").read()
-text_after = raw_after.decode("cp932")          # cp932 のまま読める（壊れていない）
-assert "\ufffd" not in text_after, "置換文字（�）が入った＝文字を壊している"
-assert "# スタジオの起動設定" in text_after and "D:\\作業\\プロジェクト" in text_after, text_after
-assert text_after.startswith("# -*- coding: cp932 -*-"), "coding 宣言が先頭に残っていない"
-assert _US_BEGIN in text_after and text_after.count(_US_BEGIN) == 1
-assert b"\r\n" in raw_after and raw_after.count(b"\n") == raw_after.count(b"\r\n"), "改行の種類が変わった（CRLF のまま）"
-compile(text_after, p2, "exec")              # Maya が読む形で構文が通る
-baks = _glob.glob(p2 + ".mfm_bak_*")
-assert baks and open(baks[0], "rb").read() == raw_before, "書き換える前のバックアップが無い／中身が違う"
-print("a CP932 userSetup.py keeps its text, encoding, newlines, and gets a backup: OK")
-
-# 読めない（utf-8 でも cp932 でもない）ファイルは触らない
-tmp_home3 = tempfile.mkdtemp(prefix="mfm_usersetup_bin_")
-os.environ["MAYA_APP_DIR"] = tmp_home3
-p3 = usersetup_path()
-os.makedirs(os.path.dirname(p3), exist_ok=True)
-junk = b"# -*- coding: utf-8 -*-\n" + bytes([0xff, 0xfe, 0x81, 0x00, 0xc3]) + b"\nprint(1)\n"
-with open(p3, "wb") as f:
-    f.write(junk)
-try:
-    _mb.install_usersetup()
-    raise AssertionError("読めないファイルを書き換えた")
-except ValueError:
-    pass
-assert open(p3, "rb").read() == junk, "触らないはずのファイルが変わった"
-print("an unreadable userSetup.py is left untouched (install refuses): OK")
-os.environ["MAYA_APP_DIR"] = tmp_home
+shutil.rmtree(tmp_home, ignore_errors=True)
+shutil.rmtree(appdir, ignore_errors=True)
 
 finish()

@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Maya 連携（userSetup.py）のセットアップ（r119）。
+"""Maya 連携（Maya モジュール）のセットアップ（r119 / r146 でモジュール方式へ）。
+
+r146: 以前は Maya の userSetup.py に直接ブロックを挟んでいた。実機で
+Maya が起動不能になる事故（文字コードを捨てて書き戻した）を起こしたので、
+Maya のモジュール機構（<maya app dir>/modules/MayaFileManagerBridge.mod ＋
+専用フォルダの userSetup.py）に変えた。**既存の userSetup.py には触らない**。
 
 ここが解いている問題
 --------------------
-連携ポートは **Maya の起動時** に開く。その仕掛けを書く userSetup.py の
+連携ポートは **Maya の起動時** に開く。その仕掛けを置く Maya の設定フォルダの
 置き場は Maya 自身が «ドキュメント» をどう解決するかで決まり、Windows の
 既知フォルダ API とは一致しないことがある（OneDrive のフォルダ移動を
 Maya が無視する環境がある）。推測で書くと «インストールしたのに効かない»。
@@ -88,9 +93,13 @@ class MayaBridgeDialog(QDialog):
 
         lay.addWidget(QLabel(tr(
             "Maya の起動時に連携ポートを開くための設定を書き込みます。\n"
-            "これにより、マネージャー以外から起動した Maya も「接続:」リストに出ます。",
+            "これにより、マネージャー以外から起動した Maya も「接続:」リストに出ます。\n"
+            "書き込むのはマネージャー専用のモジュール（.mod ＋ 専用フォルダ）だけで、\n"
+            "Maya の userSetup.py には触りません。",
             "Writes the setting that opens a bridge port when Maya starts, so\n"
-            "Mayas launched outside this manager also appear in the Connect list.")))
+            "Mayas launched outside this manager also appear in the Connect list.\n"
+            "Only the manager's own module (.mod + its folder) is written;\n"
+            "Maya's userSetup.py is left alone.")))
 
         row = QHBoxLayout()
         row.addWidget(QLabel(tr("Maya の設定フォルダ:", "Maya user folder:")), 0)
@@ -196,14 +205,18 @@ class MayaBridgeDialog(QDialog):
 
         for ver, label in rows:
             try:
-                p = mb.usersetup_path(ver)
+                p = mb.bridge_mod_path(ver)
                 done = mb.is_usersetup_installed(ver)
                 stale = mb.usersetup_is_outdated(ver)
+                legacy = mb.legacy_block_present(ver)
             except Exception as _e:
                 _swallow(_e, "ui/maya_bridge_dialog.py _reload_targets")
                 continue
             mark = ""
-            if stale:
+            if legacy:
+                mark = "  " + tr("（古い方式が userSetup.py に残存 — 移行）",
+                                 "(old method left in userSetup.py - migrate)")
+            elif stale:
                 mark = "  " + tr("（古い版 — 要更新）", "(old version - update)")
             elif done:
                 mark = "  " + tr("（設定済み）", "(already set up)")

@@ -13,6 +13,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # save_quick_nav_presets がユーザーのプリセットを上書きして消した（2026-09-11）。
 # SettingsManager は MFM_SETTINGS_ROOT を最優先で参照する。
 os.environ["MFM_SETTINGS_ROOT"] = tempfile.mkdtemp(prefix="mfm_test_settings_")
+# r146: Maya の設定フォルダも隔離する。無いと «開発機の本物の userSetup.py» を
+# 読んでしまい、そこに旧方式のブロックが残っていると MainWindow が 3.5 秒後に
+# 移行ダイアログ（モーダル）を出してテストが固まる（2026-10-24 の全スイートで
+# 3 本が TIMEOUT）。テストが実機の Maya 設定に依存してはいけない。
+os.environ["MAYA_APP_DIR"] = tempfile.mkdtemp(prefix="mfm_test_maya_appdir_")
 
 # r146: ACCESS_VIOLATION（0xC0000005）で «出力なし» のまま落ちるテストが
 # 間欠的に出る（2026-10-14）。素の mayapy は落ちた場所を何も残さないので、

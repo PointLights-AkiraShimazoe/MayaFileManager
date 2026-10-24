@@ -198,16 +198,20 @@ def parse_identify(reply):
 _US_BEGIN = "# >>> MayaFileManager bridge >>>"
 _US_END = "# <<< MayaFileManager bridge <<<"
 
-# 【重要・自動変換禁止】以下の文字列は **Maya の userSetup.py にそのまま貼られる**。
+# 【重要・自動変換禁止】以下の文字列は **Maya 側で実行される**。
 # Manager のモジュールではないので、`_swallow()` など当パッケージの関数を
 # 書いてはいけない（Maya 側で NameError になり、ポートが一切開かなくなる）。
 # r112 の一括変換がここへ `_swallow` を入れてしまい、ポートが埋まっている
 # 2 台目以降の Maya が «接続リストに出ない» 原因になっていた（r119 で修復）。
 # except は素の `pass` のままにすること。noqa: PLS-NO-SWALLOW
+#
+# r146: **ASCII のみ** で書く（コメントも英語）。Maya の設定フォルダに置く
+# ファイルは文字コードの問題を起こしてはならない。test_bridge_snippet が
+# `isascii()` で見張る。
 PORT_SNIPPET_BODY = """
 def _mfm_trace(_msg):
-    # r120: 「userSetup が実行されたか」 を後から切り分けられるようにする。
-    # Manager 側のログ（~/.maya_file_manager/logs/mfm_maya.log）に相乗りする。
+    # Leave a trace so "did the bridge code run at all" can be told later.
+    # Shares the Manager's log (~/.maya_file_manager/logs/mfm_maya.log).
     try:
         import os as _os, datetime as _dt
         _d = _os.path.join(_os.path.expanduser("~"), ".maya_file_manager", "logs")
@@ -228,11 +232,10 @@ def _mfm_trace(_msg):
 def _mfm_open_bridge_port():
     import maya.cmds as _cmds
     _ports = range(%d, %d)
-    # 1) この Maya が 「既に」 レンジ内のポートを開いているなら何もしない。
-    #    マネージャーから起動した Maya は -command で先にポートを開くので、
-    #    ここで 「別の空きポート」 を開くと 1 つの Maya が 2 回接続リストに
-    #    出てしまう（r119b）。commandPort(q=True) は 「この Maya が開いて
-    #    いるか」 を答える（他プロセスのポートは False）。
+    # 1) If THIS Maya already has a port in the range, do nothing.
+    #    A Maya launched by the Manager opens its port via -command first;
+    #    opening another one here would list one Maya twice (r119b).
+    #    commandPort(q=True) answers for this Maya only (other processes: False).
     for _p in _ports:
         try:
             if _cmds.commandPort(":%%d" %% _p, q=True):
@@ -240,8 +243,8 @@ def _mfm_open_bridge_port():
                 return _p
         except Exception:
             pass
-    # 2) 開いていなければ、空いているポートを順に試す。
-    #    他の Maya が使っているポートは open が失敗するので次へ。
+    # 2) Otherwise take the first free port. A port held by another Maya
+    #    fails to open, so move on to the next one.
     for _p in _ports:
         try:
             _cmds.commandPort(name=":%%d" %% _p, sourceType="python")
@@ -256,8 +259,11 @@ def _mfm_open_bridge_port():
 # スニペットの版。中身を変えたら **必ず上げる**。
 # 古い版が入ったままだと 「入れたのに効かない」 が起きるので、Manager が
 # 検出して更新を促せるようにする（r119b）。
-SNIPPET_VERSION = 4
+#   v5 (r146): userSetup.py 書き込み方式 → Maya モジュール方式へ。
+SNIPPET_VERSION = 5
 
+# 旧方式（〜v4）: 他人の userSetup.py に挟んでいたブロックの目印。
+# r146 以降は **検出と除去にだけ** 使う。書き込むことは二度と無い。
 _US_SNIPPET = _US_BEGIN + """
 # MayaFileManager: 起動時に連携用commandPortを自動で開く（レンジ内の空きを使用）
 # mfm-snippet-version: %d
@@ -269,6 +275,47 @@ try:
 except Exception:
     pass
 """ + _US_END + "\n"
+
+# ---------------------------------------------------------------------------
+# r146: Maya モジュール方式（零接触インストール）
+# ---------------------------------------------------------------------------
+# 実機事故 2026-10-24: 旧方式は **他人の userSetup.py を書き換えて** いた。
+# 文字コードを捨てて書き戻したため Maya が起動不能になった環境が出た。
+# 根本対策として、Manager は Maya 側に **自分専用のファイルだけ** を置く:
+#
+#   <maya app dir>/modules/MayaFileManagerBridge.mod
+#   <maya app dir>/modules/MayaFileManagerBridge/scripts/userSetup.py
+#
+# .mod は Maya のモジュール機構（MAYA_MODULE_PATH 既定に $MAYA_APP_DIR/modules
+# が含まれる）が読み、`scripts` を PYTHONPATH に足す。Maya は sys.path 上の
+# userSetup.py を全部実行するので、専用フォルダの userSetup.py が走る。
+# 既存の userSetup.py（ユーザー・スタジオのもの）には **一切触れない**。
+# 専用ファイルは ASCII のみ・全体を try/except で包み、Maya を止めない。
+MODULE_NAME = "MayaFileManagerBridge"
+MODULE_MARK = "# MayaFileManager bridge (Maya module)"
+MOD_FILE_TEXT = "+ %s 1.0 ./%s\n" % (MODULE_NAME, MODULE_NAME)
+
+
+def _indent(text, n=4):
+    pad = " " * n
+    return "".join((pad + ln) if ln.strip() else ln for ln in text.splitlines(True))
+
+
+MODULE_SNIPPET = (
+    MODULE_MARK + "\n"
+    "# Written by MayaFileManager. This folder belongs to the Manager and is\n"
+    "# the only thing it writes into Maya's user folder (plus the .mod file).\n"
+    "# ASCII only. Everything is wrapped so this file can never stop Maya.\n"
+    "# mfm-snippet-version: %d\n"
+    "try:\n" % SNIPPET_VERSION
+    + _indent(PORT_SNIPPET_BODY.strip("\n") + "\n")
+    + "\n"
+    "    _mfm_trace(\"module userSetup bridge reached\")\n"
+    "    import maya.utils as _mu\n"
+    "    _mu.executeDeferred(_mfm_open_bridge_port)\n"
+    "except Exception:\n"
+    "    pass\n")
+assert MODULE_SNIPPET.isascii(), "module userSetup.py must be ASCII only"
 
 
 def open_port_snippet() -> str:
@@ -473,167 +520,175 @@ def installed_versions():
     return out
 
 
-def _usersetup_text(version=None):
-    import os
-    p = usersetup_path(version)
-    if not os.path.isfile(p):
-        return None
+def modules_dir(version=None):
+    """Maya のモジュール置き場。version=None で全バージョン共通
+    （`<maya app dir>/modules`）、"2026" でそのバージョン専用。"""
+    base = maya_app_dir()
+    if version:
+        return os.path.join(base, str(version), "modules")
+    return os.path.join(base, "modules")
+
+
+def bridge_mod_path(version=None):
+    """Manager が書く .mod ファイルのパス。"""
+    return os.path.join(modules_dir(version), MODULE_NAME + ".mod")
+
+
+def bridge_module_root(version=None):
+    """Manager 専用のモジュールフォルダ（.mod の隣）。"""
+    return os.path.join(modules_dir(version), MODULE_NAME)
+
+
+def bridge_module_usersetup(version=None):
+    """Manager 専用の userSetup.py（モジュールフォルダ内）。"""
+    return os.path.join(bridge_module_root(version), "scripts", "userSetup.py")
+
+
+def _module_usersetup_text(version=None):
+    p = bridge_module_usersetup(version)
     try:
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
+        with open(p, "rb") as f:
+            return f.read().decode("ascii", "replace")
+    except OSError:
+        return None
+
+
+def is_module_installed(version=None) -> bool:
+    """モジュール方式で入っているか（.mod と専用 userSetup.py の両方がある）。"""
+    if not os.path.isfile(bridge_mod_path(version)):
+        return False
+    text = _module_usersetup_text(version)
+    return bool(text and MODULE_MARK in text)
+
+
+def module_snippet_version(version=None):
+    """モジュール方式で入っている版。入っていなければ None。"""
+    if not is_module_installed(version):
+        return None
+    import re as _re
+    m = _re.search(r"mfm-snippet-version:\s*(\d+)", _module_usersetup_text(version) or "")
+    return int(m.group(1)) if m else 0
+
+
+def install_bridge(version=None) -> str:
+    """連携をモジュール方式で入れる。書いた .mod のパスを返す。
+
+    書くのは Manager 専用の 2 ファイルだけ。既存の userSetup.py には触れない
+    （旧方式のブロックの除去は remove_legacy_block() が別に行う）。"""
+    root = bridge_module_root(version)
+    os.makedirs(os.path.join(root, "scripts"), exist_ok=True)
+    us = bridge_module_usersetup(version)
+    with open(us, "w", encoding="ascii", newline="\n") as f:
+        f.write(MODULE_SNIPPET)
+    mod = bridge_mod_path(version)
+    with open(mod, "w", encoding="ascii", newline="\n") as f:
+        f.write(MOD_FILE_TEXT)
+    bridge_log("install_bridge: wrote %r and %r (module, snippet v%d)"
+               % (mod, us, SNIPPET_VERSION))
+    return mod
+
+
+# 旧名。呼び出し元の互換のために残す（中身はモジュール方式）。
+install_usersetup = install_bridge
+
+
+def uninstall_bridge(version=None) -> bool:
+    """モジュール方式のファイルを取り除く。何か消したら True。"""
+    import shutil
+    done = False
+    mod = bridge_mod_path(version)
+    if os.path.isfile(mod):
+        os.remove(mod)
+        done = True
+    root = bridge_module_root(version)
+    if os.path.isdir(root):
+        shutil.rmtree(root, ignore_errors=True)
+        done = True
+    if done:
+        bridge_log("uninstall_bridge: removed %r" % (root,))
+    return done
+
+
+# ---------------------------------------------------------------------------
+# 旧方式（他人の userSetup.py に挟んだブロック）: 検出と安全な除去だけ
+# ---------------------------------------------------------------------------
+def _legacy_raw(version=None):
+    p = usersetup_path(version)
+    try:
+        with open(p, "rb") as f:
             return f.read()
     except OSError:
         return None
 
 
-def is_usersetup_installed(version=None) -> bool:
-    text = _usersetup_text(version)
-    return bool(text and _US_BEGIN in text)
+def legacy_block_present(version=None) -> bool:
+    """旧方式のブロックが userSetup.py に残っているか。
+    バイト列で目印を探すので、文字コードが壊れていても判定できる。"""
+    raw = _legacy_raw(version)
+    return bool(raw) and _US_BEGIN.encode("ascii") in raw
 
 
-def installed_snippet_version(version=None):
-    """入っているスニペットの版。入っていなければ None、版表記が無い古い物は 0。"""
-    text = _usersetup_text(version)
-    if not text or _US_BEGIN not in text:
+def legacy_snippet_version(version=None):
+    raw = _legacy_raw(version)
+    if not raw or _US_BEGIN.encode("ascii") not in raw:
         return None
     import re as _re
+    text = raw.decode("utf-8", "replace")
     block = text.split(_US_BEGIN, 1)[1].split(_US_END, 1)[0]
     m = _re.search(r"mfm-snippet-version:\s*(\d+)", block)
     return int(m.group(1)) if m else 0
 
 
-def usersetup_is_outdated(version=None) -> bool:
-    """入ってはいるが «古い版» か。
+def remove_legacy_block(version=None):
+    """旧方式のブロックを userSetup.py から取り除く。
 
-    r119b: 0.9.2 が書いた版には Manager 側の関数（_swallow）が紛れ込んで
-    おり、Maya 側で NameError になってポートが開かなかった。入れ直さない
-    限り直らないので、Manager 側から検出して更新を促す。"""
-    v = installed_snippet_version(version)
-    return v is not None and v < SNIPPET_VERSION
+    取り除いたファイルのパスを返す。ブロックが無ければ None。
+    文字コードが判別できなければ **触らず** ValueError。
 
-
-def outdated_targets():
-    """古いスニペットが入っている場所の一覧（None=共通 / "2026" …）。"""
-    out = []
-    if usersetup_is_outdated(None):
-        out.append(None)
-    for v in installed_versions():
-        if usersetup_is_outdated(v):
-            out.append(v)
-    return out
-
-
-def has_own_usersetup(version) -> bool:
-    """そのバージョンが «自前の userSetup.py» を持っているか（中身は問わない）。
-
-    r120: これがあっても共通側は «隠されない»（Maya は両方実行する）。
-    表示用の情報として残してあるだけで、有効/無効の判定には使わない。"""
-    import os
-    return os.path.isfile(usersetup_path(version))
-
-
-def bridge_effective_for(version) -> bool:
-    """そのバージョンの Maya で連携が効くか。
-
-    r120: 共通（全バージョン）に入っていれば効く。そのバージョン専用に
-    入っていても効く。どちらかにあれば良い。"""
-    return is_usersetup_installed(None) or is_usersetup_installed(version)
-
-
-def ineffective_versions():
-    """連携が効かないバージョンの一覧（共通にもバージョン別にも無い）。"""
-    return [v for v in installed_versions() if not bridge_effective_for(v)]
-
-
-def installed_targets():
-    """連携が入っている場所の一覧。[None(=共通), "2026", ...]。"""
-    out = []
-    if is_usersetup_installed(None):
-        out.append(None)
-    for v in installed_versions():
-        if is_usersetup_installed(v):
-            out.append(v)
-    return out
-
-
-def _split_usersetup_header(text: str):
-    """shebang / エンコーディング宣言だけを «先頭に残す» ために切り出す。
-    PEP 263 の coding 宣言はファイルの 1〜2 行目にしか効かないので、
-    連携ブロックはその «直後» に入れなければならない。"""
-    lines = (text or "").split("\n")
-    head = []
-    for i, ln in enumerate(lines[:2]):
-        s = ln.strip()
-        if i == 0 and s.startswith("#!"):
-            head.append(ln)
-            continue
-        if s.startswith("#") and "coding" in s:
-            head.append(ln)
-            continue
-        break
-    rest = "\n".join(lines[len(head):])
-    return (("\n".join(head) + "\n") if head else ""), rest
-
-
-def install_usersetup(version=None) -> str:
-    """連携スニペットを userSetup.py の «先頭» へ挿入（既存ブロックは置換）。
-    書き込んだファイルのパスを返す。version=None で全バージョン共通。
-
-    r120: 以前は «末尾へ追記» していた。userSetup.py は Python の import で
-    読まれるので、既存の中身が途中で例外を出すと «そこで打ち切られ»、
-    末尾の連携ブロックは永久に実行されない。実機で全バージョンに
-    Bridge=True が入っているのにポートが 1 つも開かない（open ports: []）
-    状態になったのがこれ。先頭に置けば、他人のコードが何をしようと
-    連携だけは生き残る。
-    """
-    import os
+    実機事故 2026-10-24 の反省をそのまま守る:
+      * 必ずバックアップ（userSetup.py.mfm_bak_<日時>）
+      * 文字コードはファイルのまま（coding 宣言 → utf-8 → cp932、厳密）
+      * 改行もファイルのまま
+      * ブロック以外の 1 文字も変えない
+      * 取り除いた結果が空なら（元々 Manager が作ったファイル）ファイルごと消す
+        — バックアップは残る"""
     p = usersetup_path(version)
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    text, enc, newline = "", "utf-8", None
-    if os.path.isfile(p):
-        # r146（実機事故 2026-10-24「他の環境でインストールしたら Maya を通常
-        # 起動することが出来なくなった」）: 以前は utf-8 / errors="replace" で
-        # 読んで utf-8 で書き戻していた。CP932 の userSetup.py（日本語の
-        # コメントやパス）を入れている環境では、日本語が全部 «�» に化け、
-        # しかも coding 宣言は cp932 のまま UTF-8 で書かれるので、Maya 起動時
-        # の userSetup.py が SyntaxError になり、その後ろの全ての
-        # userSetup.py（スタジオのパイプライン）が走らなくなった。
-        #   * 必ずバックアップを取る（userSetup.py.mfm_bak_<日時>）
-        #   * 文字コードはファイルのまま（utf-8 → cp932 の順に «厳密に» 読み、
-        #     どちらでも読めなければ **触らない**）
-        #   * 改行もファイルのまま
-        with open(p, "rb") as f:
-            raw = f.read()
-        enc = _detect_usersetup_encoding(raw)
-        if enc is None:
-            bridge_log("install_usersetup: %r は utf-8 でも cp932 でも読めないので触らない" % (p,))
-            raise ValueError(
-                "userSetup.py の文字コードが判別できないため書き換えません: %s" % p)
-        text = raw.decode(enc)
-        newline = "\r\n" if b"\r\n" in raw else "\n"
-        text = text.replace("\r\n", "\n")
-        import datetime as _dt
-        bak = p + ".mfm_bak_" + _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        with open(bak, "wb") as f:
-            f.write(raw)
-        bridge_log("install_usersetup: backup %r (enc=%s)" % (bak, enc))
-    # 既存ブロック（旧版・旧位置＝末尾にあるものを含む）をいったん取り除く
-    if _US_BEGIN in text and _US_END in text:
-        head = text.split(_US_BEGIN)[0]
-        tail = text.split(_US_END, 1)[1]
-        text = head.rstrip("\n")
-        if text:
-            text += "\n"
-        text += tail.lstrip("\n")
-    header, body = _split_usersetup_header(text)
-    text = header + _US_SNIPPET
-    if body.strip():
-        text += "\n" + body.lstrip("\n")
-    # 既存の中身はそのファイルの文字コードで読んだものなので必ず書き戻せる。
-    # 連携ブロック側に書けない文字があっても（コメントだけ）壊さず逃がす。
-    with open(p, "w", encoding=enc, errors="backslashreplace", newline=newline) as f:
-        f.write(text)
-    bridge_log("install_usersetup: wrote %r (head-insert, snippet v%d, enc=%s)"
-               % (p, SNIPPET_VERSION, enc))
+    raw = _legacy_raw(version)
+    if not raw or _US_BEGIN.encode("ascii") not in raw:
+        return None
+    enc = _detect_usersetup_encoding(raw)
+    if enc is None:
+        bridge_log("remove_legacy_block: %r は utf-8 でも cp932 でも読めないので触らない" % (p,))
+        raise ValueError(
+            "userSetup.py の文字コードが判別できないため書き換えません: %s" % p)
+    text = raw.decode(enc)
+    if "\ufffd" in text:
+        bridge_log("remove_legacy_block: %r には置換文字 U+FFFD が含まれる（旧版の"
+                   "インストーラが壊した可能性）。ブロックだけ取り除く" % (p,))
+    newline = "\r\n" if b"\r\n" in raw else "\n"
+    text = text.replace("\r\n", "\n")
+    import datetime as _dt
+    bak = p + ".mfm_bak_" + _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    with open(bak, "wb") as f:
+        f.write(raw)
+    head = text.split(_US_BEGIN, 1)[0]
+    rest = text.split(_US_BEGIN, 1)[1]
+    if _US_END in rest:
+        tail = rest.split(_US_END, 1)[1]
+    else:
+        tail = ""           # 終端が無い（壊れている）→ 目印以降を捨てる
+    if tail.startswith("\n"):
+        tail = tail[1:]
+    out = head + tail
+    if not out.strip():
+        os.remove(p)
+        bridge_log("remove_legacy_block: %r は連携ブロックだけだったので削除 (backup %r)"
+                   % (p, bak))
+        return p
+    with open(p, "w", encoding=enc, newline=newline) as f:
+        f.write(out)
+    bridge_log("remove_legacy_block: removed block from %r (enc=%s, backup %r)"
+               % (p, enc, bak))
     return p
 
 
@@ -657,6 +712,81 @@ def _detect_usersetup_encoding(raw: bytes):
         except UnicodeDecodeError:
             continue
     return None
+
+
+# ---------------------------------------------------------------------------
+# 呼び出し元向けのまとめ（モジュール方式＋旧方式を合わせて見る）
+# ---------------------------------------------------------------------------
+def is_usersetup_installed(version=None) -> bool:
+    """連携がその場所に入っているか（モジュール方式または旧方式）。"""
+    return is_module_installed(version) or legacy_block_present(version)
+
+
+def installed_snippet_version(version=None):
+    """入っている版。モジュール方式を優先。入っていなければ None。"""
+    v = module_snippet_version(version)
+    if v is not None:
+        return v
+    return legacy_snippet_version(version)
+
+
+def usersetup_is_outdated(version=None) -> bool:
+    """入ってはいるが «古い» か。旧方式のブロックが残っていれば常に古い
+    （モジュール方式へ移行させる）。モジュール方式なら版で判断。"""
+    if legacy_block_present(version):
+        return True
+    v = module_snippet_version(version)
+    return v is not None and v < SNIPPET_VERSION
+
+
+def outdated_targets():
+    """古い連携が入っている場所の一覧（None=共通 / "2026" …）。"""
+    out = []
+    if usersetup_is_outdated(None):
+        out.append(None)
+    for v in installed_versions():
+        if usersetup_is_outdated(v):
+            out.append(v)
+    return out
+
+
+def legacy_targets():
+    """旧方式のブロックが残っている場所の一覧。"""
+    out = []
+    if legacy_block_present(None):
+        out.append(None)
+    for v in installed_versions():
+        if legacy_block_present(v):
+            out.append(v)
+    return out
+
+
+def has_own_usersetup(version) -> bool:
+    """そのバージョンが «自前の userSetup.py» を持っているか（中身は問わない）。
+    表示用。有効/無効の判定には使わない。"""
+    return os.path.isfile(usersetup_path(version))
+
+
+def bridge_effective_for(version) -> bool:
+    """そのバージョンの Maya で連携が効くか。共通かそのバージョン専用の
+    どちらかに入っていれば効く（Maya は両方読む）。"""
+    return is_usersetup_installed(None) or is_usersetup_installed(version)
+
+
+def ineffective_versions():
+    """連携が効かないバージョンの一覧（共通にもバージョン別にも無い）。"""
+    return [v for v in installed_versions() if not bridge_effective_for(v)]
+
+
+def installed_targets():
+    """連携が入っている場所の一覧。[None(=共通), "2026", ...]。"""
+    out = []
+    if is_usersetup_installed(None):
+        out.append(None)
+    for v in installed_versions():
+        if is_usersetup_installed(v):
+            out.append(v)
+    return out
 
 
 def escape_path(path: str) -> str:

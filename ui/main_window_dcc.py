@@ -345,15 +345,16 @@ class MainWindowDccMixin:
             items = []
             reported = []          # Maya が答えた userAppDir（UI 側で照合）
             try:
-                from core.maya_bridge import (bridge_log, usersetup_path,
-                                              is_usersetup_installed,
+                from core.maya_bridge import (bridge_log, bridge_mod_path,
+                                              is_module_installed,
+                                              legacy_targets,
                                               APP_DIR_CODE, parse_app_dir)
                 # モジュール属性を経由する（テストが差し替えられるように）
                 ports, busy_ports = scan_ports()
                 try:
-                    bridge_log("scan: open ports=%r busy=%r / userSetup=%r installed=%s"
-                               % (ports, busy_ports, usersetup_path(),
-                                  is_usersetup_installed()))
+                    bridge_log("scan: open ports=%r busy=%r / module=%r installed=%s legacy=%r"
+                               % (ports, busy_ports, bridge_mod_path(),
+                                  is_module_installed(), legacy_targets()))
                 except Exception as _e:
                     _swallow(_e, "ui/main_window.py:879 _run")
                 for port in ports:
@@ -650,25 +651,42 @@ class MainWindowDccMixin:
             dead = ineffective_versions() if installed_versions() else []
             if not stale and not dead:
                 return
-            if not stale and str(self._sm.get(self.BRIDGE_PROMPT_KEY, "")
-                                 or "") in ("never", "done"):
+            answer = str(self._sm.get(self.BRIDGE_PROMPT_KEY, "") or "")
+            if not stale and answer in ("never", "done"):
                 return
+            # r146: «古い» のが旧方式のブロック（v3/v4 — 動いてはいる）だけ
+            # なら、「今後聞かない」を尊重する。壊れた版（v0〜v2: Maya 側で
+            # NameError になりポートが開かない）だけは入れ直すまで毎回知らせる。
+            if stale and answer == "never":
+                from core.maya_bridge import installed_snippet_version
+                broken = [t for t in stale
+                          if (installed_snippet_version(t) or 0) < 3]
+                if not broken:
+                    return
             box = QMessageBox(self)
             box.setWindowTitle(tr("Maya連携のセットアップ", "Set Up Maya Bridge"))
             if stale:
                 # r119b: 0.9.2 が書いた版は Maya 側で NameError になり、
                 # «入っているのにポートが開かない» 状態だった。入れ直さない
                 # 限り直らないので «未導入» とは別の文言で必ず知らせる。
+                # r146: 旧方式（userSetup.py にブロックを挟む）は Maya 側の
+                # ファイルを壊す事故を起こしたので、残っていれば必ず
+                # モジュール方式へ移行させる（ブロックはバックアップを
+                # 取って取り除く）。
                 box.setText(tr(
-                    "Maya 連携の設定が «古い版» のままです。\n\n"
-                    "この版には不具合があり、マネージャー以外から起動した\n"
-                    "Maya が「接続:」リストに出ません。\n"
-                    "入れ直すと直ります（次回の Maya 起動から有効）。\n\n"
+                    "Maya 連携の設定が «古い方式» のままです。\n\n"
+                    "古い方式は Maya の userSetup.py に直接書き込んでいました。\n"
+                    "新しい方式は Maya のモジュール機構を使い、マネージャー専用の\n"
+                    "ファイルだけを置きます（userSetup.py には触りません）。\n"
+                    "更新すると、userSetup.py に残っている古いブロックは\n"
+                    "バックアップを取ってから取り除きます。\n\n"
                     "今すぐ更新しますか？",
-                    "The Maya bridge installed here is an OLD version.\n\n"
-                    "It has a defect: Mayas launched outside this manager do\n"
-                    "not show up in the Connect list. Reinstalling fixes it\n"
-                    "(takes effect from the next Maya launch).\n\n"
+                    "The Maya bridge installed here uses the OLD method.\n\n"
+                    "The old method wrote directly into Maya's userSetup.py.\n"
+                    "The new one uses Maya's module mechanism and only places\n"
+                    "the manager's own files (userSetup.py is left alone).\n"
+                    "Updating removes the old block from userSetup.py after\n"
+                    "taking a backup.\n\n"
                     "Update it now?"))
             else:
                 where = "/".join(dead) if dead else ""
@@ -705,10 +723,12 @@ class MainWindowDccMixin:
         後で Maya が繋がった時の食い違いは
         _check_bridge_location_against_maya() が拾う。"""
         from ui.maya_bridge_dialog import MayaBridgeDialog
-        from core.maya_bridge import install_usersetup
+        from core.maya_bridge import install_bridge, remove_legacy_block
         dlg = MayaBridgeDialog(self)
         # モーダルのまま（例外）: 選んだ «書き込み先» を受け取って
-        # その場で userSetup.py を書く。一度きりのセットアップ操作。
+        # その場でモジュール（.mod ＋ 専用 userSetup.py）を書く。
+        # r146: 既存の userSetup.py には書き込まない。旧方式のブロックが
+        # 残っていれば（バックアップを取って）取り除くだけ。
         ret = dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
         if not ret:
             return
@@ -719,12 +739,21 @@ class MainWindowDccMixin:
                 tr("書き込み先が選ばれていません。",
                    "No install target was selected."))
             return
-        written, failed = [], []
+        written, failed, cleaned, warn = [], [], [], []
         for ver in targets:
             try:
-                written.append(install_usersetup(ver))
+                written.append(install_bridge(ver))
             except Exception as e:
                 failed.append("%s: %s" % (ver or tr("共通", "all"), e))
+                continue
+            # 旧方式のブロックが残っていれば取り除く。失敗しても連携自体は
+            # 入っているので «失敗» ではなく «注意» として知らせる。
+            try:
+                p = remove_legacy_block(ver)
+                if p:
+                    cleaned.append(p)
+            except Exception as e:
+                warn.append("%s" % e)
         if written:
             self._sm.set(self.BRIDGE_PROMPT_KEY, "done")
         if failed:
@@ -732,15 +761,30 @@ class MainWindowDccMixin:
                 self, tr("インストール失敗", "Install Failed"),
                 "\n".join(failed))
             return
-        QMessageBox.information(
-            self, tr("完了", "Done"),
-            tr("インストールしました:\n%s\n\n"
-               "次回以降に起動した Maya が自動で接続可能になります。\n"
-               "今 開いている Maya は「起動中の Maya を今すぐ接続...」で繋げます。",
-               "Installed:\n%s\n\nMayas launched from now on will be "
-               "connectable automatically.\nFor a Maya that is already "
-               "running, use \u201cConnect a running Maya now...\u201d.")
-            % "\n".join(written))
+        msg = tr("インストールしました:\n%s\n\n"
+                 "書き込んだのはマネージャー専用のファイルだけです\n"
+                 "（Maya の userSetup.py には書き込んでいません）。\n"
+                 "次回以降に起動した Maya が自動で接続可能になります。\n"
+                 "今 開いている Maya は「起動中の Maya を今すぐ接続...」で繋げます。",
+                 "Installed:\n%s\n\nOnly the manager's own files were written\n"
+                 "(Maya's userSetup.py was not modified).\n"
+                 "Mayas launched from now on will be connectable automatically.\n"
+                 "For a Maya that is already running, use "
+                 "\u201cConnect a running Maya now...\u201d.") % "\n".join(written)
+        if cleaned:
+            msg += "\n\n" + tr(
+                "古い方式のブロックを取り除きました（バックアップ: 同じ場所の "
+                "userSetup.py.mfm_bak_*）:\n%s",
+                "Removed the old-style block (backup: userSetup.py.mfm_bak_* "
+                "next to it):\n%s") % "\n".join(cleaned)
+        if warn:
+            msg += "\n\n" + tr(
+                "注意: 古い方式のブロックを取り除けませんでした。\n%s\n"
+                "連携は新しい方式で入っています。古いブロックは手で消しても構いません。",
+                "Note: the old-style block could not be removed.\n%s\n"
+                "The bridge is installed with the new method; you may delete "
+                "the old block by hand.") % "\n".join(warn)
+        QMessageBox.information(self, tr("完了", "Done"), msg)
 
     def _check_bridge_location_against_maya(self, reported_dir: str):
         """Maya が繋がった時、«連携を入れた場所» と Maya の設定フォルダが
