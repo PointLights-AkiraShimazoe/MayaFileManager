@@ -322,7 +322,10 @@ class _Puck(QWidget):
         if not self._has_files(e):
             e.ignore()
             return
-        e.acceptProposedAction()
+        # r146（データ消失の根治）: OS へは必ず «コピー» と答える
+        # （ui/browser_util.accept_drop_as_copy 参照）。
+        from ui.browser_util import accept_drop_as_copy
+        accept_drop_as_copy(e)
         self.controller.expand(for_drag=True)
         self.controller.drop_on_puck(e.mimeData())
 

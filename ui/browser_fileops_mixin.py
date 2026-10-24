@@ -779,10 +779,12 @@ class FileOpsMixin:
             forced = "move"
         elif forced is False:
             forced = "copy"
+        from ui.browser_util import fileops_log as _fol
         action = forced
         if action is None:
             from core.compat import QCursor
             action = self._ask_drop_action(gpos or QCursor.pos(), len(paths))
+        _fol("drop-run: action=%s dest=%r n=%d" % (action, dest_dir, len(paths)))
         if action is None:
             self.status_message.emit(tr("取りやめました", "Cancelled"))
             return
@@ -801,9 +803,16 @@ class FileOpsMixin:
             return
         # 自分自身・自分の中への移動、同じ場所への移動は捨てる
         srcs = []
+        missing = []
         dn = os.path.normcase(dest_dir)
         for p in paths:
-            if not p or not os.path.lexists(p):
+            if not p:
+                continue
+            if not os.path.lexists(p):
+                # r146（データ消失の根治）: 以前は «黙って» 飛ばしていた。
+                # ドロップ元が消えていた事故（2026-10-24）で何の知らせも
+                # 出ず、ログにも残らなかった。必ず知らせて記録する。
+                missing.append(p)
                 continue
             pn = os.path.normcase(os.path.normpath(p))
             if pn == dn:
@@ -817,6 +826,14 @@ class FileOpsMixin:
                 continue      # 同じフォルダ内への移動は何もしない
             srcs.append(p)
         srcs = CappedColumnView._drop_ancestor_dirs(srcs)
+        if missing:
+            _fol("drop-run: MISSING sources (not touched): %r" % (missing,))
+            QMessageBox.warning(
+                self, tr("ドロップ元が見つかりません", "Dropped items not found"),
+                tr("次の項目はドロップ元に見当たらないため、何もしていません:\n%s",
+                   "These items no longer exist at their source, so nothing was "
+                   "done with them:\n%s")
+                % "\n".join(missing[:20] + (["…"] if len(missing) > 20 else [])))
         if not srcs:
             return
 
@@ -864,6 +881,9 @@ class FileOpsMixin:
             return results
 
         def done(res, cancelled, err):
+            _fol("drop-done: %s n=%d results=%r cancelled=%s err=%r"
+                 % ("move" if move else "copy", len(srcs), list(results)[:20],
+                    cancelled, err))
             if move and pairs:
                 self._undo_stack().push(MoveOp(pairs))
             elif not move and results:

@@ -423,6 +423,54 @@ def _mfm_timeline(msg: str):
 
 
 # ---------------------------------------------------------------------------
+# 外から落とされたファイルの受け方（r146・データ消失の根治）
+# ---------------------------------------------------------------------------
+# 実機事故 2026-10-24: Explorer からドロップしたファイルが «元の場所にも
+# 落とした先にも無い» 状態で消えた。
+#
+# Windows の D&D では、受け手（ここ）が Drop に «移動した（DROPEFFECT_MOVE）»
+# と返すと、送り手（Explorer）は «非最適化移動» として **元ファイルを自分で
+# 消す**（Qt は MoveAction を受理すると CFSTR_PERFORMEDDROPEFFECT=MOVE を
+# 立てる）。こちらは «コピー／移動» をメニューで選ばせてから処理するので、
+# 選んだ時には元がもう無い → 何も起きずに消える。
+#
+# 規則: **外部ファイルのドロップに OS へ返す答えは常に «コピー»**。
+# 移動したい時は、こちらが自分で（コピー確認の後に）元を消す。こうすれば
+# 送り手が元を消すことは絶対に無い。自分発のドラッグは戻り値を見て
+# いないので、ここで «コピー» と答えても内部の動作は変わらない。
+# 全ての dropEvent / Drop 分岐はこの関数で受けること
+# （test_drop_never_hands_over_move が見張る）。
+def accept_drop_as_copy(event):
+    """ドロップを受理し、OS（送り手）には «コピーした» と答える。"""
+    try:
+        event.setDropAction(Qt.CopyAction)
+    except Exception as _e:
+        _swallow(_e, "ui/browser_util.py accept_drop_as_copy")
+    event.accept()
+
+
+def fileops_log(msg: str):
+    """ファイル操作（ドロップ・移動・コピー）を常時記録する（r146）。
+
+    データ消失の調査でログが 1 行も無かった反省。logs/mfm_fileops.log、
+    2MB を超えたら .1 へ回す。失敗しても何もしない。"""
+    try:
+        import datetime
+        p = os.path.join(_MFM_LOG_DIR, "mfm_fileops.log")
+        try:
+            if os.path.getsize(p) > 2 * 1024 * 1024:
+                os.replace(p, p + ".1")
+        except OSError:
+            pass
+        with open(p, "a", encoding="utf-8") as f:
+            f.write("[%s pid=%d] %s\n" % (
+                datetime.datetime.now().strftime("%m-%d %H:%M:%S"),
+                os.getpid(), msg))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # 診断ログ（ショートカット/カラム構築の不具合切り分け用）
 # 出力先: ユーザーホーム直下の mfm_debug.log
 # ---------------------------------------------------------------------------

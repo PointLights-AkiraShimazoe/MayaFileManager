@@ -124,6 +124,11 @@ class NavItemRow(QWidget):
                 self._path_edit.setText(p)
                 if not self._label_edit.text():
                     self._label_edit.setText(Path(p).name)
+            # r146: パスを読むだけ。OS には «コピー» と答える（元を消させない）
+            from ui.browser_util import accept_drop_as_copy
+            accept_drop_as_copy(event)
+        else:
+            event.ignore()
 
 
 # ---------------------------------------------------------------------------

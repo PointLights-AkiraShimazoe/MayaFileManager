@@ -113,5 +113,4 @@ if _orig_exec is not None:
 w.close()
 if fails:
     print("FAILED:", fails)
-    finish(False)
-finish()
+finish(not fails)

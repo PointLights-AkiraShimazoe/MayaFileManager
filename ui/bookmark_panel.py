@@ -102,7 +102,10 @@ class BookmarkTree(QTreeWidget):
             paths = [u.toLocalFile() for u in md.urls() if u.toLocalFile()]
             if paths:
                 self.external_paths_dropped.emit(paths)
-                event.acceptProposedAction()
+                # r146: ブックマークはファイルを «受け取らない»。移動と答えると
+                # Explorer が元ファイルを消す（accept_drop_as_copy 参照）。
+                from ui.browser_util import accept_drop_as_copy
+                accept_drop_as_copy(event)
                 return
         dragged_item = self.currentItem()
         if dragged_item is None:
@@ -140,14 +143,16 @@ class BookmarkTree(QTreeWidget):
     def dragEnterEvent(self, event):
         md = event.mimeData()
         if md.hasUrls() and event.source() is not self:
-            event.acceptProposedAction()        # 外部(ブラウザ/OS)からのファイル
+            event.setDropAction(Qt.CopyAction)   # 外部(ブラウザ/OS)からのファイル
+            event.accept()                       # （移動の表示も出さない）
         else:
             super().dragEnterEvent(event)        # 内部の並び替え
 
     def dragMoveEvent(self, event):
         md = event.mimeData()
         if md.hasUrls() and event.source() is not self:
-            event.acceptProposedAction()        # 外部ファイルのドロップ
+            event.setDropAction(Qt.CopyAction)   # 外部ファイルのドロップ
+            event.accept()
         else:
             # 内部並び替え: 標準処理に委譲してドロップ位置インジケータを更新する
             # （怠ると dropIndicatorPosition が不正確になり並び替えが効かない）
@@ -629,7 +634,8 @@ class BookmarkPanel(QWidget):
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls() or event.mimeData().hasText():
-            event.acceptProposedAction()
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
 
     def dropEvent(self, event):
         # r124: ツリー側（BookmarkTree.dropEvent → external_paths_dropped）と
@@ -640,6 +646,7 @@ class BookmarkPanel(QWidget):
             paths = [u.toLocalFile() for u in urls if u.toLocalFile()]
             if paths:
                 self._on_external_paths(paths)
-                event.acceptProposedAction()
+                from ui.browser_util import accept_drop_as_copy
+                accept_drop_as_copy(event)      # r146: 元を消させない
                 return
         event.ignore()

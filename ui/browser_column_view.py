@@ -525,6 +525,31 @@ class CappedColumnView(QColumnView):
     def set_max_depth(self, depth: int):
         self._max_depth = depth
 
+    def _hook_user_hscroll(self):
+        """横スクロールバーへのユーザー操作を数える（1 回だけつなぐ）。"""
+        if getattr(self, "_user_hscroll_hooked", False):
+            return
+        try:
+            self._user_hscroll_seq = 0
+            self.horizontalScrollBar().actionTriggered.connect(self._on_user_hscroll)
+            self._user_hscroll_hooked = True
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py _hook_user_hscroll")
+
+    def _on_user_hscroll(self, _action=None):
+        self._user_hscroll_seq = getattr(self, "_user_hscroll_seq", 0) + 1
+
+    def _has_live_columns(self) -> bool:
+        """ルートのカラムが生きているか（同じルートの再設定を省いてよいか）。"""
+        try:
+            root = self.rootIndex()
+            for v in self.findChildren(QListView):
+                if v.model() is not None and not v.isHidden() and v.rootIndex() == root:
+                    return True
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py _has_live_columns")
+        return False
+
     # ── スクロール整合性（r54） ───────────────────────────────────────────
     # QColumnView は「カラム位置 x」「内部 offset」「hbar.value」の3つが常に
     # x == offset == -value の関係で動く前提。全カラム再構築（setRootIndex →
@@ -544,8 +569,36 @@ class CappedColumnView(QColumnView):
             _swallow(_e, "ui/browser_column_view.py:426 _reset_hscroll_for_rebuild")
 
     def setRootIndex(self, index):
+        # r146（ユーザー指示 2026-10-24「ジャンクションをクリックするとカラムが
+        # ルートから作り直される。どの操作でもこの動きは NG」）:
+        # QColumnView.setRootIndex は «同じルート» でも全カラムを閉じて根から
+        # 作り直す。しかもこの上書きは直前に横スクロールを 0（＝ルートの位置）
+        # へ戻すので、«左端まで滑ってから右へ伸び直す» 動きになる。
+        # ジャンクション・ショートカット・アドレス欄・ブックマーク・履歴・
+        # 別の枝へのクリック・2.6 秒後の自己修復が、全部ここを «同じルート»
+        # で呼んでいた。ルートが変わらないなら何もしない。カラムの付け替えは
+        # setCurrentIndex（QColumnView の closeColumns(build=True)）が
+        # «共通の祖先までのカラムを残したまま» 行う。
+        # ルートが本当に変わる（別ドライブ・リンクの退避路）時だけ作り直す。
+        try:
+            cur = self.rootIndex()
+            if (index is not None and index.isValid() and cur.isValid()
+                    and index == cur and self._has_live_columns()):
+                # 作り直さない代わりに、カラムの付け替え（closeColumns）の後の
+                # «スクロール範囲の再計算» と «現在のカラムの可視化» だけは
+                # 行う。Qt はスライドアニメーション中だと updateScrollbars を
+                # 早期 return するので、閉じたカラムの分だけ右に空白が残り、
+                # 移動先のカラムが右外に残る（test_hscroll_consistency の
+                # navigate mid-anim / back）。
+                self._schedule_ensure_visible(relayout=True)
+                return
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py setRootIndex(same)")
         self._reset_hscroll_for_rebuild()
         super().setRootIndex(index)
+        self._schedule_ensure_visible(relayout=False)
+
+    def _schedule_ensure_visible(self, relayout: bool = False):
         # r71: 深いパスへの再構築では 260ms 時点でまだ current の列が生成されて
         # いない（列挙が非同期）ことがあり、1回では右外に残った（mayapy の
         # 回帰スイート「navigate mid-anim」で再現）。数回に分けて再確認する。
@@ -553,20 +606,27 @@ class CappedColumnView(QColumnView):
         # 初回（260ms、Qt 自身のスクロールアニメーション後）は無条件。2回目以降は
         # 前回の確認以降に hbar が動いていたら（＝ユーザーが手でスクロールした）
         # 追いかけずに打ち切る。
+        #
+        # r146: «ユーザーが手でスクロールしたか» は値の変化ではなく、
+        # スクロールバーへの実際の操作（actionTriggered: ドラッグ・クリック・
+        # ホイール）で判断する。値の変化で見ていると、Qt 自身のスライド
+        # アニメーションを «手で動かした» と取り違えて打ち切り、移動先の
+        # カラムが右外に残った（同じルートで作り直さなくした後の
+        # test_hscroll_consistency «navigate mid-anim»、Windows 2026-10-25）。
+        self._hook_user_hscroll()
         token = object()
         self._ensure_token = token
-        self._ensure_last_val = None
+        seq0 = getattr(self, "_user_hscroll_seq", 0)
 
         def _retry():
             if getattr(self, "_ensure_token", None) is not token:
                 return
-            hbar = self.horizontalScrollBar()
-            last = getattr(self, "_ensure_last_val", None)
-            if last is not None and hbar.value() != last:
-                self._ensure_token = None
+            if getattr(self, "_user_hscroll_seq", 0) != seq0:
+                self._ensure_token = None       # ユーザーが動かした → 追わない
                 return
+            if relayout:
+                self._relayout_columns()
             self._ensure_current_column_visible()
-            self._ensure_last_val = hbar.value()
 
         for _ms in (260, 700, 1300, 2200):
             QTimer.singleShot(_ms, _retry)
@@ -2738,9 +2798,17 @@ class CappedColumnView(QColumnView):
                          % (len(paths), dest, forced, callable(cb)))
                 if not dest or not callable(cb):
                     return False
-                event.setDropAction(Qt.CopyAction if forced == "copy"
-                                    else Qt.MoveAction)
-                event.accept()
+                # r146（データ消失の根治）: OS へは必ず «コピー» と答える。
+                # «移動» と答えると Explorer が元を消し、メニューで選んだ
+                # 時には元が無い（ui/browser_util.accept_drop_as_copy 参照）。
+                from ui.browser_util import accept_drop_as_copy, fileops_log
+                accept_drop_as_copy(event)
+                try:
+                    _src_internal = event.source() is not None
+                except Exception:
+                    _src_internal = False
+                fileops_log("drop: n=%d dest=%r forced=%s internal=%s paths=%r"
+                            % (len(paths), dest, forced, _src_internal, paths[:20]))
                 try:
                     gpos = view.viewport().mapToGlobal(pos)
                 except Exception:

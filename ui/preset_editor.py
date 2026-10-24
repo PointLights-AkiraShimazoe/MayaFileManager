@@ -140,6 +140,11 @@ class ReferenceEntryWidget(QFrame):
         urls = event.mimeData().urls()
         if urls:
             self._path_edit.setText(urls[0].toLocalFile())
+            # r146: パスを読むだけ。OS には «コピー» と答える（元を消させない）
+            from ui.browser_util import accept_drop_as_copy
+            accept_drop_as_copy(event)
+        else:
+            event.ignore()
 
 
 # ---------------------------------------------------------------------------
