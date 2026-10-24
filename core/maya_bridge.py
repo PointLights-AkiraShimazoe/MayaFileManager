@@ -206,7 +206,7 @@ _US_END = "# <<< MayaFileManager bridge <<<"
 # except は素の `pass` のままにすること。noqa: PLS-NO-SWALLOW
 PORT_SNIPPET_BODY = """
 def _mfm_trace(_msg):
-    # r120: «userSetup が実行されたか» を後から切り分けられるようにする。
+    # r120: 「userSetup が実行されたか」 を後から切り分けられるようにする。
     # Manager 側のログ（~/.maya_file_manager/logs/mfm_maya.log）に相乗りする。
     try:
         import os as _os, datetime as _dt
@@ -228,11 +228,11 @@ def _mfm_trace(_msg):
 def _mfm_open_bridge_port():
     import maya.cmds as _cmds
     _ports = range(%d, %d)
-    # 1) この Maya が «既に» レンジ内のポートを開いているなら何もしない。
+    # 1) この Maya が 「既に」 レンジ内のポートを開いているなら何もしない。
     #    マネージャーから起動した Maya は -command で先にポートを開くので、
-    #    ここで «別の空きポート» を開くと 1 つの Maya が 2 回接続リストに
-    #    出てしまう（r119b）。commandPort(q=True) は «この Maya が開いて
-    #    いるか» を答える（他プロセスのポートは False）。
+    #    ここで 「別の空きポート」 を開くと 1 つの Maya が 2 回接続リストに
+    #    出てしまう（r119b）。commandPort(q=True) は 「この Maya が開いて
+    #    いるか」 を答える（他プロセスのポートは False）。
     for _p in _ports:
         try:
             if _cmds.commandPort(":%%d" %% _p, q=True):
@@ -254,7 +254,7 @@ def _mfm_open_bridge_port():
 """ % (PORT_RANGE[0], PORT_RANGE[-1] + 1)
 
 # スニペットの版。中身を変えたら **必ず上げる**。
-# 古い版が入ったままだと «入れたのに効かない» が起きるので、Manager が
+# 古い版が入ったままだと 「入れたのに効かない」 が起きるので、Manager が
 # 検出して更新を促せるようにする（r119b）。
 SNIPPET_VERSION = 4
 
@@ -588,10 +588,34 @@ def install_usersetup(version=None) -> str:
     import os
     p = usersetup_path(version)
     os.makedirs(os.path.dirname(p), exist_ok=True)
-    text = ""
+    text, enc, newline = "", "utf-8", None
     if os.path.isfile(p):
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
-            text = f.read()
+        # r146（実機事故 2026-10-24「他の環境でインストールしたら Maya を通常
+        # 起動することが出来なくなった」）: 以前は utf-8 / errors="replace" で
+        # 読んで utf-8 で書き戻していた。CP932 の userSetup.py（日本語の
+        # コメントやパス）を入れている環境では、日本語が全部 «�» に化け、
+        # しかも coding 宣言は cp932 のまま UTF-8 で書かれるので、Maya 起動時
+        # の userSetup.py が SyntaxError になり、その後ろの全ての
+        # userSetup.py（スタジオのパイプライン）が走らなくなった。
+        #   * 必ずバックアップを取る（userSetup.py.mfm_bak_<日時>）
+        #   * 文字コードはファイルのまま（utf-8 → cp932 の順に «厳密に» 読み、
+        #     どちらでも読めなければ **触らない**）
+        #   * 改行もファイルのまま
+        with open(p, "rb") as f:
+            raw = f.read()
+        enc = _detect_usersetup_encoding(raw)
+        if enc is None:
+            bridge_log("install_usersetup: %r は utf-8 でも cp932 でも読めないので触らない" % (p,))
+            raise ValueError(
+                "userSetup.py の文字コードが判別できないため書き換えません: %s" % p)
+        text = raw.decode(enc)
+        newline = "\r\n" if b"\r\n" in raw else "\n"
+        text = text.replace("\r\n", "\n")
+        import datetime as _dt
+        bak = p + ".mfm_bak_" + _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        with open(bak, "wb") as f:
+            f.write(raw)
+        bridge_log("install_usersetup: backup %r (enc=%s)" % (bak, enc))
     # 既存ブロック（旧版・旧位置＝末尾にあるものを含む）をいったん取り除く
     if _US_BEGIN in text and _US_END in text:
         head = text.split(_US_BEGIN)[0]
@@ -604,11 +628,35 @@ def install_usersetup(version=None) -> str:
     text = header + _US_SNIPPET
     if body.strip():
         text += "\n" + body.lstrip("\n")
-    with open(p, "w", encoding="utf-8") as f:
+    # 既存の中身はそのファイルの文字コードで読んだものなので必ず書き戻せる。
+    # 連携ブロック側に書けない文字があっても（コメントだけ）壊さず逃がす。
+    with open(p, "w", encoding=enc, errors="backslashreplace", newline=newline) as f:
         f.write(text)
-    bridge_log("install_usersetup: wrote %r (head-insert, snippet v%d)"
-               % (p, SNIPPET_VERSION))
+    bridge_log("install_usersetup: wrote %r (head-insert, snippet v%d, enc=%s)"
+               % (p, SNIPPET_VERSION, enc))
     return p
+
+
+def _detect_usersetup_encoding(raw: bytes):
+    """userSetup.py の文字コード。coding 宣言があればそれ、無ければ
+    utf-8 → cp932 の順に厳密に試す。どれでも読めなければ None。"""
+    import re as _re
+    head = raw[:200]
+    m = _re.search(rb"coding[:=]\s*([-\w.]+)", head)
+    if m:
+        name = m.group(1).decode("ascii", "replace").lower()
+        try:
+            raw.decode(name)
+            return name
+        except (LookupError, UnicodeDecodeError):
+            pass
+    for name in ("utf-8", "cp932"):
+        try:
+            raw.decode(name)
+            return name
+        except UnicodeDecodeError:
+            continue
+    return None
 
 
 def escape_path(path: str) -> str:

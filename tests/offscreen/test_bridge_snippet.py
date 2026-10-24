@@ -416,5 +416,53 @@ assert "mfm_maya.log" in _US_SNIPPET, "Maya 側から記録する先が無い"
 assert _mb.SNIPPET_VERSION >= 4, "挙動を変えたのに版を上げていない"
 print("the snippet records that it ran: OK")
 
+# 5) r146（実機事故 2026-10-24「他の環境でインストールしたら Maya を通常起動
+#    することが出来なくなった」）: 既存の userSetup.py を **壊さない**。
+#    以前は utf-8 / errors="replace" で読んで utf-8 で書き戻していたので、
+#    CP932 の userSetup.py（日本語のコメント／パス、coding 宣言は cp932）が
+#    «�» 混じりの UTF-8 になり、Maya 起動時に SyntaxError → その後ろの全ての
+#    userSetup.py（スタジオのパイプライン）が走らなくなった。
+import glob as _glob
+tmp_home2 = tempfile.mkdtemp(prefix="mfm_usersetup_cp932_")
+os.environ["MAYA_APP_DIR"] = tmp_home2
+p2 = usersetup_path()
+os.makedirs(os.path.dirname(p2), exist_ok=True)
+jp_src = ("# -*- coding: cp932 -*-\r\n"
+          "# スタジオの起動設定\r\n"
+          "import os\r\n"
+          "PROJ = r'D:\\作業\\プロジェクト'\r\n"
+          "print('起動')\r\n")
+raw_before = jp_src.encode("cp932")
+with open(p2, "wb") as f:
+    f.write(raw_before)
+_mb.install_usersetup()
+raw_after = open(p2, "rb").read()
+text_after = raw_after.decode("cp932")          # cp932 のまま読める（壊れていない）
+assert "\ufffd" not in text_after, "置換文字（�）が入った＝文字を壊している"
+assert "# スタジオの起動設定" in text_after and "D:\\作業\\プロジェクト" in text_after, text_after
+assert text_after.startswith("# -*- coding: cp932 -*-"), "coding 宣言が先頭に残っていない"
+assert _US_BEGIN in text_after and text_after.count(_US_BEGIN) == 1
+assert b"\r\n" in raw_after and raw_after.count(b"\n") == raw_after.count(b"\r\n"), "改行の種類が変わった（CRLF のまま）"
+compile(text_after, p2, "exec")              # Maya が読む形で構文が通る
+baks = _glob.glob(p2 + ".mfm_bak_*")
+assert baks and open(baks[0], "rb").read() == raw_before, "書き換える前のバックアップが無い／中身が違う"
+print("a CP932 userSetup.py keeps its text, encoding, newlines, and gets a backup: OK")
+
+# 読めない（utf-8 でも cp932 でもない）ファイルは触らない
+tmp_home3 = tempfile.mkdtemp(prefix="mfm_usersetup_bin_")
+os.environ["MAYA_APP_DIR"] = tmp_home3
+p3 = usersetup_path()
+os.makedirs(os.path.dirname(p3), exist_ok=True)
+junk = b"# -*- coding: utf-8 -*-\n" + bytes([0xff, 0xfe, 0x81, 0x00, 0xc3]) + b"\nprint(1)\n"
+with open(p3, "wb") as f:
+    f.write(junk)
+try:
+    _mb.install_usersetup()
+    raise AssertionError("読めないファイルを書き換えた")
+except ValueError:
+    pass
+assert open(p3, "rb").read() == junk, "触らないはずのファイルが変わった"
+print("an unreadable userSetup.py is left untouched (install refuses): OK")
+os.environ["MAYA_APP_DIR"] = tmp_home
 
 finish()
