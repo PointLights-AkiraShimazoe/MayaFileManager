@@ -1168,7 +1168,7 @@ class MainWindowDccMixin:
                 return []
         except Exception:
             return []
-        action = self._sm.get("dnd_action", "none")
+        action = self._sm.get("dnd_action", "open")
         taken = []
         for p in paths:
             if app == "maya" and dcc_caps.supports("maya", "run_script", p):

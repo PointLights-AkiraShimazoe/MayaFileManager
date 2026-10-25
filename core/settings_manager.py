@@ -38,7 +38,12 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     # r120: カラムのスライドアニメーション。切ると «クリックした瞬間に出る»。
     # 滑らかさと引き換えに、スライド中の再描画コストがまるごと無くなる。
     "column_slide_animation": True,
-    "single_click_action": "preview",      # "preview" | "open" | "import" | "reference"
+    # r146（ユーザー指示 2026-10-26）: 既定は «クリック＝何もしない／
+    # D&D＝開く»。値は "open" | "import" | "reference" | "none"
+    # （旧 "preview" は "open" として扱う）。呼び出し側の get の第 2 引数も
+    # これに揃えること（test_default_actions が見張る）。
+    "single_click_action": "none",
+    "dnd_action": "open",
     "double_click_action": "open",
     "show_hidden_files": False,
     "thumbnail_size": 128,                 # px

@@ -128,7 +128,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
                 self._current_path = _last
         # フルパス保持（深度キャップ廃止）。保存設定に関係なく無制限。
         self._max_depth = 0
-        self._click_action = self._sm.get("single_click_action", "open")
+        self._click_action = self._sm.get("single_click_action", "none")
         self._dbl_click_action = self._sm.get("double_click_action", "open")
 
         # External callbacks
@@ -1558,7 +1558,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
             self.selection_changed.emit([path])
             return
         self._on_archive_request("")
-        action = self._sm.get("single_click_action", "open")
+        action = self._sm.get("single_click_action", "none")
         if action == "preview":
             action = "open"   # 「プレビュー」は「開く」へ統合（旧設定の移行）
         self._dispatch_action(action, path)
@@ -2521,7 +2521,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         """Maya/Blender のウィンドウへD&Dされた → 設定されたD&D動作を実行する。
         r90: Maya へ落とした .py / .mel は «Maya と同じくスクリプトとして実行»
         （install.py 等。ブリッジ経由なので Manager は固まらない）。"""
-        action = self._sm.get("dnd_action", "none")
+        action = self._sm.get("dnd_action", "open")
         _mfm_log("dcc-drop: app=%s action=%s paths=%d" % (app, action, len(paths)))
         cb = getattr(self, "_dnd_callback", None)
         if not callable(cb):

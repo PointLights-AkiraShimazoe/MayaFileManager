@@ -763,7 +763,7 @@ class SettingsDialog(QDialog):
         single_map = {"open": 0, "preview": 0, "import": 1,
                       "reference": 2, "none": 3}
         self._single_click_combo.setCurrentIndex(
-            single_map.get(sm.get("single_click_action", "open"), 0))
+            single_map.get(sm.get("single_click_action", "none"), 3))
         double_map = {"open": 0, "preview": 0, "import": 1, "reference": 2}
         self._double_click_combo.setCurrentIndex(
             double_map.get(sm.get("double_click_action", "open"), 0))

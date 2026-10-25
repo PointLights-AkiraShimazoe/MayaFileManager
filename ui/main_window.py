@@ -551,14 +551,14 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
 
         # クリック動作 / D&D動作
         action_map = ["open", "import", "reference", "none"]
-        current_action = self._sm.get("single_click_action", "open")
+        current_action = self._sm.get("single_click_action", "none")
         if current_action == "preview":     # 旧設定の移行
             current_action = "open"
         if current_action in action_map:
             self._action_combo.setCurrentIndex(action_map.index(current_action))
         self._action_combo.currentIndexChanged.connect(
             lambda idx: self._sm.set("single_click_action", action_map[idx]))
-        dnd_action = self._sm.get("dnd_action", "import")
+        dnd_action = self._sm.get("dnd_action", "open")
         if dnd_action in action_map:
             self._dnd_combo.setCurrentIndex(action_map.index(dnd_action))
         self._dnd_combo.currentIndexChanged.connect(
