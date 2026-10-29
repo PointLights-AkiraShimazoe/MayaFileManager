@@ -342,6 +342,7 @@ class _BridgeNotifier(QObject):
     done = Signal(bool, str, object)   # (ok, label, reply)
     conn_list = Signal(list, str)      # ([(port, label, ok, pid, dcc), ...], dcc) 接続候補スキャン結果
     dcc_idle = Signal(int, bool)       # (port, idle) r120: «前の操作が終わったか» の見張り
+    installs = Signal(object, object, str)   # (maya, blender, reason) r146: PC のインストール状況の再走査
 
 
 # ---------------------------------------------------------------------------

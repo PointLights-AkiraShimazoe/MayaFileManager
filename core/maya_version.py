@@ -88,13 +88,77 @@ class MayaInstallation:
         return f"Maya {self.version} [{status}] @ {self.path}"
 
 
-def find_installed_maya_versions(min_version: int = 2023) -> List[MayaInstallation]:
+# 起動先として並べる Maya の下限（r146）。以前は 2023 で切っていたため、
+# 新しく入れた Maya 2022 が一覧に出なかった（ユーザー報告 2026-10-26）。
+# Manager «本体を Maya の中で動かす» のは 2023+ だが、«起動先として選ぶ»
+# だけなら古い版でも困らない。«PC に入っているものが正»。
+MIN_LISTED_MAYA = 2015
+
+
+def _registry_maya_locations():
+    """Windows のレジストリに登録された Maya（版, インストール先）の一覧。
+
+    HKLM\\SOFTWARE\\Autodesk\\Maya\\<版>\\Setup\\InstallPath の
+    MAYA_INSTALL_LOCATION。標準外の場所（別ドライブ等）に
+    入れた Maya もここに載る。PC のインストーラが書く «正» の記録。"""
+    out = []
+    if platform.system() != "Windows":
+        return out
+    try:
+        import winreg  # type: ignore
+    except ImportError:
+        return out
+    for view in (getattr(winreg, "KEY_WOW64_64KEY", 0), getattr(winreg, "KEY_WOW64_32KEY", 0)):
+        try:
+            base = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Autodesk\Maya",
+                                  0, winreg.KEY_READ | view)
+        except OSError:
+            continue
+        try:
+            i = 0
+            while True:
+                try:
+                    ver = winreg.EnumKey(base, i)
+                except OSError:
+                    break
+                i += 1
+                if not re.match(r"^\d{4}(\.\d+)?$", ver):
+                    continue
+                try:
+                    k = winreg.OpenKey(base, ver + r"\Setup\InstallPath", 0,
+                                       winreg.KEY_READ | view)
+                    loc, _t = winreg.QueryValueEx(k, "MAYA_INSTALL_LOCATION")
+                    winreg.CloseKey(k)
+                except OSError:
+                    continue
+                if loc:
+                    out.append((ver, Path(str(loc).rstrip("\\/"))))
+        finally:
+            winreg.CloseKey(base)
+    return out
+
+
+def find_installed_maya_versions(min_version: int = MIN_LISTED_MAYA) -> List[MayaInstallation]:
     """
-    Scan standard install paths and return sorted list of MayaInstallation
-    objects for Maya >= min_version.
+    PC に入っている Maya（min_version 以上）を版の昇順で返す。
+
+    探す場所: 標準の配置（Program Files\\Autodesk\\MayaYYYY 等）と、Windows の
+    レジストリ（インストーラが書く記録。標準外の場所も載る）。
+    実行ファイルが実在するものだけ（アンインストール済みは出さない）。
     """
     found: Dict[str, MayaInstallation] = {}
     version_pattern = re.compile(r"Maya(\d{4}(?:\.\d+)?)")
+
+    def _take(ver_str, path):
+        try:
+            ver_int = int(ver_str.split(".")[0])
+        except ValueError:
+            return
+        if ver_int < min_version or ver_str in found:
+            return
+        inst = MayaInstallation(ver_str, path)
+        if inst.is_available:
+            found[ver_str] = inst
 
     for root in get_maya_install_roots():
         if not root.exists():
@@ -103,19 +167,26 @@ def find_installed_maya_versions(min_version: int = 2023) -> List[MayaInstallati
             for entry in root.iterdir():
                 m = version_pattern.match(entry.name)
                 if m:
-                    ver_str = m.group(1)
-                    try:
-                        ver_int = int(ver_str.split(".")[0])
-                    except ValueError:
-                        continue
-                    if ver_int >= min_version and ver_str not in found:
-                        inst = MayaInstallation(ver_str, entry)
-                        if inst.is_available:
-                            found[ver_str] = inst
-        except PermissionError:
+                    _take(m.group(1), entry)
+        except (PermissionError, OSError):
             continue
+    try:
+        for ver_str, path in _registry_maya_locations():
+            _take(ver_str, path)
+    except Exception:
+        pass
 
     return sorted(found.values(), key=lambda x: x.version_int)
+
+
+def installs_signature(installs) -> tuple:
+    """インストール一覧の «中身» の指紋（版と実行ファイル）。変化の検出用。"""
+    out = []
+    for i in installs or []:
+        exe = getattr(i, "executable", None)
+        out.append((str(getattr(i, "version", "")),
+                    os.path.normcase(str(exe)) if exe else ""))
+    return tuple(sorted(out))
 
 
 # ---------------------------------------------------------------------------

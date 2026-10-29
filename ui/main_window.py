@@ -101,6 +101,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         self._bridge_notify.done.connect(self._on_bridge_done)
         self._bridge_notify.conn_list.connect(self._on_conn_list)
         self._bridge_notify.dcc_idle.connect(self._on_dcc_idle)   # r120
+        self._bridge_notify.installs.connect(self._apply_rescanned_installs)   # r146
         self._conn_pids = {}   # 接続ポート → MayaのPID（識別照会で取得）
         # Blender 連携（r65）: Maya と同じプロトコル、別ポートレンジ
         self._bl_bridge = _bl.BlenderBridge(
@@ -515,7 +516,8 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         self._dnd_combo = self._action_blk.dnd_combo
 
         # バージョン一覧（スタンドアロン時のみ意味がある。Maya 内では Maya 側を無効化）
-        self._maya_installs = find_installed_maya_versions(2023) if not self._inside_maya else []
+        # r146: 下限で切らない（Maya 2022 が出なかった）。PC に入っているものが正。
+        self._maya_installs = find_installed_maya_versions() if not self._inside_maya else []
         self._blender_installs = self._detect_blender()
         # r88: インストール済みの Blender 自動起動ブリッジが古ければ差し替える
         # （ログ表示などの新機能を届けるため。未インストールには触れない）
@@ -524,6 +526,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         except Exception as _e:
             _swallow(_e, "ui/main_window.py:555 _build_toolbar")
         self._populate_version_combos()
+        self._start_install_watch()       # r146: インストール／アンインストールに追従
         self._maya_combo.currentIndexChanged.connect(self._on_maya_version_changed)
         self._blender_combo.currentIndexChanged.connect(self._on_blender_version_changed)
         if self._inside_maya:

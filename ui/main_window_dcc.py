@@ -128,6 +128,14 @@ class MainWindowDccMixin:
                     tip += "\n" + tr("ラッパー: ", "Wrapper: ") + prof["wrapper"]
                 mc.setItemData(mc.count() - 1, tip, Qt.ToolTipRole)
                 self._maya_profiles.append(prof)
+            # r146: «PC に入っているものが正»。プロファイルを作っていない版も
+            # 一覧に出す（後から入れた Maya がプロファイルが無いせいで
+            # 出てこない、を起こさない）。
+            covered = {str(prof.get("version")) for prof in profiles}
+            for inst in reversed(self._maya_installs):
+                if str(inst.version) not in covered:
+                    mc.addItem(f"Maya {inst.version}", inst)
+                    self._maya_profiles.append(None)
         else:
             for inst in reversed(self._maya_installs):
                 mc.addItem(f"Maya {inst.version}", inst)
@@ -137,18 +145,30 @@ class MainWindowDccMixin:
             self._maya_profiles.append(None)
         sel = -1
         if self._maya_inst:
+            # r146: 再走査でオブジェクトが作り直されても、選んでいた版
+            # （実行ファイル）を選び直す。同一性（is）だけで見ていると、
+            # 一覧を更新するたびに先頭へ戻ってしまう。
+            want = self._install_key(self._maya_inst)
             for i in range(mc.count()):
-                if mc.itemData(i) is self._maya_inst:
+                d = mc.itemData(i)
+                if d is self._maya_inst or (d is not None and self._install_key(d) == want):
                     sel = i
+                    break
         if sel >= 0:
             mc.setCurrentIndex(sel)
-        if not isinstance(self._maya_inst, MayaInstallation):
-            d = mc.currentData()
+            d = mc.itemData(sel)
             if isinstance(d, MayaInstallation):
                 self._maya_inst = d
+        elif not getattr(self, "_inside_maya", False):
+            # 選んでいた版がアンインストールされた（または未選択）→ 残っている版へ。
+            # Maya の中で動いている時は一覧が空で、_maya_inst は «今の Maya»
+            # なので触らない。
+            d = mc.currentData()
+            self._maya_inst = d if isinstance(d, MayaInstallation) else None
         mc.blockSignals(False)
 
         bc.blockSignals(True)
+        keep_bl = self._install_key(getattr(self, "_blender_inst", None))
         bc.clear()
         for inst in reversed(self._blender_installs):
             # r80: Store 版と通常インストール版が同じ版で同居した時に区別できるよう
@@ -158,9 +178,134 @@ class MainWindowDccMixin:
             bc.setItemData(bc.count() - 1, str(inst.executable), Qt.ToolTipRole)
         if not self._blender_installs:
             bc.addItem(tr("Blender（未検出）", "Blender (not found)"), None)
+        if keep_bl:
+            for i in range(bc.count()):
+                d = bc.itemData(i)
+                if d is not None and self._install_key(d) == keep_bl:
+                    bc.setCurrentIndex(i)
+                    break
         d = bc.currentData()
         self._blender_inst = d if isinstance(d, BlenderInstallation) else None
         bc.blockSignals(False)
+
+    # ── r146: PC のインストール状況に追従する ─────────────────────────
+    # ユーザー報告 2026-10-26: 「新しく Maya 2022 を入れたがリストに出ない。
+    # Blender も、インストールやアンインストールの後にリストと整合しない。
+    # PC にインストールされているものを正として更新されるように。」
+    # 従来は起動時に 1 回だけ調べていた。いまは
+    #   * Manager がアクティブになった時（別のアプリでインストールして戻ってきた）
+    #   * 一定間隔（INSTALL_RESCAN_MS）
+    # に裏のスレッドで調べ直し、中身が変わった時だけ一覧を作り直す。
+    INSTALL_RESCAN_MS = 60000
+    INSTALL_RESCAN_MIN_GAP = 5.0          # アクティブ化の連打で走らせすぎない（秒）
+
+    @staticmethod
+    def _install_key(inst):
+        """インストールを見分ける鍵（実行ファイルのパス）。None なら None。"""
+        if inst is None:
+            return None
+        exe = getattr(inst, "executable", None)
+        return (str(getattr(inst, "version", "")),
+                os.path.normcase(str(exe)) if exe else "")
+
+    def _start_install_watch(self):
+        try:
+            self._install_scan_running = False
+            self._install_scan_last = 0.0
+            self._install_timer = QTimer(self)
+            self._install_timer.setInterval(self.INSTALL_RESCAN_MS)
+            self._install_timer.timeout.connect(
+                lambda: self._rescan_installs_async("timer"))
+            self._install_timer.start()
+            app = QApplication.instance()
+            if app is not None and hasattr(app, "applicationStateChanged"):
+                app.applicationStateChanged.connect(self._on_app_state_for_installs)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _start_install_watch")
+
+    def _on_app_state_for_installs(self, state):
+        try:
+            if state == Qt.ApplicationActive:
+                self._rescan_installs_async("activated")
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _on_app_state_for_installs")
+
+    def _rescan_installs_async(self, reason: str = ""):
+        """裏のスレッドで Maya / Blender のインストールを調べ直す（UI は止めない）。"""
+        import threading
+        import time as _t
+        if getattr(self, "_install_scan_running", False):
+            return
+        now = _t.monotonic()
+        if reason == "activated" and \
+                now - getattr(self, "_install_scan_last", 0.0) < self.INSTALL_RESCAN_MIN_GAP:
+            return
+        self._install_scan_running = True
+        self._install_scan_last = now
+        inside = bool(getattr(self, "_inside_maya", False))
+        extra = [self._sm.get("blender_exe", "") or ""]
+
+        def _run():
+            maya, blender = None, None
+            try:
+                maya = [] if inside else find_installed_maya_versions()
+            except Exception as _e:
+                _swallow(_e, "ui/main_window_dcc.py _rescan_installs_async(maya)")
+            try:
+                blender = find_installed_blender_versions(extra)
+            except Exception as _e:
+                _swallow(_e, "ui/main_window_dcc.py _rescan_installs_async(blender)")
+            self._install_scan_running = False
+            try:
+                self._bridge_notify.installs.emit(maya, blender, reason)
+            except Exception as _e:
+                _swallow(_e, "ui/main_window_dcc.py _rescan_installs_async(emit)")
+
+        threading.Thread(target=_run, daemon=True, name="mfm-install-scan").start()
+
+    def _apply_rescanned_installs(self, maya, blender, reason: str = ""):
+        """再走査の結果を一覧へ。中身が変わった時だけ作り直す（UI スレッド）。"""
+        from core.maya_version import installs_signature
+        changed = []
+        try:
+            if maya is not None and \
+                    installs_signature(maya) != installs_signature(self._maya_installs):
+                before = {str(i.version) for i in self._maya_installs}
+                after = {str(i.version) for i in maya}
+                self._maya_installs = list(maya)
+                changed.append(("Maya", sorted(after - before), sorted(before - after)))
+            if blender is not None and \
+                    installs_signature(blender) != installs_signature(self._blender_installs):
+                before = {str(i.version) for i in self._blender_installs}
+                after = {str(i.version) for i in blender}
+                self._blender_installs = list(blender)
+                changed.append(("Blender", sorted(after - before), sorted(before - after)))
+            if not changed:
+                return
+            self._populate_version_combos()
+            try:
+                m_exe = self._maya_inst.executable if self._maya_inst else None
+                b_exe = self._blender_inst.executable if self._blender_inst else None
+                self._dcc_hdr.set_app_icons(m_exe, b_exe)
+            except Exception as _e:
+                _swallow(_e, "ui/main_window_dcc.py _apply_rescanned_installs(icons)")
+            parts = []
+            for app_name, added, removed in changed:
+                if added:
+                    parts.append(tr("%s %s を追加", "added %s %s") % (app_name, ", ".join(added)))
+                if removed:
+                    parts.append(tr("%s %s を削除", "removed %s %s") % (app_name, ", ".join(removed)))
+            if parts:
+                self.statusBar().showMessage(
+                    tr("インストール状況を反映: ", "Installed apps updated: ") + " / ".join(parts),
+                    8000)
+            try:
+                from core.maya_bridge import bridge_log
+                bridge_log("installs rescan(%s): %r" % (reason, changed))
+            except Exception:
+                pass
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _apply_rescanned_installs")
 
     def _on_blender_version_changed(self, idx: int):
         inst = self._blender_combo.itemData(idx)

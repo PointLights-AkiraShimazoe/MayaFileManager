@@ -506,6 +506,10 @@ class FlatColumn(QWidget):
                                 recursive=getattr(self, "_recursive", True)):
             it = QStandardItem(os.path.basename(fp))
             it.setEditable(False)
+            # r146（ユーザー指示 2026-10-26）: マウスオーバーで «平坦化した
+            # ルートからのパス» を出す。同じ名前のファイルがどのフォルダの
+            # ものか見分けるため。
+            it.setToolTip(self.tooltip_for(fp))
             try:
                 it.setIcon(self._icons.icon(QFileInfo(fp)))
             except Exception as _e:
@@ -521,6 +525,37 @@ class FlatColumn(QWidget):
         self._proxy.set_sort(self._sort_combo.currentData() or "name",
                              not self._order_btn.isChecked())
         self._request_prefetch()      # r120: 中身が変わったら先読みし直す
+
+    def root_relative_path(self, fp: str) -> str:
+        """fp を «平坦化したルート» からの相対パスで返す（r146）。
+
+        ルートが複数（複数選択で平坦化）の時は、どのルートかが分かるよう
+        ルートのフォルダ名を先頭に付ける。どのルートにも入っていなければ
+        フルパスのまま。"""
+        try:
+            nfp = os.path.normcase(os.path.normpath(fp))
+            best = ""
+            for r in self._sources or []:
+                nr = os.path.normcase(os.path.normpath(r))
+                if (nfp.startswith(nr.rstrip("\\/") + os.sep)
+                        and len(nr) > len(best)):
+                    best = r
+            if not best:
+                return os.path.normpath(fp)
+            rel = os.path.relpath(os.path.normpath(fp), os.path.normpath(best))
+            if len(self._sources) > 1:
+                name = os.path.basename(os.path.normpath(best)) or os.path.normpath(best)
+                rel = os.path.join(name, rel)
+            return rel
+        except Exception as _e:
+            _swallow(_e, "ui/flat_column.py root_relative_path")
+            return fp or ""
+
+    def tooltip_for(self, fp: str) -> str:
+        """平坦ビューの項目のツールチップ: 1 行目＝ルートからのパス、2 行目＝フルパス。"""
+        rel = self.root_relative_path(fp)
+        full = os.path.normpath(fp)
+        return rel if rel == full else "%s\n%s" % (rel, full)
 
     def all_paths(self):
         """一覧にある全ファイルパス（連携状態の要求などに使う）。"""

@@ -80,7 +80,10 @@ class NavItemRow(QWidget):
         # Path
         layout.addWidget(QLabel(tr("パス:", "Path:")))
         self._path_edit = QLineEdit(self._item.get("path", ""))
-        self._path_edit.setPlaceholderText("/path/to/directory")
+        # r146: URL も登録できる（ボタンを押すとブラウザで開く）
+        self._path_edit.setPlaceholderText(
+            tr("/path/to/directory または https://…",
+               "/path/to/directory or https://..."))
         self._path_edit.textChanged.connect(self._sync)
         layout.addWidget(self._path_edit)
 
@@ -120,7 +123,12 @@ class NavItemRow(QWidget):
         urls = event.mimeData().urls()
         if urls:
             p = urls[0].toLocalFile()
-            if os.path.isdir(p):
+            if not p and urls[0].scheme().lower() in ("http", "https", "ftp"):
+                # r146: ブラウザのアドレス欄から引っぱってきた URL
+                self._path_edit.setText(urls[0].toString())
+                if not self._label_edit.text():
+                    self._label_edit.setText(urls[0].host() or urls[0].toString())
+            elif os.path.isdir(p):
                 self._path_edit.setText(p)
                 if not self._label_edit.text():
                     self._label_edit.setText(Path(p).name)

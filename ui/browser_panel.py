@@ -59,7 +59,7 @@ from ui.browser_util import (  # noqa: F401  （再エクスポート）
     _safe_file_path, _SafeIconProvider, _mfm_slow_note, _MFM_UI_LOG,
     _MFM_UILOG_ON, _mfm_warn, _mfm_uilog, _MFM_BLOCKING,
     mfm_blocking_begin, mfm_blocking_end, mfm_blocking_reason,
-    _mfm_timeline, _MFM_LOG_PATH, _MFM_DEBUG, _mfm_log,
+    _mfm_timeline, _MFM_LOG_PATH, _MFM_DEBUG, _mfm_log, classify_url,
 )
 from ui.browser_delegates import (  # noqa: F401  （再エクスポート）
     _paint_expanded_mark, ThumbnailDelegate, _BADGE_STYLE, _P4_BADGE_PNG,
@@ -584,6 +584,15 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
             path = path[1:-1].strip()
         if not path:
             return
+        # r146（ユーザー指示 2026-10-26）: URL ならブラウザで開く（アドレス欄・
+        # Preset のボタン・ブックマーク、どこから来ても同じ）。normpath より
+        # 前に見ること（«https://» の // が潰れる）。file:// はローカルパスへ。
+        url_kind, url_value = classify_url(path)
+        if url_kind == "web":
+            self._open_url(url_value)
+            return
+        if url_kind == "file":
+            path = url_value
         path = os.path.normpath(path)
         # r120: **副作用はここでは起こさない。** 入力が «ファイル» だった場合は
         # 関連付けられたプログラムで開くだけで、カラムは一切動かさない
@@ -608,6 +617,15 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         # 移動は行わず、アドレス欄も直前のパスへ戻すので、カラムは動かない。
         # isfile はここで初めて呼ぶ。到達確認が済んでいるので、切断ドライブで
         # 20 秒級にブロックする心配がない（path_guard の原則）。
+        # r146（ユーザー報告 2026-10-26）: «リンクで終わるパス»
+        # （例: <クラウドのドライブ>/<フォルダ>/<名前>.lnk）を入れても移動しなかった。
+        # ファイル扱いになって «関連付けで開く» へ流れていた（Explorer が
+        # 裏で開くだけで、Manager は動かない）。リンクの直下まで入れると
+        # 移動できたのはそのため。カラムでクリックした時と同じく、
+        # リンクを解決してその先へ移動する。
+        if path.lower().endswith((".lnk", ".url")):
+            if self._enter_link_path(path, add_to_history):
+                return
         try:
             is_file = os.path.isfile(path)
         except OSError:
@@ -616,6 +634,74 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
             self._open_path_externally(path)
             return
         self._navigate_now(path, add_to_history)
+
+    def _enter_link_path(self, path: str, add_to_history: bool = True) -> bool:
+        """«.lnk / .url で終わるパス» への移動（r146）。移動したら True。
+
+        1. ショートカット（ファイル）なら参照先へ（カラムのクリックと同じ）
+        2. フォルダとして見えている（Google Drive のショートカット等）なら
+           そこへ。Qt のモデルが «.lnk» の名前を Windows のショートカットと
+           して扱って索引を作れない時は、実体（realpath）へ移動する"""
+        try:
+            target = resolve_windows_shortcut(path) if os.path.isfile(path) else None
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _enter_link_path(resolve)")
+            target = None
+        if target and os.path.exists(target):
+            _mfm_log("enter_link: shortcut %r -> %r" % (path, target))
+            self.status_message.emit(
+                tr("ショートカット解決: %s → %s",
+                   "Shortcut resolved: %s -> %s") % (path, target))
+            if os.path.isdir(target):
+                self._navigate_now(os.path.normpath(target), add_to_history)
+            else:
+                self._navigate(target)
+            return True
+        try:
+            is_dir = os.path.isdir(path)
+        except OSError:
+            is_dir = False
+        if not is_dir:
+            return False
+        try:
+            valid = self._fs_model.index(path).isValid()
+        except Exception:
+            valid = False
+        if not valid:
+            try:
+                real = os.path.realpath(path)
+            except OSError:
+                real = ""
+            if real and self._norm(real) != self._norm(path) and os.path.isdir(real):
+                _mfm_log("enter_link: model has no index for %r, using %r" % (path, real))
+                self._navigate_now(os.path.normpath(real), add_to_history)
+                return True
+        self._navigate_now(path, add_to_history)
+        return True
+
+    def _open_url(self, url: str):
+        """URL を既定のブラウザで開く（r146）。表示（カラム・アドレス欄）は動かさない。"""
+        ok = False
+        try:
+            from core.compat import QUrl
+            from core.compat import QtGui as _QtGui
+            ok = bool(_QtGui.QDesktopServices.openUrl(QUrl(url)))
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _open_url(Qt)")
+        if not ok:
+            try:
+                import webbrowser
+                ok = bool(webbrowser.open(url))
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py _open_url(webbrowser)")
+        self.status_message.emit(
+            (tr("ブラウザで開きました: %s", "Opened in the browser: %s") if ok
+             else tr("ブラウザで開けませんでした: %s", "Could not open in the browser: %s"))
+            % url)
+        try:
+            self._addr_bar.setText(self._current_path or "")
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _open_url(addr)")
 
     def _open_path_externally(self, path: str):
         """アドレス欄に入れられたファイルを関連付けで開き、表示は元に戻す。"""

@@ -440,6 +440,42 @@ def _mfm_timeline(msg: str):
 # いないので、ここで «コピー» と答えても内部の動作は変わらない。
 # 全ての dropEvent / Drop 分岐はこの関数で受けること
 # （test_drop_never_hands_over_move が見張る）。
+def classify_url(text: str):
+    """アドレス欄・Preset に入れられた文字列が URL かを判定する（r146）。
+
+    戻り値 (kind, value):
+      ("web", url)   … ブラウザで開くもの（http/https/ftp/mailto、www. 始まり）
+      ("file", path) … file:// の URL（ローカルパスにして返す）
+      (None, text)   … URL ではない（普通のパス）
+    ドライブ文字（C:/…）を URL と取り違えないよう、スキームは 2 文字以上。"""
+    import re as _re
+    t = (text or "").strip()
+    if not t:
+        return None, t
+    low = t.lower()
+    if low.startswith("www."):
+        return "web", "https://" + t
+    if low.startswith("mailto:"):
+        return "web", t
+    m = _re.match(r"^([a-z][a-z0-9+.\-]+)://", low)
+    if not m:
+        return None, t
+    scheme = m.group(1)
+    if scheme == "file":
+        try:
+            from core.compat import QUrl
+            local = QUrl(t).toLocalFile()
+        except Exception:
+            local = ""
+        if not local:
+            from urllib.parse import urlparse, unquote
+            local = unquote(urlparse(t).path)
+        if _re.match(r"^/[A-Za-z]:", local):
+            local = local[1:]              # /C:/… → C:/…
+        return "file", local
+    return "web", t
+
+
 def accept_drop_as_copy(event):
     """ドロップを受理し、OS（送り手）には «コピーした» と答える。"""
     try:
