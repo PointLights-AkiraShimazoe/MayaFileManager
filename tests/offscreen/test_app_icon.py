@@ -7,7 +7,11 @@
   起動すると Python のアイコンになっていた
 * generate_icon.py / build_tools/make_icon.py を実行しても古いデザインに
   戻らない（原画から作るだけ）
-* ビルド（spec / インストーラ）は app.ico を使う"""
+* ビルド（spec / インストーラ）は app.ico を使う
+* v0.9.13（ユーザー報告 2026-10-31「インストール時のアイコンが前のまま」）:
+  インストーラの画面の絵（WizardImageFile / WizardSmallImageFile）も原画から
+  作ったものを使う（以前は Inno Setup の既定の絵）。上書きインストールで
+  Windows が覚えている古いアイコンを捨てさせる（ChangesAssociations と ie4uinit）"""
 import io
 import os
 import shutil
@@ -78,5 +82,44 @@ iss = io.open(os.path.join(ROOT, "build_tools", "installer.iss"), encoding="utf-
 check("'app.ico'" in spec and not os.path.isfile(os.path.join(ICONS, "mfm.ico")),
       "EXE は app.ico を使う（先に探される mfm.ico が無い）")
 check(r"resources\icons\app.ico" in iss, "インストーラも app.ico を使う")
+
+
+# インストーラの画面の絵
+import re as _re
+
+
+def _iss_value(key):
+    m = _re.search(r"^\s*%s\s*=\s*(.+?)\s*$" % key, iss, _re.M | _re.I)
+    return m.group(1) if m else ""
+
+
+for key, kind in (("WizardImageFile", "large"), ("WizardSmallImageFile", "small")):
+    val = _iss_value(key)
+    names = [os.path.basename(v.strip().replace("\\", "/")) for v in val.split(",") if v.strip()]
+    check(names == _gen.wizard_names(kind),
+          "インストーラの %s が原画から作った絵を指す: %r" % (key, names))
+    for name in names:
+        path = os.path.join(ICONS, name)
+        img = QImage(path)
+        ok = not img.isNull()
+        if ok:
+            # 絵の中央にアイコン（コバルトのフォルダ）がある
+            c = img.pixelColor(img.width() // 2, int(img.height() * (0.5 if kind == "small" else 0.42)))
+            ok = c.blue() > c.red() + 60 and c.blue() > 150
+        check(ok, "%s が読めて中央にアイコンがある" % name)
+
+# 生成スクリプトで作り直しても同じ絵になる（手で描いた絵が置かれていない）
+tmp2 = tempfile.mkdtemp(prefix="mfm_wiz_")
+for path in _gen.build_wizard(src_png, tmp2):
+    a = QImage(str(path))
+    b = QImage(os.path.join(ICONS, os.path.basename(str(path))))
+    same = (not a.isNull()) and a.size() == b.size() and avg_diff(a, b) < 2
+    check(same, "%s は generate_icon.py の出力と一致" % os.path.basename(str(path)))
+shutil.rmtree(tmp2, ignore_errors=True)
+
+check(_iss_value("ChangesAssociations").lower() in ("yes", "true", "1"),
+      "上書きインストールの後に Windows のアイコンの覚えを捨てさせる（ChangesAssociations=yes）")
+check(_re.search(r'^\s*Filename:\s*"\{sys\}\\ie4uinit\.exe";\s*Parameters:\s*"-show"', iss, _re.M | _re.I) is not None,
+      "インストール後に ie4uinit -show でアイコンを作り直させる")
 
 finish(not fails)
