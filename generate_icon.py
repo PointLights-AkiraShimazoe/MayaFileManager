@@ -22,13 +22,55 @@ SOURCE = ICON_DIR / "app_icon_source.png"
 ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
 
 
+def _png_bytes(img):
+    """QImage を PNG のバイト列にする。"""
+    try:
+        from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    except ImportError:
+        from PySide2.QtCore import QBuffer, QByteArray, QIODevice
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QIODevice.WriteOnly)
+    img.save(buf, "PNG")
+    buf.close()
+    return bytes(ba.data())
+
+
 def build(source=SOURCE, icon_dir=ICON_DIR):
-    from PIL import Image
-    src = Image.open(str(source)).convert("RGBA")
+    """原画から app.ico と app_icon.png を作る。
+
+    Pillow は使わない（Maya の mayapy には入っていない。Windows の回帰
+    スイート 2026-10-30 で発覚）。縮小は Qt、.ico の入れ物は自前で書く。
+    中身は各サイズとも PNG（Windows Vista 以降の .ico が受け付ける形式）。"""
+    import struct
+    try:
+        from PySide6.QtGui import QImage
+        from PySide6.QtCore import Qt
+    except ImportError:
+        from PySide2.QtGui import QImage
+        from PySide2.QtCore import Qt
+    src = QImage(str(source))
+    if src.isNull():
+        raise IOError("cannot read %s" % source)
+    src = src.convertToFormat(QImage.Format_ARGB32)
+
+    def scaled(n):
+        return src.scaled(n, n, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+
+    blobs = [(n, _png_bytes(scaled(n))) for n in ICO_SIZES]
+    head = struct.pack("<HHH", 0, 1, len(blobs))
+    offset = 6 + 16 * len(blobs)
+    entries = b""
+    data = b""
+    for n, blob in blobs:
+        wh = 0 if n >= 256 else n           # 256 は 0 と書く決まり
+        entries += struct.pack("<BBBBHHII", wh, wh, 0, 0, 1, 32, len(blob), offset + len(data))
+        data += blob
     ico = Path(icon_dir) / "app.ico"
     png = Path(icon_dir) / "app_icon.png"
-    src.save(str(ico), format="ICO", sizes=[(s, s) for s in ICO_SIZES])
-    src.resize((256, 256), Image.LANCZOS).save(str(png))
+    with open(str(ico), "wb") as f:
+        f.write(head + entries + data)
+    scaled(256).save(str(png), "PNG")
     return ico, png
 
 

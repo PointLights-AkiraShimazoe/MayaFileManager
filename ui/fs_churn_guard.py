@@ -70,6 +70,7 @@ class FsChurnGuard(QObject):
     POLL_MS = 1500              # 止めている間の見張り間隔
     QUIET_POLLS = 2             # これだけ続けて変化が無ければ再開
     REFRESH_WHILE_PAUSED_S = 20.0
+    PAUSE_MAX_S = 30.0          # これ以上は止めたままにしない（続いていれば検出役がまた止める）
     SELF_RELIST_COOLDOWN_S = 4.0   # 自分で読み直した直後は数えない（自分の変化で止まらない）
 
     _polled = Signal(object)
@@ -89,6 +90,9 @@ class FsChurnGuard(QObject):
         self._stale = set()
         self._polling = False
         self._ignore_until = 0.0
+        # 変化が起きたフォルダ（止めている間に «落ち着いたか» を見る対象）
+        self._churn_paths = deque(maxlen=400)
+        self._watch_dirs = []
         self._last_beat = time.monotonic()
         self._beat = QTimer(self)
         self._beat.setInterval(self.BEAT_MS)
@@ -156,6 +160,7 @@ class FsChurnGuard(QObject):
             self._loaded_at[k] = now
         elif now - t >= self.LOADED_GRACE_S and now >= self._ignore_until:
             self._events.append(now)
+            self._churn_paths.append((now, path))
         if self._paused:
             self._stale.add(k)
 
@@ -176,6 +181,7 @@ class FsChurnGuard(QObject):
         if now < self._ignore_until:
             return              # 自分で読み直した分
         self._events.append(now)
+        self._churn_paths.append((now, path))
 
     def _on_rows(self, parent, *_a):
         self._note_change(parent)
@@ -197,6 +203,8 @@ class FsChurnGuard(QObject):
             self._events.popleft()
         while self._lates and self._lates[0][0] < cut:
             self._lates.popleft()
+        while self._churn_paths and self._churn_paths[0][0] < cut:
+            self._churn_paths.popleft()
         if self._paused or now < self._ignore_until:
             return
         busy = sum(x for _t, x in self._lates)
@@ -219,8 +227,25 @@ class FsChurnGuard(QObject):
         self._last_sig = None
         # 読み込み済みのフォルダは全部 «見張りが無い» 状態になる
         self._stale = set(self._loaded_at)
+        # «落ち着いたか» は実際に変化が起きたフォルダだけで見る。
+        # 表示中のカラム全部（ドライブ直下や Temp を含む祖先）を見ると、
+        # 他のアプリが常に書き換えるフォルダのせいでいつまでも戻らない
+        # （Windows の回帰スイート 2026-10-30 で発覚）。
+        # 変化のあったフォルダのうち «一番奥» だけを見る。他の変化フォルダの
+        # 祖先にあたるもの（ドライブ直下・Temp など、他のアプリも書き換える
+        # 場所）は外す。回数では選ばない: 数百 ms ごとに作って消すノイズの方が、
+        # まとめて届く大量更新より通知の回数が多い（Linux 計測 2026-10-30）。
+        hot = []
+        for _t, p in self._churn_paths:
+            if p not in hot:
+                hot.append(p)
+        keys = [(self._key(p).rstrip("\\/") + os.sep, p) for p in hot]
+        deep = [p for k, p in keys
+                if not any(k2 != k and k2.startswith(k) for k2, _p in keys)]
+        self._watch_dirs = deep[:12] or [getattr(self._panel, "_current_path", "") or ""]
+        self._churn_paths.clear()
         self._events.clear()
-        fswatch_log("pause (%s)" % why)
+        fswatch_log("pause (%s) watching=%r" % (why, self._watch_dirs))
         self._status(tr("ファイルの大量更新を検出 — 自動更新を一時停止中（落ち着いたら最新にします）",
                         "Many file changes detected - auto refresh paused "
                         "(will refresh when it settles)"))
@@ -274,6 +299,7 @@ class FsChurnGuard(QObject):
         self._ignore_until = time.monotonic() + self.SELF_RELIST_COOLDOWN_S
         self._events.clear()
         self._lates.clear()
+        self._churn_paths.clear()
         try:
             for d in dirs:
                 panel._unwatch_dir(d)       # «要再読» の印を付ける
@@ -304,7 +330,7 @@ class FsChurnGuard(QObject):
         if not self._paused or self._polling:
             return
         self._polling = True
-        dirs = self.displayed_dirs()
+        dirs = [d for d in self._watch_dirs if d]
 
         def _run():
             sig = []
@@ -332,11 +358,15 @@ class FsChurnGuard(QObject):
             self.resume("quiet")
             return
         now = time.monotonic()
+        if now - self._paused_at >= self.PAUSE_MAX_S:
+            self.resume("max %.0fs" % self.PAUSE_MAX_S)
+            return
         if now - self._last_refresh >= self.REFRESH_WHILE_PAUSED_S:
             # 長く続いている: 監視は止めたまま、表示だけ最新にする
             self._last_refresh = now
-            self._relist(dirs)
-            fswatch_log("refresh while paused (%d dirs)" % len(dirs))
+            shown = self.displayed_dirs()
+            self._relist(shown)
+            fswatch_log("refresh while paused (%d dirs)" % len(shown))
 
     def _status(self, text):
         try:

@@ -90,6 +90,25 @@ wf = os.path.join(root, "_writer.py")
 with open(wf, "w") as f:
     f.write(WRITER)
 
+# 表示中のカラムの祖先（root）を、別のアプリが書き換え続ける（Windows の Temp
+# やドライブ直下に相当）。これを «落ち着いたか» の判定に入れるといつまでも
+# 戻らない（Windows の回帰スイート 2026-10-30 で発覚）。
+NOISE = r'''
+import os, sys, time
+d = sys.argv[1]; end = time.time() + float(sys.argv[2])
+i = 0
+while time.time() < end:
+    p = os.path.join(d, "noise_%d.tmp" % (i % 3)); i += 1
+    with open(p, "w") as f: f.write("n")
+    try: os.remove(p)
+    except OSError: pass
+    time.sleep(0.3)
+'''
+nf = os.path.join(tempfile.mkdtemp(prefix="mfm_noise_"), "_noise.py")
+with open(nf, "w") as f:
+    f.write(NOISE)
+noise = subprocess.Popen([sys.executable, nf, root, "60"])
+
 # 1) P4V と同じ書き方で連続書き込み（表示中の work と、裏の other の両方）
 proc = subprocess.Popen([sys.executable, wf, "700", work, other])
 paused_during = False
@@ -139,6 +158,7 @@ no = names(other)
 check(ok, "止めていた間に変わったフォルダも開くと最新: g=%d tmp=%d"
       % (sum(1 for n in no if n.startswith("g")), sum(1 for n in no if n.startswith("tmp."))))
 
+noise.kill()
 for d in (work, other):
     for n in os.listdir(d):
         try:
