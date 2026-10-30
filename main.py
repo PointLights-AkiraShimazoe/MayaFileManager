@@ -49,8 +49,42 @@ def _bootstrap_pyside():
         except Exception as _e:
             _swallow(_e, "main.py:48 _bootstrap_pyside")
         _apply_theme_from_settings(app)
+        _apply_app_icon(app)
         return app, True
     return app, False
+
+
+def _apply_app_icon(app):
+    """アプリのアイコン（r146・X-3）。ウィンドウ左上・タスクバー・Alt+Tab・
+    コンパクトのパック（本体の windowIcon を引き継ぐ）が同じ絵になる。
+
+    Windows は «プロセスの実行ファイルのアイコン» をタスクバーに出すので、
+    mayapy / python から起動した時（run_dev.bat）は Python のアイコンになる。
+    独自の AppUserModelID を名乗るとウィンドウのアイコンが使われる。
+    Maya の中では呼ばない（Maya のアイコンを奪わない）。"""
+    try:
+        from core.compat import QIcon
+        bases = [_ROOT]
+        meipass = getattr(sys, "_MEIPASS", None)      # EXE（PyInstaller）の展開先
+        if meipass:
+            bases.insert(0, meipass)
+        cands = [os.path.join(b, "resources", "icons", n)
+                 for b in bases for n in ("app.ico", "app_icon.png")]
+        for path in cands:
+            if os.path.isfile(path):
+                icon = QIcon(path)
+                if not icon.isNull():
+                    app.setWindowIcon(icon)
+                    break
+    except Exception as _e:
+        _swallow(_e, "main.py _apply_app_icon(icon)")
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "PointLights.MayaFileManager")
+        except Exception as _e:
+            _swallow(_e, "main.py _apply_app_icon(appid)")
 
 
 def _setup_error_logging():

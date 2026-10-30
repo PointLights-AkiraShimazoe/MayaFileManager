@@ -169,19 +169,24 @@ for _ in range(50):
 settle(150)
 check("Maya 2026" in maya_items(), "アクティブになった時に反映される: %r" % maya_items())
 
-# 7) アクティブ化の連打では走らせすぎない
+# 7) アクティブ化の連打では走らせすぎない（走った回数で数える。
+#    偽の検出は一瞬で終わるので «走っている最中か» では判定できない）
 runs = []
-_orig_rescan_thread = w._rescan_installs_async
+_orig_find = _mwd.find_installed_maya_versions
+_mwd.find_installed_maya_versions = lambda *a, **k: (runs.append(1), _orig_find(*a, **k))[1]
 w._install_scan_last = 0.0
 w._on_app_state_for_installs(Qt.ApplicationActive)
-started_first = w._install_scan_running
 for _ in range(50):
     settle(50)
     if not w._install_scan_running:
         break
+first = len(runs)
 w._on_app_state_for_installs(Qt.ApplicationActive)
-check(started_first and not w._install_scan_running, "%s 秒以内の再アクティブ化では走らない"
-      % w.INSTALL_RESCAN_MIN_GAP)
+for _ in range(10):
+    settle(50)
+check(first == 1 and len(runs) == 1, "%s 秒以内の再アクティブ化では走らない（%d → %d 回）"
+      % (w.INSTALL_RESCAN_MIN_GAP, first, len(runs)))
+_mwd.find_installed_maya_versions = _orig_find
 
 # 8) 起動プロファイルを使っていても、プロファイルの無い版は一覧に出る
 sm.save_maya_launch_profiles([{"label": "Maya 2024 (anim)", "version": "2024", "args": ""}])

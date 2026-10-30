@@ -73,3 +73,7 @@ mfm_tests_sel.log
 .run_git_request
 .run_git_done
 .run_git_out.log
+
+# デザインの作業ファイル（生成画像・下書き。採用分は resources/icons へ）
+design/
+tests/offscreen/_hold_*
