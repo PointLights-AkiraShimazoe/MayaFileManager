@@ -292,7 +292,22 @@ def find_installed_blender_versions(extra_paths=None) -> List[BlenderInstallatio
     # パッケージ名（版）と InstallLocation を引いて差し替える（r76）
     unknown = [k for k, b in found.items() if b.version == "?" and "windowsapps" in str(b.executable).lower()]
     if unknown and system == "Windows":
-        for ver, exe in _resolve_store_packages():
+        # r146（2026-10-30）: インストール一覧の再走査（60 秒ごと・アクティブ化
+        # のたび）で毎回 PowerShell を起動していた。結果はストア版の
+        # エイリアスが変わらない限り同じなので、エイリアスの顔ぶれと更新時刻を
+        # 鍵に覚えておく（入れ替え・更新・削除で鍵が変わる）。
+        key = []
+        for k in unknown:
+            exe_k = found[k].executable
+            try:
+                key.append((str(exe_k).lower(), os.lstat(str(exe_k)).st_mtime_ns))
+            except OSError:
+                key.append((str(exe_k).lower(), None))
+        key = tuple(sorted(key))
+        if _STORE_RESOLVE_CACHE.get("key") != key:
+            _STORE_RESOLVE_CACHE["key"] = key
+            _STORE_RESOLVE_CACHE["val"] = _resolve_store_packages()
+        for ver, exe in list(_STORE_RESOLVE_CACHE.get("val") or []):
             for k in unknown:
                 found.pop(k, None)
             unknown = []
@@ -300,6 +315,9 @@ def find_installed_blender_versions(extra_paths=None) -> List[BlenderInstallatio
             found[key] = BlenderInstallation(ver, exe)
 
     return sorted(found.values(), key=lambda b: b.version_tuple)
+
+
+_STORE_RESOLVE_CACHE = {"key": None, "val": []}
 
 
 def _resolve_store_packages():

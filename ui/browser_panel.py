@@ -295,6 +295,12 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
             _swallow(_e, "ui/browser_panel.py:271 _build_ui")
         # 深いパス(遅延ロード)のカラム構築を確実にするためのリトライ
         self._fs_model.directoryLoaded.connect(self._on_fs_dir_loaded)
+        # r146（ユーザー報告 2026-10-30「P4V で取得中にフリーズ」）:
+        # 大量更新の間だけファイル監視を止める（ui/fs_churn_guard.py）
+        from ui.fs_churn_guard import FsChurnGuard
+        self._churn_guard = FsChurnGuard(self)
+        self._churn_guard.attach(self._fs_model)
+        self.directory_changed.connect(self._churn_guard.on_shown)
 
         # Proxy model
         self._proxy = FileFilterProxyModel()

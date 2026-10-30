@@ -182,6 +182,12 @@ class FileOpsMixin:
             _swallow(_e, "ui/browser_panel.py:2161 _recreate_fs_model")
         self._fs_model = new
         try:
+            g = getattr(self, "_churn_guard", None)
+            if g is not None:
+                g.attach(new)          # r146: 大量更新の見張りも付け替える
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _recreate_fs_model(churn guard)")
+        try:
             self._proxy.setSourceModel(new)
         except Exception as e:
             _mfm_log("recreate model: setSourceModel failed %r" % (e,))
