@@ -71,6 +71,7 @@ class FsChurnGuard(QObject):
     QUIET_POLLS = 2             # これだけ続けて変化が無ければ再開
     REFRESH_WHILE_PAUSED_S = 20.0
     PAUSE_MAX_S = 30.0          # これ以上は止めたままにしない（続いていれば検出役がまた止める）
+    NAVIGATE_GRACE_S = 2.5         # 新しいフォルダを開いた後は判定しない
     SELF_RELIST_COOLDOWN_S = 4.0   # 自分で読み直した直後は数えない（自分の変化で止まらない）
 
     _polled = Signal(object)
@@ -158,6 +159,15 @@ class FsChurnGuard(QObject):
         t = self._loaded_at.get(k)
         if t is None:
             self._loaded_at[k] = now
+            # 新しいフォルダを開いた＝移動中。その読み込みの忙しさを大量更新と
+            # 取り違えないよう、しばらく判定しない（Windows の回帰スイート
+            # 2026-10-30: 大きなフォルダを次々開く間に、祖先の Temp の書き換えが
+            # 重なって止めてしまった）。P4V の取得は «開いてある» フォルダの
+            # 書き換えなので、新しく開く読み込みは伴わない。
+            self._ignore_until = max(self._ignore_until, now + self.NAVIGATE_GRACE_S)
+            self._events.clear()
+            self._lates.clear()
+            self._churn_paths.clear()
         elif now - t >= self.LOADED_GRACE_S and now >= self._ignore_until:
             self._events.append(now)
             self._churn_paths.append((now, path))

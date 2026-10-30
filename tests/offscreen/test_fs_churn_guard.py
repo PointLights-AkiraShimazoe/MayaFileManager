@@ -53,6 +53,25 @@ other = os.path.join(bigs[1], "other")          # 読み込むが、書き込み
 os.makedirs(work)
 os.makedirs(other)
 
+# 表示中のカラムの祖先（root）を、別のアプリが最初から最後まで書き換え続ける（Windows の Temp
+# やドライブ直下に相当）。これを «落ち着いたか» の判定に入れるといつまでも
+# 戻らない（Windows の回帰スイート 2026-10-30 で発覚）。
+NOISE = r'''
+import os, sys, time
+d = sys.argv[1]; end = time.time() + float(sys.argv[2])
+i = 0
+while time.time() < end:
+    p = os.path.join(d, "noise_%d.tmp" % (i % 3)); i += 1
+    with open(p, "w") as f: f.write("n")
+    try: os.remove(p)
+    except OSError: pass
+    time.sleep(0.3)
+'''
+nf = os.path.join(tempfile.mkdtemp(prefix="mfm_noise_"), "_noise.py")
+with open(nf, "w") as f:
+    f.write(NOISE)
+noise = subprocess.Popen([sys.executable, nf, root, "90"])
+
 b = make_panel(1400, 700)
 g = b._churn_guard
 pauses = []
@@ -90,24 +109,6 @@ wf = os.path.join(root, "_writer.py")
 with open(wf, "w") as f:
     f.write(WRITER)
 
-# 表示中のカラムの祖先（root）を、別のアプリが書き換え続ける（Windows の Temp
-# やドライブ直下に相当）。これを «落ち着いたか» の判定に入れるといつまでも
-# 戻らない（Windows の回帰スイート 2026-10-30 で発覚）。
-NOISE = r'''
-import os, sys, time
-d = sys.argv[1]; end = time.time() + float(sys.argv[2])
-i = 0
-while time.time() < end:
-    p = os.path.join(d, "noise_%d.tmp" % (i % 3)); i += 1
-    with open(p, "w") as f: f.write("n")
-    try: os.remove(p)
-    except OSError: pass
-    time.sleep(0.3)
-'''
-nf = os.path.join(tempfile.mkdtemp(prefix="mfm_noise_"), "_noise.py")
-with open(nf, "w") as f:
-    f.write(NOISE)
-noise = subprocess.Popen([sys.executable, nf, root, "60"])
 
 # 1) P4V と同じ書き方で連続書き込み（表示中の work と、裏の other の両方）
 proc = subprocess.Popen([sys.executable, wf, "700", work, other])
