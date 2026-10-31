@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 from _common import *  # noqa: F401,F403
-from _common import app, make_panel, finish, QTest
+from _common import app, make_panel, finish, QTest, tmpdir
 from core.compat import QTimer
 
 fails = []
@@ -40,7 +40,7 @@ def pump(sec):
         time.sleep(0.003)
 
 
-root = tempfile.mkdtemp(prefix="mfm_churn_")
+root = tmpdir("mfm_churn_")
 bigs = []
 for i in range(4):
     d = os.path.join(root, "big%d" % i)
@@ -67,13 +67,14 @@ while time.time() < end:
     except OSError: pass
     time.sleep(0.3)
 '''
-nf = os.path.join(tempfile.mkdtemp(prefix="mfm_noise_"), "_noise.py")
+nf = os.path.join(tmpdir("mfm_noise_"), "_noise.py")
 with open(nf, "w") as f:
     f.write(NOISE)
 noise = subprocess.Popen([sys.executable, nf, root, "90"])
 
 b = make_panel(1400, 700)
 g = b._churn_guard
+
 pauses = []
 _orig_pause = g.pause
 g.pause = lambda why="": (pauses.append(why), _orig_pause(why))[1]
@@ -85,6 +86,25 @@ for d in bigs + [other]:
 b.navigate_to(work)
 pump(3.0)
 check(not pauses and not g.is_paused(), "普通のフォルダ移動では監視を止めない: %r" % pauses)
+
+# Qt の収集スレッドは、カラムの先頭（ドライブ一覧）を作る時に全ドライブを
+# 調べる。切れたネットワークドライブがあると、その 1 台で 20 秒前後
+# 待たされ、その間はどのフォルダの中身も変化もモデルに届かない
+# （2026-10-31、開発機の切れた X: で確認。QFileInfo('X:/').exists() 単体で
+# 17.7 秒）。これはこのテストの調べたいこと（大量更新の見張り）では
+# ないので、表示中のフォルダの変化が届くようになってから始める。
+_ready = os.path.join(work, "ready.txt")
+_t_ready = time.perf_counter()
+open(_ready, "w").close()
+_mi = b._fs_model.index(work)
+while time.perf_counter() - _t_ready < 90:
+    pump(0.25)
+    _mi = b._fs_model.index(work)
+    if any(b._fs_model.index(r, 0, _mi).data() == "ready.txt"
+           for r in range(b._fs_model.rowCount(_mi))):
+        break
+print("変化が届くようになるまで %.1f 秒" % (time.perf_counter() - _t_ready), flush=True)
+pump(1.0)
 
 m = b._fs_model
 

@@ -8,16 +8,50 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# r146（2026-10-31）: テストが作った一時フォルダは終わったら消す。
+# 消していなかったので、Windows の Temp にテストの残骸が 1,800 個以上
+# 溜まり（全スイート 1 回で約 300 個）、Temp を読むだけで Qt の収集スレッドが
+# 20 秒以上ふさがった。その間はどのフォルダの変化もモデルに届かず、
+# test_fs_churn_guard が «書き込み後も一覧が 0 件» で落ちていた。
+_TMP_MADE = []
+
+
+def _mk_tmp(prefix="mfm_tmp_", parent=None):
+    d = tempfile.mkdtemp(prefix=prefix, dir=parent)
+    _TMP_MADE.append(d)
+    return d
+
+
+def _cleanup_tmp():
+    import shutil
+    import stat as _stat
+
+    def _onerr(func, path, _exc):
+        try:
+            os.chmod(path, _stat.S_IWRITE)      # 読み取り専用にしたファイル
+            func(path)
+        except OSError:
+            pass
+    for d in reversed(_TMP_MADE):
+        try:
+            shutil.rmtree(d, onerror=_onerr)
+        except Exception:
+            pass
+
+
+import atexit as _atexit
+_atexit.register(_cleanup_tmp)
 # 【重要】テストは本番設定（~/.maya_file_manager）に触らない（r63）。
 # 以前は実設定を共有していたため、test_presets_and_integrations の
 # save_quick_nav_presets がユーザーのプリセットを上書きして消した（2026-09-11）。
 # SettingsManager は MFM_SETTINGS_ROOT を最優先で参照する。
-os.environ["MFM_SETTINGS_ROOT"] = tempfile.mkdtemp(prefix="mfm_test_settings_")
+os.environ["MFM_SETTINGS_ROOT"] = _mk_tmp("mfm_test_settings_")
 # r146: Maya の設定フォルダも隔離する。無いと «開発機の本物の userSetup.py» を
 # 読んでしまい、そこに旧方式のブロックが残っていると MainWindow が 3.5 秒後に
 # 移行ダイアログ（モーダル）を出してテストが固まる（2026-10-24 の全スイートで
 # 3 本が TIMEOUT）。テストが実機の Maya 設定に依存してはいけない。
-os.environ["MAYA_APP_DIR"] = tempfile.mkdtemp(prefix="mfm_test_maya_appdir_")
+os.environ["MAYA_APP_DIR"] = _mk_tmp("mfm_test_maya_appdir_")
 
 # r146: ACCESS_VIOLATION（0xC0000005）で «出力なし» のまま落ちるテストが
 # 間欠的に出る（2026-10-14）。素の mayapy は落ちた場所を何も残さないので、
@@ -238,8 +272,9 @@ def find_item_wait(b, name, timeout_ms=4000):
     return None, None, None
 
 
-def tmpdir():
-    return tempfile.mkdtemp()
+def tmpdir(prefix="mfm_tmp_", parent=None):
+    """テスト用の一時フォルダ（終わったら消える）。"""
+    return _mk_tmp(prefix, parent)
 
 
 def finish(ok=True):
