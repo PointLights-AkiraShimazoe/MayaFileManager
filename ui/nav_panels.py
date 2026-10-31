@@ -19,6 +19,7 @@ Layout (default)
   └─────────────────────────────────────────────────────┘
 """
 from core.diag import swallow as _swallow  # r112
+from core.compat import is_alive as _is_alive  # r146
 
 import os
 from pathlib import Path
@@ -127,20 +128,33 @@ class QuickNavBar(QWidget):
     _instances: list = []
 
     @classmethod
-    def refresh_all(cls):
-        """全エリアのプリセット行を再構築する（編集保存・プリセット切替時）。"""
-        import weakref
-        alive = []
+    def live_instances(cls):
+        """C++ 側も生きているインスタンスだけを返す（死んだものは一覧から外す）。
+
+        ユーザー報告 2026-10-31: プリセットを変えると
+        «Internal C++ object (QuickNavBar) already deleted»。閉じたエリアの
+        プリセット行は C++ 側が消えても Python の入れ物が残ることがあり、
+        weakref だけでは «死んでいる» と分からない。リンク ON の時に
+        その入れ物へ切替を伝えて落ちていた（2026-10-08 にも同じ経路で
+        QHBoxLayout 版が出ていた。その時は refresh の中だけを守っていた）。"""
+        alive, out = [], []
         for ref in cls._instances:
             w = ref()
-            if w is None:
+            if w is None or not _is_alive(w):
                 continue
+            alive.append(ref)
+            out.append(w)
+        cls._instances = alive
+        return out
+
+    @classmethod
+    def refresh_all(cls):
+        """全エリアのプリセット行を再構築する（編集保存・プリセット切替時）。"""
+        for w in cls.live_instances():
             try:
                 w.refresh()
-                alive.append(ref)
             except RuntimeError:
                 pass   # C++側が破棄済み
-        cls._instances = alive
 
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)
@@ -278,6 +292,8 @@ class QuickNavBar(QWidget):
 
         notify=False は «状態復元中» に使う（復元した path を
         プリセット切替の復元で上書きさせないため）。"""
+        if not _is_alive(self):
+            return
         prev = self._active
         self._active = name
         self.refresh()
@@ -290,10 +306,13 @@ class QuickNavBar(QWidget):
         self._sm.set("quick_nav_preset", name)   # 新規エリアの初期値として記憶
         # リンクONの時だけ他エリアへ伝播（OFFならこのエリアのみ）
         if self._sm.get("quick_nav_link_areas", False):
-            for ref in list(QuickNavBar._instances):
-                inst = ref()
-                if inst is not None and inst is not self:
+            for inst in QuickNavBar.live_instances():
+                if inst is self:
+                    continue
+                try:
                     inst.set_active_preset(name)
+                except RuntimeError as _e:
+                    _swallow(_e, "ui/nav_panels.py _on_preset_changed(link)")
         self.refresh()
         if prev != name:
             self.preset_changed.emit(prev, name)
@@ -307,13 +326,16 @@ class QuickNavBar(QWidget):
         self._sm.set("quick_nav_link_areas", bool(on))
         self._update_link_look()
         # リンク状態はグローバルなので、他エリアのボタン表示も同期する
-        for ref in list(QuickNavBar._instances):
-            inst = ref()
-            if inst is not None and inst is not self:
+        for inst in QuickNavBar.live_instances():
+            if inst is self:
+                continue
+            try:
                 inst._link_btn.blockSignals(True)
                 inst._link_btn.setChecked(bool(on))
                 inst._link_btn.blockSignals(False)
                 inst._update_link_look()
+            except RuntimeError as _e:
+                _swallow(_e, "ui/nav_panels.py _on_link_toggled")
 
     def _edit_presets(self):
         from ui.quick_nav_editor import QuickNavPresetEditor

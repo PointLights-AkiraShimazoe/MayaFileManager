@@ -378,6 +378,13 @@ def _expand_wrapper(wrapper: str, exe: str, file_path: str,
              for p in parts]
     if not parts:
         return []
+    # r146（ユーザー報告 2026-10-31「バッチファイルを指定しても Maya が起動
+    # しない」）: «D:/work/run.bat» のようにスラッシュで書かれた場所は、
+    # cmd が «/work» をスイッチと読んで «'D:' は認識されていません» で止まる。
+    # Windows の実行ファイルの場所は円記号にそろえる。
+    if os.path.splitext(parts[0])[1].lower() in (".bat", ".cmd", ".exe"):
+        import ntpath
+        parts[0] = ntpath.normpath(parts[0])
     has_ph = any(("{exe}" in p or "{file}" in p or "{port}" in p) for p in parts)
     out: List[str] = []
     for p in parts:
@@ -395,6 +402,92 @@ def _expand_wrapper(wrapper: str, exe: str, file_path: str,
         comspec = os.environ.get("COMSPEC") or "cmd.exe"
         out = [comspec, "/c"] + out
     return out
+
+
+_CMD_SPECIALS = set('&|<>^()%!,;=')
+
+
+def _crt_quote(arg: str) -> str:
+    """1 つの引数を、Windows の実行ファイル（MSVC の決まり）が元どおりに
+    読める形で引用符に入れる。cmd が特別扱いする文字（& | < > ^ ( ) 等）を
+    含む時も必ず囲む（囲まないと cmd がそこで命令を区切る）。"""
+    arg = str(arg)
+    if arg and not any(c in arg for c in ' \t"') and not (set(arg) & _CMD_SPECIALS):
+        return arg
+    out = ['"']
+    bs = 0
+    for c in arg:
+        if c == "\\":
+            bs += 1
+            continue
+        if c == '"':
+            out.append("\\" * (bs * 2 + 1) + '"')
+        else:
+            out.append("\\" * bs + c)
+        bs = 0
+    out.append("\\" * (bs * 2) + '"')
+    return "".join(out)
+
+
+def _windows_cmdline(argv: List[str]) -> str:
+    """.bat / .cmd を cmd 経由で呼ぶ時のコマンドライン（r146）。
+
+    リストのまま Popen に渡すと、cmd の «/c の後ろの引用符» の扱いで壊れる:
+    先頭が引用符で、引用符が 3 つ以上あると、cmd は «最初と最後の引用符» を
+    消してしまう。空白を含む場所の bat（"D:\\work\\my tools\\run.bat"）と、空白を
+    含む maya.exe（"C:\\Program Files\\…"）が並ぶと必ずこれに当たり、
+    «'D:\\work\\my' は認識されていません» で何も起動しない（ユーザー報告
+    2026-10-31）。/s を付けて全体をもう一組の引用符で囲めば、cmd は
+    その外側の 1 組だけを外す（cmd /? の «/S» の説明どおり）。"""
+    comspec, inner = argv[0], argv[2:]
+    return '"%s" /s /c "%s"' % (comspec, " ".join(_crt_quote(a) for a in inner))
+
+
+def _launch_log_path() -> str:
+    try:
+        d = os.path.join(os.path.expanduser("~"), ".maya_file_manager", "logs")
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, "mfm_launch.log")
+    except OSError:
+        return ""
+
+
+def launch_log(msg: str):
+    """起動の記録（logs/mfm_launch.log）。ラッパーの bat の出力もここへ入る。"""
+    p = _launch_log_path()
+    if not p:
+        return
+    try:
+        import datetime
+        try:
+            if os.path.getsize(p) > 1024 * 1024:
+                os.replace(p, p + ".1")
+        except OSError:
+            pass
+        with open(p, "a", encoding="utf-8") as f:
+            f.write("[%s pid=%d] %s\n" % (
+                datetime.datetime.now().strftime("%m-%d %H:%M:%S"), os.getpid(), msg))
+    except Exception:
+        pass
+
+
+def launch_log_tail(n: int = 15) -> str:
+    """mfm_launch.log の最後の n 行（起動に失敗した時に見せる）。"""
+    p = _launch_log_path()
+    try:
+        with open(p, "rb") as f:
+            data = f.read()[-16000:]
+    except OSError:
+        return ""
+    for enc in ("utf-8", "cp932"):
+        try:
+            text = data.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = data.decode("utf-8", "replace")
+    return "\n".join(text.splitlines()[-n:])
 
 
 def launch_maya(installation: MayaInstallation,
@@ -425,6 +518,14 @@ def launch_maya(installation: MayaInstallation,
         cmd: List[str] = _expand_wrapper(wrapper, exe, file_path or "",
                                          command_port)
         wrapper_took_file = "{file}" in wrapper
+        if not cmd:
+            raise ValueError("wrapper is empty")
+        target = cmd[2] if (len(cmd) >= 3 and cmd[1] == "/c") else cmd[0]
+        if os.path.splitext(target)[1].lower() in (".bat", ".cmd", ".exe") \
+                and not os.path.isfile(target):
+            # 黙って何も起きないのが一番困る（ユーザー報告 2026-10-31）
+            launch_log("launch: wrapper not found: %s" % target)
+            raise FileNotFoundError("Wrapper not found / ラッパーが見つかりません: %s" % target)
     else:
         cmd = [exe]
         wrapper_took_file = False
@@ -447,12 +548,59 @@ def launch_maya(installation: MayaInstallation,
     if clean_env or env_extra:
         kwargs["env"] = env
     system = platform.system()
+    via_cmd = bool(wrapper) and len(cmd) >= 3 and cmd[1] == "/c" and \
+        os.path.splitext(cmd[2])[1].lower() in (".bat", ".cmd")
     if system == "Windows":
         kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
 
-    return subprocess.Popen(cmd, **kwargs)
+    if not via_cmd:
+        launch_log("launch: %s" % subprocess.list2cmdline(cmd))
+        return subprocess.Popen(cmd, **kwargs)
+
+    # ── ラッパーの .bat（r146、ユーザー報告 2026-10-31）──────────────
+    # * コマンドラインは自前で組む（_windows_cmdline の説明を参照）
+    # * エクスプローラーでダブルクリックした時と同じく、bat のフォルダで動かす
+    #   （bat の中の相対パス・call が同じ意味になる）
+    # * コンソール無し（DETACHED）だと timeout / choice 等が失敗するので、
+    #   «見えないコンソール» を付ける
+    # * bat の出力とエラーは logs/mfm_launch.log へ（以前はどこにも残らず、
+    #   起動しない理由が分からなかった）
+    bat = cmd[2]
+    line = _windows_cmdline(cmd) if system == "Windows" else subprocess.list2cmdline(cmd)
+    bat_dir = os.path.dirname(bat)
+    if bat_dir and os.path.isdir(bat_dir):
+        kwargs["cwd"] = bat_dir
+    if system == "Windows":
+        kwargs["creationflags"] = (getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                   | subprocess.CREATE_NEW_PROCESS_GROUP)
+    launch_log("launch (wrapper): %s  [cwd=%s]" % (line, kwargs.get("cwd", "")))
+    out_f = None
+    lp = _launch_log_path()
+    if lp:
+        try:
+            out_f = open(lp, "ab")
+        except OSError:
+            out_f = None
+    if out_f is not None:
+        kwargs["stdout"] = out_f
+        kwargs["stderr"] = subprocess.STDOUT
+    kwargs["stdin"] = subprocess.DEVNULL
+    try:
+        if system == "Windows":
+            proc = subprocess.Popen(line, **kwargs)
+        else:
+            proc = subprocess.Popen(cmd, **kwargs)
+    finally:
+        if out_f is not None:
+            out_f.close()
+    try:
+        proc.mfm_wrapper = bat
+        proc.mfm_cmdline = line
+    except Exception:
+        pass
+    return proc
 
 
 # ---------------------------------------------------------------------------

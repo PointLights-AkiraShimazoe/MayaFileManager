@@ -2168,8 +2168,42 @@ class MainWindowDccMixin:
             # Maya起動には時間がかかるため、少し置いて接続リストを再スキャン
             for delay in (8000, 20000, 40000):
                 QTimer.singleShot(delay, self._refresh_maya_connections)
+            self._watch_launch(proc, "Maya %s" % inst.version)
         except Exception as e:
             QMessageBox.critical(self, tr("起動エラー", "Launch Error"), str(e))
+
+    LAUNCH_EARLY_EXIT_MS = 6000
+
+    def _watch_launch(self, proc, label):
+        """起動した直後に «失敗して終わった» なら知らせる（r146）。
+
+        ユーザー報告 2026-10-31「バッチファイルを指定しても Maya が起動しない」:
+        以前は失敗しても何も出ず、理由も残らなかった。ラッパーの bat が
+        エラーで終わった時（場所の間違い・中の命令の失敗）は、
+        logs/mfm_launch.log の最後を添えて出す。
+        «start で Maya を起動してすぐ終わる» bat は 0 で終わるので出ない。"""
+        def _check():
+            try:
+                rc = proc.poll()
+            except Exception:
+                return
+            if rc is None or rc == 0:
+                return
+            from core.maya_version import launch_log, launch_log_tail
+            launch_log("launch: %s exited early (code %s)" % (label, rc))
+            tail = launch_log_tail(12)
+            cmdline = getattr(proc, "mfm_cmdline", "")
+            msg = tr("%s の起動に失敗しました（終了コード %s）。",
+                     "%s failed to start (exit code %s).") % (label, rc)
+            if getattr(proc, "mfm_wrapper", ""):
+                msg += "\n\n" + tr("ラッパー: ", "Wrapper: ") + proc.mfm_wrapper
+            if cmdline:
+                msg += "\n\n" + tr("実行した内容:", "Command:") + "\n" + cmdline
+            if tail:
+                msg += "\n\n" + tr("記録（logs/mfm_launch.log の最後）:",
+                                   "Log (end of logs/mfm_launch.log):") + "\n" + tail
+            QMessageBox.warning(self, tr("起動エラー", "Launch Error"), msg)
+        QTimer.singleShot(self.LAUNCH_EARLY_EXIT_MS, _check)
 
     # ------------------------------------------------------------------
     # Dialogs
