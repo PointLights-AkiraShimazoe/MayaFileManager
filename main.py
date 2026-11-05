@@ -23,6 +23,12 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+# r146: フリーズ見張りが «止まったメインスレッドの C++ 側の呼び出し履歴» を
+# 別プロセスに取らせる時の入口（core/native_stack.py）。何も表示せずに終わる。
+if __name__ == "__main__" and "--mfm-native-stack" in sys.argv:
+    from core.native_stack import helper_main as _ns_main
+    raise SystemExit(_ns_main(sys.argv))
+
 
 def _bootstrap_pyside():
     """

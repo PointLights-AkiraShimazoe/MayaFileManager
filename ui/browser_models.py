@@ -316,8 +316,10 @@ class FileFilterProxyModel(QSortFilterProxyModel):
         except Exception as _e:
             _swallow(_e, "ui/browser_models.py resort_columns")
 
-    def invalidate_display_names(self):
+    def invalidate_display_names(self, keep_file_cache=False):
         self._alias_cache.clear()
+        if keep_file_cache:
+            return                  # r146: 裏で答えが出た通知の時はファイルの答えを捨てない
         try:
             from core import display_names
             display_names.invalidate()

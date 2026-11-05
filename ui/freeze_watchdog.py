@@ -102,6 +102,9 @@ def install(window):
             _rearm()
 
         main_id = threading.get_ident()
+        main_native = threading.get_native_id()
+
+        native_done = [0, -10.0]     # [この停止で取った回数, 取った時の停止秒]
 
         def _watch():
             last_dump = 0.0
@@ -109,6 +112,8 @@ def install(window):
                 _time.sleep(0.5)
                 now = _time.monotonic()
                 stalled = now - _FREEZE_BEAT[0]
+                if stalled < 1.5:
+                    native_done[0], native_done[1] = 0, -10.0   # 次の停止に備える
                 if stalled > 1.5 and now - last_dump > 5.0:
                     # r108: ドラッグ等 «意図して UI スレッドを握っている»
                     # 区間は記録しない（本物のフリーズが埋もれるため）
@@ -142,6 +147,20 @@ def install(window):
                                     "".join(_tb.format_stack(f, limit=6))))
                             if parts:
                                 _dump("=== 他スレッド（参考） ===\n" + "".join(parts))
+                        # r146（ユーザー報告 2026-11-02、P4V の取得中に 33 秒）:
+                        # Python 側が app.exec() だけ＝ Qt の C++ の中で止まっている。
+                        # 別プロセスに C++ 側の呼び出し履歴を取らせる（1 回の停止に
+                        # つき 8 秒と 20 秒の 2 回まで）。
+                        if stalled > 8.0 and native_done[0] < 2 and \
+                                stalled > native_done[1] + 10.0:
+                            native_done[0] += 1
+                            native_done[1] = stalled
+                            try:
+                                from core import native_stack as _ns
+                                _ns.capture_async(main_native, freeze_log,
+                                                  "%.0f 秒停止" % stalled)
+                            except Exception as _e:
+                                _swallow(_e, "ui/freeze_watchdog.py native_stack")
                     except Exception as _e:
                         _swallow(_e, "ui/main_window_dcc.py _watch(dump)")
 

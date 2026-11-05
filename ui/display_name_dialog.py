@@ -149,7 +149,9 @@ class DisplayNameDialog(QDialog):
 
     # ------------------------------------------------------------------
     def _load(self):
-        data = display_names.load(self._dir) or {}
+        # 編集画面は «本当の中身» が要る（仮の答えで開いて保存すると、既存の
+        # 表示名を消してしまう）。利用者が自分で開いた時だけなので待つ。
+        data = display_names.load(self._dir, wait=30.0) or {}
         names = data.get("names", {}) if isinstance(data, dict) else {}
         self._enabled_cb.setChecked(bool(data.get("enabled", True))
                                     if data else True)

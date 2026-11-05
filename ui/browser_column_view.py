@@ -17,7 +17,7 @@ from core.compat import (
     QColumnView, QListView,
     QFrame, QAbstractItemView, QSlider, QSizePolicy,
     QMenu, QInputDialog, QStyle, QProxyStyle, QModelIndex, QSize, QRect, QPixmap, QPainter, QColor, QFileInfo, QUrl, QMimeData, QPoint,
-    QFontMetrics, QTimer, QDrag, QCursor,
+    QFontMetrics, QTimer, QDrag, QCursor, Signal,
 )
 from core.compat import QtCore as _QtCore
 from core.compat import is_alive
@@ -476,6 +476,27 @@ class _ColumnResizeHandle(QWidget):
 # Column-capped View
 # ---------------------------------------------------------------------------
 
+class _DisplayNamesNotifier(QObject):
+    """表示名の答えが裏のスレッドで変わったことを UI スレッドへ渡す（r146）。
+
+    core.display_names は UI スレッドでディスクに触らない（P4V の書き込み中に
+    外付けドライブの stat が 20 秒以上止まった）。猶予内に答えが出なかった
+    フォルダは «ファイル無し» 扱いで描き、答えが出たらここ経由で描き直す。"""
+    changed = Signal(str)
+
+
+_dn_notifier = None
+
+
+def _display_names_notifier():
+    global _dn_notifier
+    if _dn_notifier is None:
+        _dn_notifier = _DisplayNamesNotifier()
+        from core import display_names
+        display_names.add_listener(lambda d: _dn_notifier.changed.emit(str(d)))
+    return _dn_notifier
+
+
 class CappedColumnView(QColumnView):
     """
     QColumnView with configurable maximum column depth.
@@ -521,6 +542,21 @@ class CappedColumnView(QColumnView):
         self._loading_timer.setInterval(150)
         self._loading_timer.timeout.connect(self._update_loading_overlays)
         self._loading_timer.start()
+        _display_names_notifier().changed.connect(self._on_display_names_changed)
+
+    def _on_display_names_changed(self, directory):
+        """表示名の答えが後から出た・変わった（r146）。そのフォルダのカラムが
+        出ている時だけ描き直す。"""
+        try:
+            k = os.path.normcase(os.path.normpath(directory))
+            for v in self._live_columns():
+                p = self._path_for_index(v.rootIndex()) or ""
+                if p and os.path.normcase(os.path.normpath(p)) == k:
+                    # ファイルの答えは捨てない（捨てると取り直し → また通知、と回る）
+                    self._refresh_display_names(keep_file_cache=True)
+                    return
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py _on_display_names_changed")
 
     def set_max_depth(self, depth: int):
         self._max_depth = depth
@@ -1674,7 +1710,7 @@ class CappedColumnView(QColumnView):
             return dlg
         show_tool_window(self, "_mfm_dn_dialog", _make)
 
-    def _refresh_display_names(self, rebuild_footers=True):
+    def _refresh_display_names(self, rebuild_footers=True, keep_file_cache=False):
         """対応表を捨てて全カラムを描き直す。
 
         rebuild_footers=False は «フッタのボタン自身から呼ばれた» 場合用。
@@ -1684,7 +1720,10 @@ class CappedColumnView(QColumnView):
         from core import display_names
         m = self.model()
         if hasattr(m, "invalidate_display_names"):
-            m.invalidate_display_names()
+            if keep_file_cache:
+                m.invalidate_display_names(keep_file_cache=True)
+            else:
+                m.invalidate_display_names()
         # r120: «表示名» 順で並べているカラムは、名前を変えたら並びも変わる
         if hasattr(m, "resort_columns"):
             m.resort_columns()
