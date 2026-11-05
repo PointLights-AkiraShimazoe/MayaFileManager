@@ -15,6 +15,7 @@ Mercury の規則（design_tokens.json の _mercury も参照）:
 - ボタン・入力・ナビはピル形状、カードは 12px
 - font-weight は 500 まで（600/700 は使わない）
 - 本文に純白は使わない（ダークは Ivory #ededf3）
+- ライトでも面に純白は使わない（r146。paper_* の灰。眩しいと言われた）
 
 ウィジェット個別の setStyleSheet からは qss_vars() を使う（色のベタ書き禁止）:
     from core.theme_engine import qss_vars

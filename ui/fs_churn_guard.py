@@ -64,6 +64,14 @@ class FsChurnGuard(QObject):
 
     WINDOW_S = 2.5              # 判定の窓
     MIN_EVENTS = 8              # 窓の中の «読み込み済みフォルダでの変化» の数
+    # 窓の中で変化した «別々のファイル» の数（r146、2026-11-05）。
+    # 祖先のフォルダで数個のファイルを作っては消すだけ（Temp・ドライブ直下で
+    # 他のアプリがいつもやっている）でも、通知の回数は MIN_EVENTS に届く。
+    # それを大量更新と取り違えて止め、しかも止めた後もその祖先が変わり続ける
+    # ので 30 秒の安全弁まで戻らなかった（Windows の回帰スイートと実機の
+    # mfm_fswatch.log の «watching=[…Temp]»）。P4V の取得は毎回別のファイル
+    # なので、別々のファイルの数で見分ける。
+    MIN_DISTINCT = 8
     MIN_BUSY = 0.30             # 窓の中で UI が塞がっていた割合
     LOADED_GRACE_S = 2.0        # 読み込んでからこの秒数の変化は «読み込み» とみなす
     BEAT_MS = 100
@@ -82,6 +90,7 @@ class FsChurnGuard(QObject):
         self._model = None
         self._loaded_at = {}
         self._events = deque()
+        self._names = deque()       # (時刻, «フォルダ/名前»)
         self._lates = deque()
         self._paused = False
         self._paused_at = 0.0
@@ -117,6 +126,7 @@ class FsChurnGuard(QObject):
         self._model = model
         self._loaded_at = {}
         self._events.clear()
+        self._names.clear()
         if model is None:
             return
         for sig, slot in self._slots(model):
@@ -132,7 +142,7 @@ class FsChurnGuard(QObject):
 
     def _slots(self, m):
         return ((m.directoryLoaded, self._on_loaded),
-                (m.rowsInserted, self._on_rows),
+                (m.rowsInserted, self._on_inserted),
                 (m.rowsRemoved, self._on_rows),
                 (m.dataChanged, self._on_data))
 
@@ -166,6 +176,7 @@ class FsChurnGuard(QObject):
             # 書き換えなので、新しく開く読み込みは伴わない。
             self._ignore_until = max(self._ignore_until, now + self.NAVIGATE_GRACE_S)
             self._events.clear()
+            self._names.clear()
             self._lates.clear()
             self._churn_paths.clear()
         elif now - t >= self.LOADED_GRACE_S and now >= self._ignore_until:
@@ -174,7 +185,7 @@ class FsChurnGuard(QObject):
         if self._paused:
             self._stale.add(k)
 
-    def _note_change(self, parent_index):
+    def _note_change(self, parent_index, first=None, last=None):
         m = self._model
         if m is None:
             return
@@ -192,15 +203,31 @@ class FsChurnGuard(QObject):
             return              # 自分で読み直した分
         self._events.append(now)
         self._churn_paths.append((now, path))
+        if first is not None and last is not None:
+            # 変化したファイルの名前（多すぎる時は先頭の 64 件で足りる）
+            for r in range(first, min(last, first + 63) + 1):
+                try:
+                    name = m.index(r, 0, parent_index).data()
+                except Exception:
+                    name = None
+                if name:
+                    self._names.append((now, path + "/" + str(name)))
+
+    def _on_inserted(self, parent, first, last):
+        self._note_change(parent, first, last)
 
     def _on_rows(self, parent, *_a):
         self._note_change(parent)
 
-    def _on_data(self, top_left, *_a):
+    def _on_data(self, top_left, bottom_right=None, *_a):
         try:
-            self._note_change(top_left.parent())
+            last = bottom_right.row() if bottom_right is not None else top_left.row()
+            self._note_change(top_left.parent(), top_left.row(), last)
         except Exception:
             pass
+
+    def _distinct_names(self) -> int:
+        return len(set(k for _t, k in self._names))
 
     def _on_beat(self):
         now = time.monotonic()
@@ -211,6 +238,8 @@ class FsChurnGuard(QObject):
         cut = now - self.WINDOW_S
         while self._events and self._events[0] < cut:
             self._events.popleft()
+        while self._names and self._names[0][0] < cut:
+            self._names.popleft()
         while self._lates and self._lates[0][0] < cut:
             self._lates.popleft()
         while self._churn_paths and self._churn_paths[0][0] < cut:
@@ -218,8 +247,10 @@ class FsChurnGuard(QObject):
         if self._paused or now < self._ignore_until:
             return
         busy = sum(x for _t, x in self._lates)
-        if len(self._events) >= self.MIN_EVENTS and busy >= self.MIN_BUSY * self.WINDOW_S:
-            self.pause("changes=%d busy=%.1fs/%.1fs" % (len(self._events), busy, self.WINDOW_S))
+        if len(self._events) >= self.MIN_EVENTS and busy >= self.MIN_BUSY * self.WINDOW_S \
+                and self._distinct_names() >= self.MIN_DISTINCT:
+            self.pause("changes=%d files=%d busy=%.1fs/%.1fs" % (
+                len(self._events), self._distinct_names(), busy, self.WINDOW_S))
 
     # ── 止める・戻す ─────────────────────────────────────────────
     def pause(self, why=""):
@@ -255,6 +286,7 @@ class FsChurnGuard(QObject):
         self._watch_dirs = deep[:12] or [getattr(self._panel, "_current_path", "") or ""]
         self._churn_paths.clear()
         self._events.clear()
+        self._names.clear()
         fswatch_log("pause (%s) watching=%r" % (why, self._watch_dirs))
         self._status(tr("ファイルの大量更新を検出 — 自動更新を一時停止中（落ち着いたら最新にします）",
                         "Many file changes detected - auto refresh paused "
@@ -277,6 +309,7 @@ class FsChurnGuard(QObject):
         for d in dirs:
             self._stale.discard(self._key(d))
         self._events.clear()
+        self._names.clear()
         self._lates.clear()
         fswatch_log("resume (%s) relisted=%d stale_left=%d" % (why, len(dirs), len(self._stale)))
         self._status(tr("自動更新を再開しました", "Auto refresh resumed"))
@@ -308,6 +341,7 @@ class FsChurnGuard(QObject):
         # 付け直しは 900ms 後にまとめて走るので、その分も含めて数えない
         self._ignore_until = time.monotonic() + self.SELF_RELIST_COOLDOWN_S
         self._events.clear()
+        self._names.clear()
         self._lates.clear()
         self._churn_paths.clear()
         try:
