@@ -219,10 +219,13 @@ class FsChurnGuard(QObject):
     def _on_rows(self, parent, *_a):
         self._note_change(parent)
 
-    def _on_data(self, top_left, bottom_right=None, *_a):
+    def _on_data(self, top_left, *_a):
+        # 名前は数えない: Windows の QFileSystemModel は、変わっていない兄弟まで
+        # 含む範囲で dataChanged を出すことがあり、別々のファイルの数が水増し
+        # される（Windows の回帰スイート 2026-11-07: 祖先のノイズだけで files=8）。
+        # 別々のファイルは «新しく現れた» もの（rowsInserted）で数える。
         try:
-            last = bottom_right.row() if bottom_right is not None else top_left.row()
-            self._note_change(top_left.parent(), top_left.row(), last)
+            self._note_change(top_left.parent())
         except Exception:
             pass
 

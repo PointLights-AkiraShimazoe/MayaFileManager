@@ -536,6 +536,11 @@ class MainWindowDccMixin:
                                         reported.append(d)
                                 except Exception as _e:
                                     _swallow(_e, "ui/main_window_dcc.py _run(appdir)")
+                            # r146（ユーザー報告 2026-11-07「File メニューの Save Scene で
+                            # エラーが出た」。文面は残っていなかった）: 接続できた Maya に
+                            # «保存の見張り» を 1 回だけ入れる（core/maya_save_watch.py）。
+                            # 保存の成否・理由・プロジェクトを記録し、失敗したら逃げ道を出す。
+                            self._arm_save_watch(port, pid)
                     except Exception:
                         pid = None
                     if label is None and port in self._known_conns["maya"]:
@@ -1133,6 +1138,29 @@ class MainWindowDccMixin:
         except Exception as _e:
             _swallow(_e, "ui/main_window_dcc.py _raise_sent_dcc")
 
+    def _arm_save_watch(self, port, pid):
+        """接続できた Maya に «保存の見張り» を入れる（Maya ごとに 1 回。スキャンの
+        スレッドから呼ばれる）。"""
+        from core.diag import diag_off
+        if diag_off("no_save_watch") or not pid:
+            return
+        armed = self.__dict__.setdefault("_save_watch_armed", set())
+        key = (int(port), int(pid))
+        if key in armed:
+            return
+        try:
+            from core.maya_bridge import bridge_log
+            from core.maya_save_watch import install_code, log_path
+            lang = str(self._sm.get("ui_language", "ja") or "ja")
+            ok, rep = MayaBridge(port).send_python(install_code(log_path(), lang),
+                                                   timeout=1.5)
+            bridge_log("save-watch port %s pid %s: ok=%s reply=%r"
+                       % (port, pid, ok, (rep or "")[:80]))
+            if ok and rep and "save-watch" in str(rep):
+                armed.add(key)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _arm_save_watch")
+
     def _on_bridge_done(self, ok: bool, label: str, reply):
         # r119e/r119i: «実行中» の印を落とすのは **応答が返った時だけ**。
         # reply is None は «送れたが応答が無い»＝DCC がまだ処理中
@@ -1143,6 +1171,14 @@ class MainWindowDccMixin:
         # 送れなかった時は実行されていないので落とす。
         if (not ok) or reply is not None:
             self._clear_dcc_pending()
+        # r146: 操作の結果（成功・エラーの文面）を記録に残す。以前は送った
+        # ことしか残らず、«何が起きたか» を後から確かめられなかった。
+        if label:
+            try:
+                from core.maya_bridge import bridge_log
+                bridge_log("result tag=%r ok=%s reply=%r" % (label, ok, str(reply)[:500]))
+            except Exception as _e:
+                _swallow(_e, "ui/main_window_dcc.py _on_bridge_done(log)")
         # r145: «同じ操作 ID が 2 回届いた» ＝ 配送が重複している証拠。
         # ユーザーには何も出さない（操作は 1 回しか起きていない）が、
         # 原因調査のためログには必ず残す。

@@ -95,7 +95,19 @@ def setproject_code(path: str, indent: str = "") -> str:
         "    return ('', a, b)",
         "import maya.cmds as _mfm_cmds, maya.mel as _mfm_mel",
         "_mfm_pj = %r" % pj,
-        "_mfm_n = lambda p: _mfm_os.path.normcase(_mfm_os.path.normpath(p or '')).rstrip('\\\\/')",
+        # r146: 比べるのは «実体のパス»。ジャンクション（C:\\…→A:\\…）・
+        # ドライブの割り当て（S: など）・区切りの重複（S://…）で書き方が違うだけの
+        # 同じプロジェクトを «違う» と判定し、既定の «セットする» で書き方だけ
+        # 違うプロジェクトへ切り替えていた（Maya の最近のプロジェクトに同じ場所が
+        # 二重に並んでいた）。
+        "def _mfm_n(p):",
+        "    if not p:",
+        "        return ''",
+        "    try:",
+        "        p = _mfm_os.path.realpath(_mfm_os.path.normpath(p))",
+        "    except Exception:",
+        "        p = _mfm_os.path.normpath(p)",
+        "    return _mfm_os.path.normcase(p).rstrip('\\\\/')",
         "_mfm_cur = _mfm_cmds.workspace(q=True, rootDirectory=True) or ''",
         "_mfm_decl = _mfm_main.__dict__.setdefault('_mfm_setproj_declined', set())",
         "if _mfm_n(_mfm_pj) != _mfm_n(_mfm_cur) and _mfm_n(_mfm_pj) not in _mfm_decl:",
