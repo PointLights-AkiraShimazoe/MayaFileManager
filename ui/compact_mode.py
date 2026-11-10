@@ -457,6 +457,10 @@ class CompactController(QObject):
         self._drag_seen = False      # 自分のドラッグ（QDrag.exec）を見ていたか
         self._collapsed_in_drag = False  # そのドラッグの最中に畳んだか
         self._tool_windows = []      # 畳む時に一緒に隠した道具窓
+        # r146（ユーザー報告 2026-11-10）: メニュー／モーダルが閉じた時に
+        # カーソルが外にいたら、一度中へ戻るまで畳まない（_tick の末尾）
+        self._ui_seen = False          # メニュー／モーダルが出ていたか（閉じたら見る）
+        self._hold_until_reenter = False  # 中へ戻るまで畳まない
         self._win_rect = None        # 畳む前の本体の «中身の矩形»
         self._puck_anchor = None     # その時のパックの位置（差分の起点）
         self._timer = QTimer(self)
@@ -1016,6 +1020,8 @@ class CompactController(QObject):
         """
         if not self._active:
             return
+        self._ui_seen = False
+        self._hold_until_reenter = False
         puck = self._ensure_puck()
         # 本体がまだ見えているうちに、対応するパックの位置を決める
         # r146（ユーザー報告 2026-10-15「コンパクトで再起動すると、必ず画面の
@@ -1592,6 +1598,39 @@ class CompactController(QObject):
         # _typing()（文字入力中は畳まない）はこれと真っ向からぶつかるので
         # **外した**。判断の基準は «マウスがどこにあるか» 1 本にする
         # （_cursor_inside は本体と道具窓を全部見ている）。
-        if self._busy() or self._cursor_inside():
+        #
+        # r146（ユーザー報告 2026-11-10）:
+        #   「Perforce のチェックアウト等の操作直後や、プロパティを開いた直後に
+        #     UI からマウスが外れているとコンパクトに閉じられてしまうので、
+        #     UI 外にでてしまう操作の場合は、一度 UI にマウスが戻ったら、
+        #     その後マウスが外れて始めてコンパクトになるとしてください。」
+        # 右クリックメニューやコンボの一覧、確認ダイアログは本体の枠の外まで
+        # 広がる。枠の外にある項目を押すと、閉じた瞬間にカーソルは «外» に
+        # いるので、次の見張りで即座に畳まれていた。
+        # → メニュー／モーダルが出ていた後、閉じた時にカーソルが外なら
+        #   «中へ戻るまで畳まない»。中へ戻ったら旗を下ろし、以後は従来どおり。
+        # 変えるのはこの判定だけ（ドラッグ・最小化・猶予の扱いは上で済んでいる）。
+        # «出ていた» は tick をまたいで覚える（閉じた直後の tick がボタンの
+        # 押下で _busy に当たっても取りこぼさない）。
+        try:
+            _app = QApplication.instance()
+            if _app is not None and (_app.activePopupWidget() is not None
+                                     or _app.activeModalWidget() is not None):
+                self._ui_seen = True
+        except Exception as _e:
+            _swallow(_e, "ui/compact_mode.py _tick(ui_seen)")
+        if self._busy():
+            return
+        if self._cursor_inside():
+            self._ui_seen = False
+            self._hold_until_reenter = False
+            return
+        if self._ui_seen:
+            self._ui_seen = False
+            if not self._hold_until_reenter:
+                self._hold_until_reenter = True
+                _compact_log("hold: メニュー／ダイアログが閉じた時にカーソルが外。"
+                             "中へ戻るまで畳まない")
+        if self._hold_until_reenter:
             return
         self.collapse()
