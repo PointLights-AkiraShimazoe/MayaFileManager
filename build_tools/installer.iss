@@ -51,6 +51,16 @@ ArchitecturesInstallIn64BitMode=x64
 MinVersion=10.0
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
+; 起動中の Manager は «こちらで» 閉じてから入れる（v0.9.19、ユーザー報告 2026-11-10）。
+;   「インストールしようとしたらフリーズしました。アプリケーションを自動で落とすとして
+;     進めるとフリーズしました。落としたら大丈夫でした。」
+; Inno Setup の既定（CloseApplications=yes）は Windows の Restart Manager に閉じさせるが、
+; Manager（Qt・コンパクト中は本体を画面外へ退けている）がその要求に応えきれず、
+; インストーラが待ち続けて固まった。Restart Manager は使わず、[Code] の
+; PrepareToInstall で «普通に閉じる → 待つ → 終わらなければ強制終了 → それでも残れば
+; 先へ進ませない» を行う。
+CloseApplications=no
+RestartApplications=no
 
 [Languages]
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
@@ -78,3 +88,58 @@ Filename: "{app}\{#AppExeName}"; Description: "{#AppName} を起動"; Flags: now
 
 ; 注意: ユーザー設定 (%USERPROFILE%\.maya_file_manager のブックマーク・履歴) は
 ; アンインストールしても削除しない（再インストール時に引き継ぐため）
+
+[Code]
+// 起動中の Maya File Manager を閉じる（v0.9.19）。上の CloseApplications=no を参照。
+function MfmIsRunning(): Boolean;
+var
+  TmpFile: String;
+  Output: AnsiString;
+  ResultCode: Integer;
+begin
+  Result := False;
+  TmpFile := ExpandConstant('{tmp}\mfm_tasklist.txt');
+  // cmd は引用符が 3 つ以上あると外側を剥がすので /S /C "..." の形で渡す
+  if Exec(ExpandConstant('{cmd}'), '/S /C "tasklist /FI "IMAGENAME eq {#AppExeName}" /NH > "' + TmpFile + '""',
+          '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    if LoadStringFromFile(TmpFile, Output) then
+      Result := Pos(Lowercase('{#AppExeName}'), Lowercase(String(Output))) > 0;
+  end;
+end;
+
+function MfmWaitGone(Seconds: Integer): Boolean;
+var
+  I: Integer;
+begin
+  Result := not MfmIsRunning();
+  I := 0;
+  while (not Result) and (I < Seconds * 2) do
+  begin
+    Sleep(500);
+    I := I + 1;
+    Result := not MfmIsRunning();
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  if not MfmIsRunning() then
+    Exit;
+  // 1) 普通に閉じる（ウィンドウを閉じる要求。設定はここで保存される）
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#AppExeName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if MfmWaitGone(8) then
+    Exit;
+  // 2) 応答が無ければ強制終了（子プロセスごと）
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM {#AppExeName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if MfmWaitGone(5) then
+    Exit;
+  // 3) それでも残っていれば先へ進ませない（固まったまま待たせない）
+  if ActiveLanguage = 'japanese' then
+    Result := 'Maya File Manager を終了できませんでした。タスクマネージャーで MayaFileManager.exe を終了してから、もう一度インストールしてください。'
+  else
+    Result := 'Could not close Maya File Manager. End MayaFileManager.exe in Task Manager, then run the installer again.';
+end;

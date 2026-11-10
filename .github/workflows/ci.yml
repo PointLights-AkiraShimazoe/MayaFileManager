@@ -10,7 +10,9 @@ jobs:
   syntax-check:
     # Maya 2023(3.9) / 2024(3.10) / 2025-2026(3.11) / 2027(3.13) の各同梱Pythonで構文互換を保証
     name: "Syntax Check (Python ${{ matrix.python }})"
-    runs-on: ubuntu-latest
+    # ubuntu-latest は 2026-10 から Ubuntu 26.04 になり、Python 3.9 が入らなくなった
+    # （v0.9.18 の CI が «3.9 not found» で失敗）。Maya 2023 の 3.9 を検査し続けるため固定する
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
