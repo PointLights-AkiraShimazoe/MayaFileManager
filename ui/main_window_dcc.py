@@ -1582,7 +1582,7 @@ class MainWindowDccMixin:
             from ui.browser_panel import _mfm_log
             trail = " < ".join(
                 "%s:%d %s" % (os.path.basename(fr.filename), fr.lineno, fr.name)
-                for fr in reversed(_tb.extract_stack()[:-1])[:8])
+                for fr in list(reversed(_tb.extract_stack()[:-1]))[:8])
             _mfm_log("dcc-call: kind=%s app=%s win=%#x path=%r\n"
                      "          trail: %s" % (kind, app, id(self), path, trail))
         except Exception as _e:

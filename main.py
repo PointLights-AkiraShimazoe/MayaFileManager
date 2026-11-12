@@ -489,6 +489,7 @@ _REQUIRED_MODULES = [
     "core.file_operations",
     "core.undo_stack",
     "core.path_guard",
+    "core.log_dir",
 ]
 
 

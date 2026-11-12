@@ -110,6 +110,33 @@ def s1():
             check(all(c[2] == 5.0 for c in calls),
                   "前面に戻った時は短い期限（5 秒）で見る＝連打しない")
 
+            # コンパクトで畳んでいる間は、これまでどおり現在地だけ（見えていない
+            # 親カラムのために毎分問い合わせない）。開いている間は親も見る。
+            class _Ctl(object):
+                def __init__(self, active, expanded):
+                    self._a, self._e = active, expanded
+
+                def is_active(self):
+                    return self._a
+
+                def is_expanded(self):
+                    return self._e
+            win = b.window()
+            del calls[:]
+            win._compact_ctl = _Ctl(True, False)        # 畳んでいる
+            b._tick_integration_auto_refresh()
+            check(len(calls) == 1 and _same(calls[0][0], deep),
+                  "コンパクトで畳んでいる間の定期の見直しは現在地だけ（%d 件）" % len(calls))
+            del calls[:]
+            win._compact_ctl = _Ctl(True, True)         # コンパクトだが開いている
+            b._tick_integration_auto_refresh()
+            check(len(calls) == 3, "開いている間は親カラムも見る（%d 件）" % len(calls))
+            del calls[:]
+            win._compact_ctl = _Ctl(True, False)        # 畳んだまま前面に戻った時
+            b.refresh_integrations_on_activate()
+            check(len(calls) == 3, "前面に戻った時は畳んでいても全部を見直す（%d 件）" % len(calls))
+            del win._compact_ctl
+
             # 設定で切ってあれば何もしない（従来どおり）
             del calls[:]
             sm.set(BrowserPanel.INTEG_AUTO_KEY, 0, save=False)

@@ -28,9 +28,8 @@ import sys
 # （= ツールを置いたドライブ）で、そのドライブが落ちると連携の記録まで
 # 失われた（r117 と同じ轍）。出せなければツールフォルダへ退避する。
 try:
-    _BRIDGE_LOG_DIR = _os.path.join(_os.path.expanduser("~"),
-                                    ".maya_file_manager", "logs")
-    _os.makedirs(_BRIDGE_LOG_DIR, exist_ok=True)
+    from core.log_dir import user_log_dir as _user_log_dir
+    _BRIDGE_LOG_DIR = _user_log_dir()
 except OSError:
     _BRIDGE_LOG_DIR = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 _BRIDGE_LOG = _os.path.join(_BRIDGE_LOG_DIR, "mfm_maya.log")

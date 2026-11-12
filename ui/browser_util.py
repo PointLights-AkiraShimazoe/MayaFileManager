@@ -87,9 +87,8 @@ _MFM_T0 = _time_mod.monotonic()
 def _log_dir() -> str:
     """ログの置き場所。ホーム直下に作れなければツールフォルダへ退避する。"""
     try:
-        d = os.path.join(os.path.expanduser("~"), ".maya_file_manager", "logs")
-        os.makedirs(d, exist_ok=True)
-        return d
+        from core.log_dir import user_log_dir
+        return user_log_dir()
     except OSError:
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

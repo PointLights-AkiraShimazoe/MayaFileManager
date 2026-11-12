@@ -21,9 +21,8 @@ from core.compat import QObject, Signal
 # Maya 連携ログ（mfm_maya.log）と同じ置き場に揃える。
 def _resolve_log_path():
     try:
-        d = os.path.join(os.path.expanduser("~"), ".maya_file_manager", "logs")
-        os.makedirs(d, exist_ok=True)
-        return os.path.join(d, "mfm_integrations.log")
+        from core.log_dir import user_log_dir
+        return os.path.join(user_log_dir(), "mfm_integrations.log")
     except OSError:
         return os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(

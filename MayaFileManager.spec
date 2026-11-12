@@ -60,6 +60,7 @@ a = Analysis(
         'core.bookmark_manager',
         'core.file_operations',
         'core.thumbnail_generator',
+        'core.log_dir',
         'ui.main_window',
         'ui.browser_panel',
         'ui.browser_util',

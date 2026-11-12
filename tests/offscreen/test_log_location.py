@@ -18,16 +18,34 @@ def s1():
     tool = os.path.realpath(
         os.path.dirname(os.path.dirname(os.path.abspath(bu.__file__))))
 
+    # r146（2026-11-12）: テスト中はログを一時フォルダへ隔離している
+    # （_common.py の MFM_LOG_DIR）。見るべきは «差し替えていない時の置き場所»。
+    from core import log_dir as ld
+    real = os.path.realpath(ld.default_log_dir())
+    assert real.startswith(home), ("ログの既定の置き場所がホーム配下に無い", real)
+    assert not real.startswith(tool + os.sep), \
+        ("ログの既定の置き場所がツールフォルダ配下にある（ドライブ障害で書けなくなる）", real)
+    assert real == os.path.realpath(os.path.join(home, ".maya_file_manager", "logs")), real
+    print("logs live under the user profile, not the tool drive: OK")
+
+    # 3 つのログは «同じ 1 つの置き場所» を使う（別々に組み立てない）
+    here = os.path.realpath(ld.user_log_dir())
     for name, path in (("startup", bu._MFM_STARTUP_LOG),
                        ("freeze", bu._MFM_FREEZE_LOG),
                        ("ui", bu._MFM_UI_LOG)):
-        real = os.path.realpath(path)
-        assert real.startswith(home), \
-            ("%s ログがホーム配下に無い" % name, real)
-        assert not real.startswith(tool + os.sep), \
-            ("%s ログがツールフォルダ配下にある（ドライブ障害で書けなくなる）"
-             % name, real)
-    print("logs live under the user profile, not the tool drive: OK")
+        assert os.path.realpath(os.path.dirname(path)) == here, (name, path, here)
+        assert not os.path.realpath(path).startswith(tool + os.sep), (name, path)
+    # 連携・Maya 連携・Maya の起動のログも同じ場所
+    from core.integrations import manager as _im
+    from core import maya_bridge as _mb, maya_version as _mv
+    for name, path in (("integrations", _im._LOG_PATH), ("maya", _mb._BRIDGE_LOG),
+                       ("launch", _mv._launch_log_path())):
+        assert os.path.realpath(os.path.dirname(path)) == here, (name, path, here)
+    print("all logs share one location: OK")
+
+    # テストは実機のログ置き場へ書かない
+    assert here != real, "テストが実機のログ置き場を使っている: %s" % here
+    print("tests do not write into the real log folder: OK")
 
     # 置き場が実在し、書ける
     assert os.path.isdir(bu._MFM_LOG_DIR), bu._MFM_LOG_DIR

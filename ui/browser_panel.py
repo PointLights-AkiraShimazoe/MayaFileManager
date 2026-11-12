@@ -1983,10 +1983,31 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
             return
         try:
             mgr = self._integrations()
-            for d in self._auto_refresh_targets():
+            targets = self._auto_refresh_targets()
+            if self._compact_collapsed(win):
+                # r146（2026-11-12）: コンパクトで畳んでいる間は、これまでどおり
+                # 現在地だけ。見えていない親カラムのために毎分問い合わせない。
+                # 開いた時は窓が前面に戻るので、その時に全部を短い期限で見直す
+                # （refresh_integrations_on_activate）。
+                targets = targets[:1]
+            for d in targets:
                 mgr.request_status(d)      # 期限切れのものだけ実際に走る
         except Exception as e:
             _mfm_log("integration auto refresh error: %r" % (e,))
+
+    @staticmethod
+    def _compact_collapsed(win) -> bool:
+        """コンパクトモードで畳んでいる（パックだけ出ている）か。
+
+        制御役は遅延生成（MainWindow._compact）なので、ここからは作らない。
+        まだ無ければコンパクトではない。"""
+        try:
+            ctl = getattr(win, "_compact_ctl", None)
+            return bool(ctl is not None and ctl.is_active()
+                        and not ctl.is_expanded())
+        except Exception as _e:
+            _swallow(_e, "ui/browser_panel.py _compact_collapsed")
+            return False
 
     def refresh_integrations_on_activate(self):
         """窓が前面に戻った時の更新（r136）。

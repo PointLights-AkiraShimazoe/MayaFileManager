@@ -445,9 +445,8 @@ def _windows_cmdline(argv: List[str]) -> str:
 
 def _launch_log_path() -> str:
     try:
-        d = os.path.join(os.path.expanduser("~"), ".maya_file_manager", "logs")
-        os.makedirs(d, exist_ok=True)
-        return os.path.join(d, "mfm_launch.log")
+        from core.log_dir import user_log_dir
+        return os.path.join(user_log_dir(), "mfm_launch.log")
     except OSError:
         return ""
 

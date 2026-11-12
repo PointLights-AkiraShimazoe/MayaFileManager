@@ -52,6 +52,11 @@ os.environ["MFM_SETTINGS_ROOT"] = _mk_tmp("mfm_test_settings_")
 # 移行ダイアログ（モーダル）を出してテストが固まる（2026-10-24 の全スイートで
 # 3 本が TIMEOUT）。テストが実機の Maya 設定に依存してはいけない。
 os.environ["MAYA_APP_DIR"] = _mk_tmp("mfm_test_maya_appdir_")
+# r146（2026-11-12）: ログも隔離する。テストが実機のログ置き場へ書いていたので、
+# 走らせるたびに実機の起動の記録（mfm_startup.log）が上書きされ、連携・起動の
+# ログに試験用の行（Maya 2099、MFM-WRAPPER-FAILED-ON-PURPOSE など）が混ざって、
+# 実機の調査の邪魔になっていた。core/log_dir.py が MFM_LOG_DIR を見る。
+os.environ["MFM_LOG_DIR"] = _mk_tmp("mfm_test_logs_")
 
 # r146: ACCESS_VIOLATION（0xC0000005）で «出力なし» のまま落ちるテストが
 # 間欠的に出る（2026-10-14）。素の mayapy は落ちた場所を何も残さないので、
