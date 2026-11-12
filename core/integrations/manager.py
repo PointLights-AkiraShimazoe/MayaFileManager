@@ -6,6 +6,7 @@ request_status() / refresh() / summary() のみ（全て辞書参照 or キュ�
 """
 from core.diag import swallow as _swallow  # r112
 
+import itertools
 import os
 import queue
 import threading
@@ -89,13 +90,22 @@ class IntegrationManager(QObject):
         self._status = {}        # norm(表示パス) -> (provider_key, state)
         self._dir_providers = {} # norm(表示ディレクトリ) -> [(provider, root, eff_dir)]
         self._dir_ts = {}        # norm(表示ディレクトリ) -> 取得時刻
-        self._queue = queue.Queue()
+        # v0.9.20: «初めて見るフォルダ» を «取り直し» より先に処理する。
+        # 自動更新の対象を開いているカラム全部へ広げたので、窓が前面に戻った
+        # 直後は取り直しが何本か並ぶ。その後ろに新しく開いたフォルダが並ぶと、
+        # バッジが出るまで待たされる。優先度 0 = 初回・手動・検出、1 = 取り直し。
+        # 同じ優先度の中は積んだ順（従来どおり）。
+        self._queue = queue.PriorityQueue()
+        self._queue_seq = itertools.count()
         self._pending = set()
         self._lock = threading.Lock()
         self._worker = None
         # r136: 自動更新の有効期限（秒）。0 なら従来どおり
         # «表示時に 1 回だけ、あとは手動更新»。
         self.ttl = 0.0
+
+    def _enqueue(self, kind, arg, prio=0):
+        self._queue.put((prio, next(self._queue_seq), kind, arg))
 
     def _on_action_report(self, ok: bool, label: str, msg: str):
         _ilog("action %s ok=%s: %s" % (label, ok, (msg or "").replace("\n", " | ")[:300]))
@@ -122,12 +132,12 @@ class IntegrationManager(QObject):
             self._worker.start()
         if redetect or not (self._detected or getattr(self, "_detect_queued", False)):
             self._detect_queued = True
-            self._queue.put(("detect", None))
+            self._enqueue("detect", None)
 
     def _loop(self):
         while True:
             try:
-                kind, arg = self._queue.get()
+                _prio, _seq, kind, arg = self._queue.get()
                 if kind == "detect":
                     self._do_detect()
                 elif kind == "status":
@@ -249,7 +259,9 @@ class IntegrationManager(QObject):
                 if age <= 0 or (time.monotonic() - ts) < age:
                     return
             self._pending.add(key)
-        self._queue.put(("status", directory))
+            # 取得済みのものを期限切れで取り直すだけなら後回しでよい
+            prio = 1 if (ts is not None and not force) else 0
+        self._enqueue("status", directory, prio)
 
     def refresh(self, directory: str):
         """手動更新: プロバイダ側のキャッシュも破棄して再取得。"""

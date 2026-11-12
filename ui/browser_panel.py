@@ -1971,10 +1971,34 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         findChildren で集めていたが、QColumnView はカラムを非同期に
         作っては捨てるので、タイマーがその最中に触ると落ちうる。
         実機で test_preset_dirs が ACCESS_VIOLATION で死んだ（2026-10-08）。
-        «今見ているフォルダ» だけにすれば、安全な上に問い合わせも減る。"""
+
+        v0.9.20（ユーザー報告 2026-11-12「連携状態を更新を押さないと、
+        ステータスが変わらない」）: 対象が «今見ているフォルダ»（一番右の
+        カラム）だけだったので、**その左に並んでいる親のカラムは、開いた時の
+        状態のまま二度と更新されなかった**（実機のログで、親カラムの取得が
+        起動時の 1 回きり・26 時間そのままだったのを確認）。
+        親カラムのフォルダは «現在地のパスを上へ辿る» だけで分かるので、
+        ウィジェットには触らない。問い合わせを増やし過ぎないよう、親は
+        «連携先がある» と分かっているフォルダだけにする（管理外のフォルダは
+        取り直しても何も変わらない）。順番は手前（深い方）から。"""
         try:
             cur = self.current_path()
-            return [cur] if cur else []
+            if not cur:
+                return []
+            out = [cur]
+            try:
+                mgr = self._integrations()
+                d = cur
+                for _ in range(64):
+                    parent = os.path.dirname(d)
+                    if not parent or parent == d:
+                        break
+                    d = parent
+                    if mgr.providers_for(d):
+                        out.append(d)
+            except Exception as _e:
+                _swallow(_e, "ui/browser_panel.py _auto_refresh_targets(parents)")
+            return out
         except Exception as _e:
             _swallow(_e, "ui/browser_panel.py _auto_refresh_targets")
             return []
