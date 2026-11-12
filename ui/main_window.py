@@ -21,30 +21,22 @@ Layout (default)
 from core.diag import swallow as _swallow  # r112
 
 import os
-from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 from core.compat import (
-    Qt, Signal, QObject,
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QApplication,
-    QLabel, QComboBox, QToolButton, QMenu, QMenuBar, QSplitter, QMessageBox, QFileDialog, QInputDialog, QDialog,
-    QTimer
+    Qt, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QApplication, QLabel,
+    QMenuBar, QSplitter, QMessageBox, QDialog, QTimer,
 )
 from core.compat import QtCore as _QtCore
 from core.settings_manager import SettingsManager
 from core.bookmark_manager import BookmarkManager
 from core.thumbnail_generator import ThumbnailManager
 from core.maya_version import (
-    MayaInstallation, find_installed_maya_versions,
-    is_running_inside_maya, get_current_maya_version,
-    launch_maya
+    MayaInstallation, find_installed_maya_versions, is_running_inside_maya,
+    get_current_maya_version,
 )
-from core.maya_bridge import (MayaBridge, escape_path, scan_open_ports,
-                              find_free_port, IDENTIFY_CODE, parse_identify)
-from core.blender_version import (BlenderInstallation, find_installed_blender_versions,
-                                  launch_blender)
+from core.maya_bridge import MayaBridge
 from core import blender_bridge as _bl
-from core.file_operations import dcc_for_path
 # r146: メニューの «開く / インポート / リファレンス» が NameError で
 # 無反応だった（r145 でネイティブダイアログをやめた時の取りこぼし）。
 from ui.dialog_util import pick_open_file, pick_directory  # noqa: F401

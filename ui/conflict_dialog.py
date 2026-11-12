@@ -16,7 +16,7 @@ import os
 from datetime import datetime
 
 from core.compat import (
-    Qt, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QCheckBox,
 )
 from core.i18n import tr

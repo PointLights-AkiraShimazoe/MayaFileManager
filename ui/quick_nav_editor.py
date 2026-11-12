@@ -22,13 +22,12 @@ from typing import Dict, List, Optional
 from core.i18n import tr  # r118
 
 from core.compat import (
-    Qt, Signal,
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QLineEdit, QListWidget, QAbstractItemView,
-
-    QMenu, QMessageBox, QFileDialog, QInputDialog
+    Qt, Signal, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QToolButton, QLineEdit, QListWidget, QAbstractItemView,
+    QMessageBox, QFileDialog, QInputDialog,
 )
 from core.compat import QtCore as _QtCore
-from ui.dialog_util import pick_directory, pick_open_file  # r145
+from ui.dialog_util import pick_directory  # r145
 
 
 # ---------------------------------------------------------------------------

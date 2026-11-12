@@ -17,13 +17,12 @@ from typing import List, Tuple, Optional
 from core.i18n import tr  # r118
 
 from core.compat import (
-    Qt, Signal,
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QLineEdit, QComboBox,
-    QSpinBox, QGroupBox, QToolButton,
+    Signal, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QPushButton, QLineEdit, QComboBox, QSpinBox, QGroupBox, QToolButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QMessageBox, QColor
+    QMessageBox, QColor,
 )
-from core.file_operations import RenameRule, batch_rename, rename_path
+from core.file_operations import RenameRule, rename_path
 import os
 
 

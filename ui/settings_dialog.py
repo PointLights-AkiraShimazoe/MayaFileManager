@@ -16,14 +16,12 @@ from typing import Dict, List
 
 from core.i18n import tr  # r118
 
-from ui.dialog_util import pick_directory, pick_open_file  # r145
+from ui.dialog_util import pick_directory  # r145
 from core.compat import (
-    Qt, Signal,
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QLabel, QPushButton, QToolButton, QLineEdit, QComboBox,
-    QCheckBox, QSpinBox, QListWidget, QListWidgetItem,
-    QTabWidget, QFrame, QScrollArea,
-    QMenu, QMessageBox, QInputDialog
+    Qt, Signal, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QFormLayout, QLabel, QPushButton, QToolButton, QLineEdit, QComboBox,
+    QCheckBox, QSpinBox, QListWidget, QListWidgetItem, QTabWidget, QFrame,
+    QMessageBox,
 )
 
 

@@ -14,8 +14,8 @@ import os
 from typing import List, Tuple
 
 from core.compat import (
-    Qt, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
-    QToolButton, QPushButton, QCheckBox, QStackedWidget, QWidget, QTextEdit,
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
+    QPushButton, QCheckBox, QStackedWidget, QWidget, QTextEdit,
 )
 from core.i18n import tr
 from core.file_operations import default_copy_name, apply_replace_name

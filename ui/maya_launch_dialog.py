@@ -18,10 +18,9 @@ import os
 import uuid
 
 from core.compat import (
-    Qt, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QPushButton, QToolButton, QLineEdit, QComboBox, QScrollArea, QFrame,
 )
-from core.diag import swallow as _swallow
 from core.i18n import tr
 
 

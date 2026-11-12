@@ -8,10 +8,7 @@ from core.diag import swallow as _swallow  # r112
 import os
 import threading
 
-from core.compat import (
-    Qt, QObject,
-    QApplication, QMenu, QInputDialog, QRect, QPixmap, QFileInfo, QPoint,
-    QDrag, )
+from core.compat import Qt, QFileInfo
 try:  # PySide6: QtGui / PySide2: QtWidgets
     from core.compat import QIcon
 except ImportError:  # pragma: no cover
@@ -23,11 +20,6 @@ except ImportError:
         from PySide6.QtWidgets import QFileIconProvider
     except ImportError:
         from PySide2.QtWidgets import QFileIconProvider
-from core.file_operations import (
-    open_with_default_app
-)
-
-
 
 
 def _cursor_over_maya_window() -> bool:

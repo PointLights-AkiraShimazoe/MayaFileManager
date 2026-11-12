@@ -17,14 +17,12 @@ from typing import List, Optional
 from core.i18n import tr  # r118
 
 from core.compat import (
-    Qt, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QToolButton, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QGroupBox, QCheckBox,
-    QMenu, QMessageBox, QFileDialog, QInputDialog,
-    QColor, QTextEdit
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
+    QToolButton, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView, QGroupBox, QCheckBox, QMessageBox, QColor, QTextEdit,
 )
 from core.maya_version import is_running_inside_maya
-from ui.dialog_util import pick_directory, pick_open_file  # r145
+from ui.dialog_util import pick_open_file  # r145
 
 
 # ---------------------------------------------------------------------------

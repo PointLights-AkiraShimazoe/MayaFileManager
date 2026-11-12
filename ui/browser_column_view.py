@@ -11,12 +11,10 @@ import os
 
 from core import fast_stat as _fs  # r146: UI スレッドで待たない stat
 from core.compat import (
-    Qt, QObject,
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QComboBox, QLineEdit, QToolButton,
-    QColumnView, QListView,
-    QFrame, QAbstractItemView, QSlider, QSizePolicy,
-    QMenu, QInputDialog, QStyle, QProxyStyle, QModelIndex, QSize, QRect, QPixmap, QPainter, QColor, QFileInfo, QUrl, QMimeData, QPoint,
+    Qt, QObject, QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QComboBox, QLineEdit, QToolButton, QColumnView, QListView, QFrame,
+    QAbstractItemView, QSlider, QSizePolicy, QStyle, QProxyStyle, QModelIndex,
+    QSize, QRect, QPixmap, QPainter, QColor, QUrl, QMimeData, QPoint,
     QFontMetrics, QTimer, QDrag, QCursor, Signal,
 )
 from core.compat import QtCore as _QtCore
@@ -25,38 +23,14 @@ try:  # PySide6: QtGui / PySide2: QtWidgets
     from core.compat import QIcon
 except ImportError:  # pragma: no cover
     QIcon = None
-try:
-    from PySide6.QtGui import QFileIconProvider
-except ImportError:
-    try:
-        from PySide6.QtWidgets import QFileIconProvider
-    except ImportError:
-        from PySide2.QtWidgets import QFileIconProvider
-from core.file_operations import (
-    open_with_default_app
-)
 
-from ui.browser_util import (  # noqa: F401  （再エクスポート）
-    _cursor_over_maya_window, _cursor_over_dcc_window, _time_mod, _MFM_T0,
-    _MFM_STARTUP_LOG, _MFM_FREEZE_LOG, _re_mod, _DRIVE_IN_LABEL_RE,
-    _safe_file_path, _SafeIconProvider, _mfm_slow_note, _MFM_UI_LOG,
-    _MFM_UILOG_ON, _mfm_warn, _mfm_uilog, _MFM_BLOCKING,
-    mfm_blocking_begin, mfm_blocking_end, mfm_blocking_reason,
+from ui.browser_util import (
+    _cursor_over_dcc_window, _time_mod, _safe_file_path, _mfm_slow_note,
+    _mfm_warn, _mfm_uilog, mfm_blocking_begin, mfm_blocking_end,
     mfm_drag_begin as _mfm_drag_begin, mfm_drag_end as _mfm_drag_end,
-    _mfm_timeline, _MFM_LOG_PATH, _MFM_DEBUG, _mfm_log,
+    _MFM_DEBUG, _mfm_log,
 )
-from ui.browser_delegates import (  # noqa: F401  （再エクスポート）
-    _paint_expanded_mark, ThumbnailDelegate, _BADGE_STYLE, _P4_BADGE_PNG,
-    _BADGE_ICON_DIR, _BADGE_PIXMAP_CACHE, _badge_pixmap, _badge_kind,
-    _FileOpNotifier, _INTEG_RESULT_CONNECTED,
-    _on_integration_action_finished, _badge_tooltip, StatusBadgeDelegate,
-)
-from ui.browser_models import (  # noqa: F401  （再エクスポート）
-    FileFilterProxyModel,
-)
-
-
-
+from ui.browser_delegates import ThumbnailDelegate, StatusBadgeDelegate
 
 
 class _DccAwareMime(QMimeData):
@@ -2923,19 +2897,6 @@ class CappedColumnView(QColumnView):
             hl.raise_()
         except Exception as e:
             _mfm_log("drop hilite error: %r" % (e,))
-
-    def _is_dir_index(self, idx) -> bool:
-        """index がフォルダか（I/O なし。モデルが既に持っている情報だけ）。"""
-        try:
-            m = idx.model()
-            src = idx
-            while hasattr(m, "mapToSource"):
-                src = m.mapToSource(src)
-                m = m.sourceModel()
-            return bool(m is not None and hasattr(m, "isDir") and src.isValid()
-                        and m.isDir(src))
-        except Exception:
-            return False
 
     @staticmethod
     def _call_drop_cb(cb, paths, dest, forced, gpos):

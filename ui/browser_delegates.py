@@ -8,37 +8,17 @@ from core.diag import swallow as _swallow  # r112
 import os
 
 from core.compat import (
-    Qt, Signal, QObject,
-    QApplication, QListView,
-    QMenu, QMessageBox, QInputDialog, QStyledItemDelegate, QStyle, QModelIndex, QSize, QRect, QPixmap, QPainter, QColor, QFileInfo, QPoint,
-    QFontMetrics, QDrag, )
+    Qt, Signal, QObject, QApplication, QListView, QMessageBox,
+    QStyledItemDelegate, QStyle, QModelIndex, QSize, QRect, QPixmap, QPainter,
+    QColor, QFontMetrics,
+)
 try:  # PySide6: QtGui / PySide2: QtWidgets
     from core.compat import QIcon
 except ImportError:  # pragma: no cover
     QIcon = None
-try:
-    from PySide6.QtGui import QFileIconProvider
-except ImportError:
-    try:
-        from PySide6.QtWidgets import QFileIconProvider
-    except ImportError:
-        from PySide2.QtWidgets import QFileIconProvider
-from core.file_operations import (
-    open_with_default_app
-)
 from core.thumbnail_generator import ThumbnailManager
 
-from ui.browser_util import (  # noqa: F401  （再エクスポート）
-    _cursor_over_maya_window, _cursor_over_dcc_window, _time_mod, _MFM_T0,
-    _MFM_STARTUP_LOG, _MFM_FREEZE_LOG, _re_mod, _DRIVE_IN_LABEL_RE,
-    _safe_file_path, _SafeIconProvider, _mfm_slow_note, _MFM_UI_LOG,
-    _MFM_UILOG_ON, _mfm_warn, _mfm_uilog, _MFM_BLOCKING,
-    mfm_blocking_begin, mfm_blocking_end, mfm_blocking_reason,
-    _mfm_timeline, _MFM_LOG_PATH, _MFM_DEBUG, _mfm_log,
-)
-
-
-
+from ui.browser_util import _safe_file_path, _mfm_log
 
 
 def _paint_expanded_mark(painter, option, index, is_expanded_fn):

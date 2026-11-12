@@ -24,16 +24,15 @@ Maya が無視する環境がある）。推測で書くと «インストール
   （MainWindow 側の責務。ここは «選ばせて書く» までを持つ）。
 """
 
-import os
 
 from core.compat import (
-    Qt, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QLineEdit, QCheckBox, QScrollArea, QFileDialog,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
+    QCheckBox, QScrollArea,
 )
 from core.diag import swallow as _swallow
 from core.i18n import tr
 from core import maya_bridge as mb
-from ui.dialog_util import pick_directory, pick_open_file  # r145
+from ui.dialog_util import pick_directory  # r145
 
 
 def _tv():

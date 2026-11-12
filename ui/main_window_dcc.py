@@ -19,27 +19,17 @@ Layout (default)
   └─────────────────────────────────────────────────────┘
 """
 from core.diag import swallow as _swallow  # r112
-from core.diag import diag_off as _diag_off  # r146 切り分け用
 from core.compat import is_alive as _is_alive
 
 import os
 from pathlib import Path
-from typing import Optional, List
 
 from core.compat import (
-    Qt, Signal, QObject,
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QLabel, QComboBox, QToolButton, QMenu, QMenuBar, QSplitter, QMessageBox, QFileDialog, QInputDialog, QDialog,
-    QApplication, QPushButton, QTextEdit,
-    QTimer
+    Qt, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QInputDialog, QDialog,
+    QApplication, QPushButton, QTextEdit, QTimer,
 )
-from core.settings_manager import SettingsManager
-from core.bookmark_manager import BookmarkManager
-from core.thumbnail_generator import ThumbnailManager
 from core.maya_version import (
-    MayaInstallation, find_installed_maya_versions,
-    is_running_inside_maya, get_current_maya_version,
-    launch_maya
+    MayaInstallation, find_installed_maya_versions, launch_maya,
 )
 from core.maya_bridge import (MayaBridge, escape_path, scan_open_ports,
                               scan_ports, find_free_port, IDENTIFY_CODE,
@@ -56,11 +46,7 @@ def _tv():
     ImportError（cannot import name 'qss_vars'）になる（r82 で実害）。"""
     from core.theme_engine import qss_vars
     return qss_vars()
-from ui.dialog_util import pick_directory, pick_open_file  # r145
-from ui.preset_editor import ReferencePresetEditor
-from ui.settings_dialog import SettingsDialog
-from ui.batch_rename_dialog import BatchRenameDialog
-from ui.reference_editor import ReferenceEditor
+from ui.dialog_util import pick_open_file  # r145
 
 
 # ---------------------------------------------------------------------------
@@ -1605,10 +1591,6 @@ class MainWindowDccMixin:
             return False
         if not self._dcc_once(kind, path, app):
             return False
-        try:
-            key = (kind, os.path.normcase(os.path.abspath(path)), app or "")
-        except Exception:
-            key = (kind, path, app or "")
         self._dcc_begin_op(kind, path, app)
         try:
             fn()

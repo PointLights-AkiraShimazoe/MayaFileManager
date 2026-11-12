@@ -31,7 +31,7 @@ except ImportError:  # PySide2
 
 from core import archive_browse as ab
 from core.i18n import tr
-from ui.dialog_util import pick_directory, pick_open_file  # r145
+from ui.dialog_util import pick_directory  # r145
 
 INNER_ROLE = Qt.UserRole + 11       # 書庫内パス（"/" 区切り）
 ISDIR_ROLE = Qt.UserRole + 12

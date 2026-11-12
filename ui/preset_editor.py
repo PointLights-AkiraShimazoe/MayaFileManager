@@ -19,14 +19,13 @@ from typing import Any, Dict, List, Optional
 from core.i18n import tr  # r118
 
 from core.compat import (
-    Qt, Signal,
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QLineEdit, QTextEdit, QComboBox,
-    QCheckBox, QListWidget, QAbstractItemView,
-    QTabWidget, QFrame, QMenu, QMessageBox, QFileDialog, QInputDialog,
-    QPoint
+    Qt, Signal, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QToolButton, QLineEdit, QTextEdit, QComboBox, QCheckBox,
+    QListWidget, QAbstractItemView, QTabWidget, QFrame, QMessageBox,
+    QInputDialog,
 )
 from core.maya_version import is_running_inside_maya
-from ui.dialog_util import pick_directory, pick_open_file  # r145
+from ui.dialog_util import pick_open_file  # r145
 
 
 # ---------------------------------------------------------------------------

@@ -38,9 +38,8 @@ from core.diag import swallow as _swallow
 from core.diag import diag_off as _diag_off  # r146 切り分け用（MFM_DIAG=no_native_cursor）
 
 from core.compat import (
-    Qt, QObject, QTimer, QWidget, QHBoxLayout, QToolButton, QSize,
-    QRect, QPoint, QApplication, QLineEdit, QPainter, QColor, QCursor,
-    QtCore,
+    Qt, QObject, QTimer, QWidget, QHBoxLayout, QToolButton, QSize, QRect,
+    QPoint, QApplication, QPainter, QColor, QCursor,
 )
 import os
 from core.i18n import tr

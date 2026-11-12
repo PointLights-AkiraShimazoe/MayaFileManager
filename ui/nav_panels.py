@@ -21,30 +21,13 @@ Layout (default)
 from core.diag import swallow as _swallow  # r112
 from core.compat import is_alive as _is_alive  # r146
 
-import os
-from pathlib import Path
-from typing import Optional, List
+from typing import List
 
 from core.compat import (
-    Qt, Signal, QObject,
-    QMainWindow, QWidget, QHBoxLayout,
-    QLabel, QComboBox, QToolButton, QMenu, QMenuBar, QSplitter, QMessageBox, QFileDialog, QInputDialog, QDialog,
-    QTimer, QScrollArea, QFrame, QSizePolicy
+    Qt, Signal, QObject, QWidget, QHBoxLayout, QLabel, QComboBox, QToolButton,
+    QScrollArea, QFrame, QSizePolicy,
 )
 from core.settings_manager import SettingsManager
-from core.bookmark_manager import BookmarkManager
-from core.thumbnail_generator import ThumbnailManager
-from core.maya_version import (
-    MayaInstallation, find_installed_maya_versions,
-    is_running_inside_maya, get_current_maya_version,
-    launch_maya
-)
-from core.maya_bridge import (MayaBridge, escape_path, scan_open_ports,
-                              find_free_port, IDENTIFY_CODE, parse_identify)
-from core.blender_version import (BlenderInstallation, find_installed_blender_versions,
-                                  launch_blender)
-from core import blender_bridge as _bl
-from core.file_operations import dcc_for_path
 from core.i18n import tr
 def _tv():
     """テーマトークン（色・形状・書体）。**遅延 import** すること。
@@ -53,10 +36,6 @@ def _tv():
     ImportError（cannot import name 'qss_vars'）になる（r82 で実害）。"""
     from core.theme_engine import qss_vars
     return qss_vars()
-from ui.preset_editor import ReferencePresetEditor
-from ui.settings_dialog import SettingsDialog
-from ui.batch_rename_dialog import BatchRenameDialog
-from ui.reference_editor import ReferenceEditor
 
 
 # ---------------------------------------------------------------------------

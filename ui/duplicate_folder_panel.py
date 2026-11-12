@@ -20,20 +20,17 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from core.i18n import tr
-from ui.dcc_header import glyph_icon, dcc_app_icon  # r142  # r118
+from ui.dcc_header import glyph_icon  # r142  # r118
 
 from core.compat import (
-    Qt, Signal,
-    QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QToolButton, QLineEdit, QSpinBox, QTreeWidget, QTreeWidgetItem, QAbstractItemView,
-    QMenu, QMessageBox, QFileDialog, QInputDialog,
-    QColor, QApplication,
-    QThread, QObject
+    Qt, Signal, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QToolButton, QLineEdit, QSpinBox, QTreeWidget, QTreeWidgetItem,
+    QAbstractItemView, QMenu, QMessageBox, QColor, QThread, QObject,
 )
 from core.file_operations import (
     copy_items, move_items, reveal_in_explorer, format_size, FileOperationError
 )
-from ui.dialog_util import pick_directory, pick_open_file  # r145
+from ui.dialog_util import pick_directory  # r145
 
 
 # ---------------------------------------------------------------------------

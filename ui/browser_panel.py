@@ -6,79 +6,43 @@
 r110 でモジュールを分割した。旧 browser_panel.* の名前は互換のため
 ここで再エクスポートしているので、既存の import は変更不要。"""
 from core.diag import swallow as _swallow  # r112
-from core.diag import diag_off as _diag_off  # r146 切り分け用
 from core.i18n import tr  # r118: モジュールレベルで提供（ローカル import 不要）
 
 import os
 from core import fast_stat as _fs  # r146: UI スレッドで待たない stat
-import struct
 import threading
 from pathlib import Path
 from typing import List, Optional, Callable
 
 from core.compat import (
-    Qt, Signal, QObject,
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QComboBox, QLineEdit, QToolButton,
-    QSplitter, QListView,
-    QSizePolicy, QFrame, QAbstractItemView, QFileSystemModel, QMenu, QAction, QMessageBox, QFileDialog, QInputDialog, QDialog,
-    QModelIndex, QSize, QRect, QPixmap, QDir, QFileInfo, QUrl, QMimeData, QPoint,
-    QTimer, QKeySequence, QDrag, )
+    Qt, Signal, QObject, QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+    QComboBox, QToolButton, QSplitter, QListView, QSizePolicy, QFrame,
+    QAbstractItemView, QFileSystemModel, QMenu, QFileDialog, QModelIndex,
+    QSize, QRect, QPixmap, QDir, QUrl, QPoint, QTimer,
+)
 from core.compat import QtCore as _QtCore
-from core.compat import is_alive
-try:  # PySide6: QtGui / PySide2: QtWidgets
-    from core.compat import QIcon
-except ImportError:  # pragma: no cover
-    QIcon = None
-try:
-    from PySide6.QtGui import QFileIconProvider
-except ImportError:
-    try:
-        from PySide6.QtWidgets import QFileIconProvider
-    except ImportError:
-        from PySide2.QtWidgets import QFileIconProvider
 from core.path_guard import PathProber, DriveScanner, invalidate_cache
-# r146: ここを «メソッドの中だけ» で import していたため、_copy_dialog /
-# _move_dialog が NameError で無反応になっていた（r145 の取りこぼし）。
-# 共通ダイアログのヘルパはモジュール先頭で取り込む。
-from ui.dialog_util import pick_directory, pick_open_file  # noqa: F401
 from core.file_operations import (
-    open_with_default_app, reveal_in_explorer,
-    copy_items, move_items, get_file_type_category, format_size,
-    resolve_windows_shortcut,
-    is_read_only, set_read_only,
-    OperationCancelled as _OperationCancelled,
-    MAYA_EXTENSIONS
+    open_with_default_app, resolve_windows_shortcut,
 )
 from core.thumbnail_generator import ThumbnailManager
 
-from ui.dcc_header import glyph_icon, integration_icon  # r142: アイコン列を揃える
 from ui.browser_util import (  # noqa: F401  （再エクスポート）
-    _cursor_over_maya_window, _cursor_over_dcc_window, _time_mod, _MFM_T0,
-    _MFM_STARTUP_LOG, _MFM_FREEZE_LOG, _re_mod, _DRIVE_IN_LABEL_RE,
-    _safe_file_path, _SafeIconProvider, _mfm_slow_note, _MFM_UI_LOG,
-    _MFM_UILOG_ON, _mfm_warn, _mfm_uilog, _MFM_BLOCKING,
-    mfm_blocking_begin, mfm_blocking_end, mfm_blocking_reason,
-    _mfm_timeline, _MFM_LOG_PATH, _MFM_DEBUG, _mfm_log, classify_url,
+    _time_mod, _MFM_FREEZE_LOG, _safe_file_path, _SafeIconProvider,
+    _mfm_slow_note, mfm_blocking_begin, mfm_blocking_end, mfm_blocking_reason,
+    _mfm_timeline, _MFM_DEBUG, _mfm_log, classify_url,
 )
 from ui.browser_delegates import (  # noqa: F401  （再エクスポート）
-    _paint_expanded_mark, ThumbnailDelegate, _BADGE_STYLE, _P4_BADGE_PNG,
-    _BADGE_ICON_DIR, _BADGE_PIXMAP_CACHE, _badge_pixmap, _badge_kind,
-    _FileOpNotifier, _INTEG_RESULT_CONNECTED,
-    _on_integration_action_finished, _badge_tooltip, StatusBadgeDelegate,
+    ThumbnailDelegate, _P4_BADGE_PNG, _badge_pixmap, _badge_kind,
+    _INTEG_RESULT_CONNECTED, _on_integration_action_finished, _badge_tooltip,
+    StatusBadgeDelegate,
 )
 from ui.browser_models import (  # noqa: F401  （再エクスポート）
     FileFilterProxyModel,
 )
 from ui.browser_column_view import (  # noqa: F401  （再エクスポート）
-    CappedColumnView, _DccAwareMime, _ColumnSizePopup,
-    _ColumnResizeHandle, _SizeButtonHover,
+    CappedColumnView, _DccAwareMime, _ColumnResizeHandle,
 )
-
-
-
-from ui.browser_models import FileFilterProxyModel  # noqa: F401
-
 
 from ui.browser_fileops_mixin import FileOpsMixin
 from ui.browser_rename_mixin import RenameMixin
@@ -1972,7 +1936,7 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
         作っては捨てるので、タイマーがその最中に触ると落ちうる。
         実機で test_preset_dirs が ACCESS_VIOLATION で死んだ（2026-10-08）。
 
-        v0.9.20（ユーザー報告 2026-11-12「連携状態を更新を押さないと、
+        r146（ユーザー報告 2026-11-12「連携状態を更新を押さないと、
         ステータスが変わらない」）: 対象が «今見ているフォルダ»（一番右の
         カラム）だけだったので、**その左に並んでいる親のカラムは、開いた時の
         状態のまま二度と更新されなかった**（実機のログで、親カラムの取得が
