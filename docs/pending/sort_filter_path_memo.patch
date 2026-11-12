@@ -1,0 +1,221 @@
+diff --git a/ui/browser_models.py b/ui/browser_models.py
+index 14f43a4..94ca870 100644
+--- a/ui/browser_models.py
++++ b/ui/browser_models.py
+@@ -29,7 +29,8 @@ from ui.browser_delegates import _badge_tooltip  # noqa: F401
+ from ui.browser_util import (  # noqa: F401  （再エクスポート）
+     _cursor_over_maya_window, _cursor_over_dcc_window, _time_mod, _MFM_T0,
+     _MFM_STARTUP_LOG, _MFM_FREEZE_LOG, _re_mod, _DRIVE_IN_LABEL_RE,
+-    _safe_file_path, _SafeIconProvider, _mfm_slow_note, _MFM_UI_LOG,
++    _safe_file_path, _safe_child_prefix, _join_child_prefix,
++    _SafeIconProvider, _mfm_slow_note, _MFM_UI_LOG,
+     _MFM_UILOG_ON, _mfm_warn, _mfm_uilog, _MFM_BLOCKING,
+     mfm_blocking_begin, mfm_blocking_end, mfm_blocking_reason,
+     _mfm_timeline, _MFM_LOG_PATH, _MFM_DEBUG, _mfm_log,
+@@ -76,6 +77,88 @@ class FileFilterProxyModel(QSortFilterProxyModel):
+         self._hidden_timer.setSingleShot(True)
+         self._hidden_timer.setInterval(250)
+         self._hidden_timer.timeout.connect(self._flush_hidden_results)
++        # v0.9.20: 親フォルダのパスの覚え書き（並べ替え・絞り込みの軽量化）。
++        # 下の «親パスの覚え書き» を参照。
++        self._pp_src = None         # 覚え書きを結び付けてあるソースモデル
++        self._pp_ok = False         # 捨てる合図をつなげた時だけ使う
++        self._pp_armed = False      # «この回が終わったら捨てる» を予約済みか
++        self._pp_raw = {}           # 親の internalId -> 子のパスの頭（生）
++        self._pp_norm = {}          # 親の internalId -> 親のパス（_norm 済み）
++
++    # ── 親パスの覚え書き（v0.9.20）──────────────────────────────────
++    # lessThan と filterAcceptsRow は 1 回の移動で数万回呼ばれる。以前は
++    # そのたびに «同じ親フォルダ» のパスを根まで辿って組み立て、正規化して
++    # いた（実測で移動中の処理時間の半分以上）。親ごとに 1 回だけ作って
++    # 覚えておく。結果の文字列は従来と同じ。
++    #
++    # 覚え書きの鍵は親の internalId（＝QFileSystemModel のノード）。ノードが
++    # 消えて同じ番号が別のフォルダに使い回されると古い答えを返してしまうので、
++    #   ・行が消える／動く／作り直される合図（ソースモデルのシグナル）で全部捨てる
++    #   ・それとは別に、イベントの 1 回りが終わるたびに全部捨てる
++    # の二重にしてある。合図をつなげなかった時は覚え書き自体を使わない
++    # （速さより正しさ）。
++    _PP_CLEAR_SIGNALS = (
++        "rowsAboutToBeRemoved", "rowsRemoved", "rowsAboutToBeMoved", "rowsMoved",
++        "modelAboutToBeReset", "modelReset", "layoutAboutToBeChanged",
++        "layoutChanged", "fileRenamed", "rootPathChanged")
++
++    def _pp_clear(self, *_a):
++        self._pp_raw.clear()
++        self._pp_norm.clear()
++        self._pp_armed = False
++
++    def _pp_bind(self, sm) -> bool:
++        """覚え書きを sm に結び付ける。使ってよければ True。"""
++        if self._pp_src is sm:
++            return self._pp_ok
++        self._pp_clear()
++        self._pp_src = sm
++        ok = sm is not None
++        if ok:
++            for name in self._PP_CLEAR_SIGNALS:
++                try:
++                    getattr(sm, name).connect(self._pp_clear)
++                except Exception as _e:
++                    # 行が消える合図は 1 つでも欠けたら使わない。名前変更などの
++                    # 補助の合図は、そのモデルに無ければ無いで構わない。
++                    if name in ("rowsAboutToBeRemoved", "rowsRemoved",
++                                "modelAboutToBeReset", "modelReset"):
++                        ok = False
++                        _swallow(_e, "ui/browser_models.py _pp_bind(%s)" % name)
++        self._pp_ok = ok
++        return ok
++
++    def _pp_arm(self):
++        if not self._pp_armed:
++            self._pp_armed = True
++            QTimer.singleShot(0, self._pp_clear)
++
++    def _parent_norm_path(self, sm, parent) -> str:
++        """self._norm(_safe_file_path(sm, parent)) と同じ値（覚え書き付き）。"""
++        if not self._pp_bind(sm):
++            return self._norm(_safe_file_path(sm, parent))
++        key = parent.internalId()
++        hit = self._pp_norm.get(key)
++        if hit is None:
++            hit = self._norm(_safe_file_path(sm, parent))
++            self._pp_norm[key] = hit
++            self._pp_arm()
++        return hit
++
++    def _child_raw_path(self, sm, parent, index, name) -> str:
++        """_safe_file_path(sm, index) と同じ値。parent は index の親、
++        name は sm.fileName(index)（どちらも呼び出し側が既に持っている）。"""
++        if not self._pp_bind(sm) or not index.isValid():
++            return _safe_file_path(sm, index)
++        key = parent.internalId()
++        prefix = self._pp_raw.get(key)
++        if prefix is None:
++            prefix = _safe_child_prefix(sm, parent)
++            if prefix is None:
++                return _safe_file_path(sm, index)
++            self._pp_raw[key] = prefix
++            self._pp_arm()
++        return _join_child_prefix(prefix, name)
+ 
+     @staticmethod
+     def _norm(p: str) -> str:
+@@ -217,11 +300,12 @@ class FileFilterProxyModel(QSortFilterProxyModel):
+                               _safe_file_path(source_model, source_parent), name))
+ 
+         fp = None
++        raw_fp = None           # v0.9.20: 1 行につき 1 回だけ組み立てて使い回す
+         protected = False
+         if self._force_visible:
+             try:
+                 _t3 = _pc()
+-                raw_fp = _safe_file_path(source_model, index)
++                raw_fp = self._child_raw_path(source_model, source_parent, index, name)
+                 _t4 = _pc()
+                 if _t4 - _t3 > 0.5:
+                     _mfm_slow_note("filterAcceptsRow filePath()=%.2fs path=%r"
+@@ -238,7 +322,8 @@ class FileFilterProxyModel(QSortFilterProxyModel):
+                 return False
+             if fp is None:
+                 try:
+-                    fp = self._norm(_safe_file_path(source_model, index))
++                    raw_fp = self._child_raw_path(source_model, source_parent, index, name)
++                    fp = self._norm(raw_fp)
+                 except Exception:
+                     fp = ""
+             is_hidden = self._hidden_cache.get(fp)
+@@ -247,7 +332,8 @@ class FileFilterProxyModel(QSortFilterProxyModel):
+                 # statするとネットワーク先で初回パスが数十秒フリーズする）。
+                 # 隠しと判明した時だけ後から一括で再評価される。
+                 try:
+-                    raw = _safe_file_path(source_model, index)
++                    raw = raw_fp if raw_fp is not None else \
++                        self._child_raw_path(source_model, source_parent, index, name)
+                 except Exception:
+                     raw = ""
+                 if raw:
+@@ -272,7 +358,7 @@ class FileFilterProxyModel(QSortFilterProxyModel):
+         # 一致は «部分一致(substring)»。例: "c00" は "c010" にはヒットしない。
+         if (self._col_filters or self._col_excludes) \
+                 and source_parent.isValid() and not protected:
+-            pkey = self._norm(_safe_file_path(source_model, source_parent))
++            pkey = self._parent_norm_path(source_model, source_parent)
+             cf = self._col_filters.get(pkey)
+             if cf and cf not in name_l:
+                 return False
+@@ -423,8 +509,13 @@ class FileFilterProxyModel(QSortFilterProxyModel):
+                 # ドライブ階層: isDir()/data() は切断ドライブで stat（21秒）を
+                 # 起こすため使わず、fileName（I/Oなし）の比較のみ
+                 return sm.fileName(left).lower() < sm.fileName(right).lower()
+-            ppath = self._norm(_safe_file_path(sm, parent))
+-            key, asc = self._col_sorts.get(ppath, ("name", True))
++            # v0.9.20: カラム別の並びが 1 つも無ければ親のパスは要らない
++            # （引いても必ず既定値）。あれば覚え書きから引く。
++            if self._col_sorts:
++                key, asc = self._col_sorts.get(
++                    self._parent_norm_path(sm, parent), ("name", True))
++            else:
++                key, asc = "name", True
+             an = (sm.data(left) or "").lower()
+             bn = (sm.data(right) or "").lower()
+             # フォルダは原則 «常に先頭»（昇順/降順に関わらず）。
+diff --git a/ui/browser_util.py b/ui/browser_util.py
+index 63199e1..faf2906 100644
+--- a/ui/browser_util.py
++++ b/ui/browser_util.py
+@@ -162,6 +162,54 @@ def _safe_file_path(model, index) -> str:
+         return ""
+ 
+ 
++def _safe_child_prefix(model, parent_index):
++    """parent_index の «子» のパスの頭を返す（v0.9.20、並べ替え・絞り込みの軽量化）。
++
++    約束: 有効な子 index について、必ず
++        _safe_file_path(model, 子) == _join_child_prefix(これ, model.fileName(子))
++    になる。組み立て方は _safe_file_path と同じ（fileName を親方向へ辿る・
++    ドライブ名の正規化）。**_safe_file_path を直す時は必ずこちらも揃えること。**
++    test_sort_filter_path_memo が実際のモデルで両者を突き合わせている。
++
++    なぜ要るか: 並べ替え（lessThan）と絞り込み（filterAcceptsRow）は 1 回の
++    移動で数万回呼ばれ、そのたびに «同じ親» のパスを根まで辿り直していた。
++    親の分を 1 回だけ作っておけば、子は文字列を 1 回つなぐだけで済む。
++
++    親が無効、または組み立てに失敗した時は None（呼び出し側は従来の
++    _safe_file_path へ落ちる）。"""
++    try:
++        if parent_index is None or not parent_index.isValid():
++            return None
++        names = []
++        idx = parent_index
++        while idx.isValid():
++            names.append(model.fileName(idx))
++            idx = idx.parent()
++        names.reverse()
++        if not names:
++            return None
++        top = names[0]
++        m = _DRIVE_IN_LABEL_RE.search(top)
++        if m:
++            names[0] = m.group(1).upper() + ":"
++        elif len(top) == 2 and top[1] == ":":
++            names[0] = top[0].upper() + ":"
++        if names[0] == "/":                     # POSIX ルート
++            return "/" + "".join(n + "/" for n in names[1:])
++        return "/".join(names) + "/"
++    except Exception:
++        return None
++
++
++def _join_child_prefix(prefix: str, name: str) -> str:
++    """_safe_child_prefix の頭に子の名前をつないで、_safe_file_path と同じ
++    文字列にする（末尾の «2 文字で : 終わりなら / を足す» まで同じ）。"""
++    p = prefix + name
++    if len(p) == 2 and p.endswith(":"):
++        p += "/"
++    return p
++
++
+ class _SafeIconProvider(QFileIconProvider):
+     """シェル拡張を走らせないアイコンプロバイダ（r77）。
+ 

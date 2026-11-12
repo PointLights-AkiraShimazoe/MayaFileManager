@@ -1,0 +1,277 @@
+# -*- coding: utf-8 -*-
+"""v0.9.20: 並べ替え・絞り込みの «親パスの覚え書き» は、結果を一切変えない。
+
+軽量化の中身: lessThan と filterAcceptsRow は 1 回の移動で数万回呼ばれ、
+そのたびに «同じ親フォルダ» のパスを根まで辿って組み立てていた。親ごとに
+1 回だけ作って覚えておく（FileFilterProxyModel._pp_*）。
+
+守ること（＝このテストが見ること）:
+  1. 新しい組み立て（頭＋名前）は、従来の _safe_file_path と **同じ文字列**
+     （実際のモデルの全行、Windows のドライブ表記の偽モデル）
+  2. プロキシ経由の値も従来の式と同じ
+  3. 並び（フォルダが先・名前順・カラム別の逆順・日付は混ぜる）と絞り込み
+     （ドット始まり・カラム別フィルタ・排他フィルタ）は従来どおり
+  4. フォルダが消えたら覚え書きは捨てられる（古い答えを返さない）
+  5. 親のパスを辿り直す回数が、比較の回数に比べて十分少ない
+"""
+import os
+import time
+from _common import *  # noqa: F401,F403
+from _common import app, sm, make_panel, tmpdir, finish, run, QTest, columns
+
+import ui.browser_models as bm
+from ui.browser_util import (_safe_file_path, _safe_child_prefix,
+                             _join_child_prefix)
+
+fails = []
+
+
+def check(cond, msg):
+    print(("OK   " if cond else "FAIL ") + msg, flush=True)
+    if not cond:
+        fails.append(msg)
+
+
+# ── 偽モデル: Windows のドライブ表記などを Linux 上でも確かめる ───────
+class _Idx(object):
+    def __init__(self, name=None, parent=None):
+        self.name, self._parent = name, parent
+
+    def isValid(self):
+        return self.name is not None
+
+    def parent(self):
+        return self._parent if self._parent is not None else _Idx()
+
+
+class _Model(object):
+    @staticmethod
+    def fileName(idx):
+        return idx.name
+
+
+def _chain(*names):
+    idx = None
+    for n in names:
+        idx = _Idx(n, idx)
+    return idx
+
+
+def _col_names(b, folder):
+    for cv in columns(b):
+        if os.path.normcase(os.path.abspath(getattr(cv, "_mfm_folder_path", "") or "")) \
+                == os.path.normcase(os.path.abspath(folder)):
+            m, ri = cv.model(), cv.rootIndex()
+            return [m.index(r, 0, ri).data() for r in range(m.rowCount(ri))]
+    return None
+
+
+def _wait_names(b, folder, n, timeout=6000):
+    waited = 0
+    while waited < timeout:
+        got = _col_names(b, folder)
+        if got is not None and len(got) == n:
+            return got
+        QTest.qWait(100)
+        waited += 100
+    return _col_names(b, folder)
+
+
+def s1():
+    # ── 1) 偽モデル: 頭＋名前 == 従来の組み立て ─────────────────────
+    cases = [
+        ("C:", "Users"), ("c:", "Users", "owner"), ("C:", "a", "b", "c.ma"),
+        (u"ローカル ディスク (C:)", "Projects", u"日本語 フォルダ", "x.ma"),
+        (u"Local Disk (d:)", "x"), ("OS (C:)", "a b", ".hidden"),
+        ("/", "home", "user", "file.txt"), ("/", "x"),
+        ("//server", "share", "dir", "f.png"), ("Z:", ":"), ("X", "y"),
+        ("C:", "trailing.", "name with  spaces ", u"ｶﾅ.ma"),
+    ]
+    bad = []
+    for names in cases:
+        child = _chain(*names)
+        slow = _safe_file_path(_Model, child)
+        prefix = _safe_child_prefix(_Model, child.parent())
+        fast = _join_child_prefix(prefix, names[-1]) if prefix is not None else None
+        if fast != slow:
+            bad.append((names, slow, fast))
+    check(not bad, "偽モデル %d 通り: 頭＋名前が従来の組み立てと一致 %s"
+          % (len(cases), bad[:2] or ""))
+    check(_safe_child_prefix(_Model, _Idx()) is None,
+          "親が無効なら頭は作らない（従来の道へ落ちる）")
+    check(_safe_file_path(_Model, _chain("C:")) == "C:/"
+          and _safe_child_prefix(_Model, _chain("C:")) == "C:/",
+          "ドライブ直下の頭は «C:/»")
+
+    # ── 2) 実際のモデル ─────────────────────────────────────────────
+    root = tmpdir()
+    work = os.path.join(root, "work")
+    os.makedirs(os.path.join(work, "b_dir", "inner"))
+    os.makedirs(os.path.join(work, "a_dir"))
+    os.makedirs(os.path.join(work, "gone_dir"))
+    for n in ("c_file.ma", "A_file.ma", "b_file.txt", ".dot_file", "z_keep.ma"):
+        open(os.path.join(work, n), "w").close()
+    big = os.path.join(root, "big")
+    os.makedirs(big)
+    for i in range(300):
+        open(os.path.join(big, "f_%03d.ma" % ((i * 7919) % 300)), "w").close()
+    # 日付順（混ぜる）用: フォルダを一番新しくする
+    old_t = time.time() - 5000
+    for n in ("c_file.ma", "A_file.ma", "b_file.txt", "z_keep.ma"):
+        os.utime(os.path.join(work, n), (old_t, old_t))
+
+    b = make_panel(1200, 700)
+    b.navigate_to(os.path.join(work, "b_dir"))
+    QTest.qWait(900)
+    proxy, fsm = b._proxy, b._fs_model
+
+    names = _wait_names(b, work, 7)
+    exp = ["a_dir", "b_dir", "gone_dir", "A_file.ma", "b_file.txt", "c_file.ma",
+           "z_keep.ma"]
+    check(names == exp, "既定の並び: フォルダが先・名前順・ドット始まりは出ない（%s）"
+          % (names,))
+
+    # 読み込み済みの全行で、頭＋名前 == _safe_file_path
+    mism, seen = [], [0]
+
+    def walk(parent, depth=0):
+        if depth > 12:
+            return
+        for r in range(fsm.rowCount(parent)):
+            ci = fsm.index(r, 0, parent)
+            seen[0] += 1
+            slow = _safe_file_path(fsm, ci)
+            if parent.isValid():
+                pre = _safe_child_prefix(fsm, parent)
+                fast = _join_child_prefix(pre, fsm.fileName(ci)) if pre is not None else None
+                via = proxy._child_raw_path(fsm, parent, ci, fsm.fileName(ci))
+                pn = proxy._parent_norm_path(fsm, parent)
+                if fast != slow or via != slow \
+                        or pn != proxy._norm(_safe_file_path(fsm, parent)):
+                    mism.append((slow, fast, via))
+            if seen[0] < 4000:
+                walk(ci, depth + 1)
+    from core.compat import QModelIndex
+    walk(QModelIndex())
+    check(seen[0] > 10 and not mism,
+          "実際のモデル %d 行: 覚え書き経由の値が従来の式と一致 %s"
+          % (seen[0], mism[:2] or ""))
+    check(proxy._pp_ok is True, "捨てる合図をソースモデルにつなげている")
+
+    # 1 回りが終わったら空になっている
+    QTest.qWait(50)
+    check(not proxy._pp_raw and not proxy._pp_norm,
+          "イベントの 1 回りが終わると覚え書きは空（%d / %d）"
+          % (len(proxy._pp_raw), len(proxy._pp_norm)))
+
+    # ── 3) カラム別の並び・絞り込みは従来どおり ───────────────────────
+    proxy.set_column_sort(work, "name", False)
+    QTest.qWait(300)
+    names = _col_names(b, work)
+    check(names == ["gone_dir", "b_dir", "a_dir", "z_keep.ma", "c_file.ma",
+                    "b_file.txt", "A_file.ma"],
+          "カラム別の逆順: フォルダは先のまま、それぞれ逆順（%s）" % (names,))
+    inner = _col_names(b, os.path.join(work, "b_dir"))
+    check(inner == ["inner"], "他のカラムには効かない（%s）" % (inner,))
+
+    proxy.set_column_sort(work, "date", False)
+    QTest.qWait(300)
+    names = _col_names(b, work)
+    check(names is not None and set(names[:3]) == {"a_dir", "b_dir", "gone_dir"}
+          and len(names) == 7,
+          "日付順（新しい順）: 新しいフォルダが古いファイルより前（%s）" % (names,))
+    proxy.set_column_sort(work, "name", True)
+
+    proxy.set_column_filter(work, "_file")
+    QTest.qWait(300)
+    names = _col_names(b, work)
+    check(names == ["b_dir", "A_file.ma", "b_file.txt", "c_file.ma"],
+          "カラム別フィルタ: 部分一致で絞る。今いる経路のフォルダは残す（%s）" % (names,))
+    proxy.set_column_filter(work, "")
+    proxy.set_column_exclude(work, ".ma")
+    QTest.qWait(300)
+    names = _col_names(b, work)
+    check(names == ["a_dir", "b_dir", "gone_dir", "b_file.txt"],
+          "排他フィルタ: 一致したものだけ除く（%s）" % (names,))
+    proxy.set_column_exclude(work, "")
+    QTest.qWait(200)
+
+    proxy.set_show_hidden(True)
+    QTest.qWait(300)
+    names = _col_names(b, work)
+    check(names is not None and ".dot_file" in names,
+          "隠しを表示にするとドット始まりも出る（%s）" % (names,))
+    proxy.set_show_hidden(False)
+    QTest.qWait(300)
+
+    # ── 4) フォルダが消えたら覚え書きは捨てられる ─────────────────────
+    gi = fsm.index(os.path.join(work, "gone_dir"))
+    wi = fsm.index(work)
+    # «合図だけ» で捨てられること（タイマー任せにしない）を見る:
+    # タイマーの予約は済んだことにしておく＝この後タイマーは掛からない。
+    # 合図がつながっていなければ、覚え書きは残ったままになる。
+    proxy._pp_armed = True
+    proxy._parent_norm_path(fsm, wi)
+    proxy._child_raw_path(fsm, wi, gi, fsm.fileName(gi))
+    check(bool(proxy._pp_raw) and bool(proxy._pp_norm), "覚え書きに入る")
+    QTest.qWait(150)
+    if proxy._pp_raw and proxy._pp_norm:
+        print("OK   （前提）タイマーが掛かっていなければ、何も起きない間は残る", flush=True)
+    else:
+        # モデルが自分から並べ直しの合図を出すと、ここで先に捨てられる（正しい動き）。
+        # その時は «合図だけで捨てる» の確認にならないので、断っておく。
+        print("NOTE 待っている間にモデルの合図で捨てられた（合図の経路は動いている）", flush=True)
+    os.rmdir(os.path.join(work, "gone_dir"))
+    names = _wait_names(b, work, 6)
+    QTest.qWait(150)
+    check(not proxy._pp_raw and not proxy._pp_norm,
+          "フォルダが消えた合図で覚え書きを全部捨てる（%d / %d）"
+          % (len(proxy._pp_raw), len(proxy._pp_norm)))
+    check(names == ["a_dir", "b_dir", "A_file.ma", "b_file.txt", "c_file.ma",
+                    "z_keep.ma"],
+          "実際にフォルダを消した後の並びも正しい（%s）" % (names,))
+
+    # ── 5) 親のパスを辿り直す回数が、比較の回数より十分少ない ──────────
+    # lessThan は 1 回の比較で isDir を 2 回呼ぶ（左右）。C++ から呼ばれる
+    # lessThan 自体は差し替えて数えられないので、isDir の回数から割り出す。
+    calls = {"sfp": 0, "isdir": 0}
+    orig_sfp = bm._safe_file_path
+    orig_isdir = fsm.isDir
+
+    def _count_sfp(model, index):
+        calls["sfp"] += 1
+        return orig_sfp(model, index)
+
+    def _count_isdir(index):
+        calls["isdir"] += 1
+        return orig_isdir(index)
+    bm._safe_file_path = _count_sfp
+    fsm.isDir = _count_isdir
+    try:
+        proxy.set_column_sort(big, "name", False)     # カラム別の並びあり＝親のパスが要る
+        b.navigate_to(big)
+        got = _wait_names(b, big, 300, timeout=10000)
+        QTest.qWait(300)
+    finally:
+        bm._safe_file_path = orig_sfp
+        try:
+            del fsm.isDir
+        except Exception:
+            fsm.isDir = orig_isdir
+    calls["lt"] = calls["isdir"] // 2
+    check(got is not None and len(got) == 300
+          and got == sorted(got, key=lambda s: s.lower(), reverse=True),
+          "300 件のフォルダ: カラム別の逆順で正しく並ぶ（%s 件）"
+          % (len(got) if got else None))
+    if calls["lt"] > 300:
+        check(calls["sfp"] * 4 < calls["lt"],
+              "比較 %d 回に対して、パスを根から辿ったのは %d 回"
+              % (calls["lt"], calls["sfp"]))
+    else:
+        print("NOTE 比較の回数を数えられない環境（割合の検査は飛ばす）", flush=True)
+
+    b.close()
+    finish(not fails)
+
+
+run(s1, delay=900, timeout=60000)
