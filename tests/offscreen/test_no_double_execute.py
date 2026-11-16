@@ -56,14 +56,11 @@ class _Host(mwd.MainWindowDccMixin):
         # 既定ではスタブで数える。
         def _send(code, label, timeout=6.0, bridge=None):
             self.sent.append(label)
-            # 本物の _bridge_send_async は «予約（_dcc_arm）» を «実行中
-            # （_dcc_pending）» に昇格させる。開くの «前の読み込みが終わる
-            # まで受けない» はこの印で効くので、スタブでも同じことをする。
-            import time as _t
-            arm = getattr(self, "_dcc_arm", None)
-            if arm:
-                self._dcc_pending = (arm[0], _t.monotonic())
-                self._dcc_arm = None
+            # 本物の _bridge_send_async は «予約（_dcc_arm）» を «実行中» に
+            # 昇格させる（_dcc_promote_arm。印は送り先ごと）。開くの «前の
+            # 読み込みが終わるまで受けない» はこの印で効くので、スタブでも
+            # 同じものを呼ぶ。
+            self._dcc_promote_arm(bridge or self._bridge)
             # r145: 送ったコードに埋まっている操作 ID を拾う
             import re as _re
             m = _re.search(r"_OPID = \\?'([0-9a-f]*)", code or "")
@@ -72,6 +69,12 @@ class _Host(mwd.MainWindowDccMixin):
 
     def statusBar(self):
         return _Bar()
+
+    def _start_dcc_watch(self):      # 見張り（実ポートへの問い合わせ）は動かさない
+        pass
+
+    def _poll_dcc_idle(self):
+        pass
 
     # 実際に DCC へ渡る唯一の場所。ここに来た回数＝実行回数。
     def __init_send_stub(self):

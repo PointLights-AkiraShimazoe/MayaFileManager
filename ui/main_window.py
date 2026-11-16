@@ -93,6 +93,7 @@ class MainWindow(MainWindowDccMixin, QMainWindow):
         self._bridge_notify.done.connect(self._on_bridge_done)
         self._bridge_notify.conn_list.connect(self._on_conn_list)
         self._bridge_notify.dcc_idle.connect(self._on_dcc_idle)   # r120
+        self._bridge_notify.done_at.connect(self._on_dcc_sent_done)   # r146（2026-11-16）
         self._bridge_notify.installs.connect(self._apply_rescanned_installs)   # r146
         self._conn_pids = {}   # 接続ポート → MayaのPID（識別照会で取得）
         # Blender 連携（r65）: Maya と同じプロトコル、別ポートレンジ

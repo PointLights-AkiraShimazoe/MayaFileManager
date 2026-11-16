@@ -132,8 +132,7 @@ def s1():
         check(ports3 == [20262], "本当に閉じたら落ちる（%r）" % ports3)
 
     # ── 5) 見張りの後退 ───────────────────────────────────────────────
-    w._dcc_pending = (("open", "C:/x/a.ma", "maya"), time.monotonic())
-    w._dcc_pending_port = 20261
+    w._dcc_pend_map()[20261] = (("open", "C:/x/a.ma", "maya"), time.monotonic())
     started = []
     orig_thread = threading.Thread
 
@@ -145,13 +144,12 @@ def s1():
         w._on_dcc_idle(20261, False)                 # 応答が無かった
         w._poll_dcc_idle()
         check(not started, "応答が無かった直後は繋ぎに行かない（backlog を埋めない）")
-        w._dcc_watch_backoff_until = 0.0
-        w._dcc_watch_busy = False
+        w._dcc_watch_backoff.pop(20261, None)
+        w._dcc_watch_busy_ports.discard(20261)
         w._poll_dcc_idle()
         check(bool(started), "間を空けたらまた聞く")
     finally:
         threading.Thread = orig_thread
-        w._dcc_watch_busy = False
         w._clear_dcc_pending()
     finish(not fails)
 
