@@ -53,22 +53,42 @@ class _PopupCombo(QComboBox):
         super().showPopup()
 
 
+def _header_icon_rgb():
+    """埋め込みアイコンの線の色 (r, g, b)。None ＝ 従来の淡い色（ダーク用）。
+    r148（2026-11-18）: 色を 1 色に固定していたため、ライトでは面に溶けて
+    見えなかった（ユーザー報告）。ライトはテーマの文字色で描く。
+    ダークは見た目を変えないよう従来の色のまま。"""
+    try:
+        from core.theme_engine import current_mode, qss_vars
+        if current_mode() == "light":
+            c = QColor(qss_vars().get("on_surface", "#2b2b36"))
+            if c.isValid():
+                return (c.red(), c.green(), c.blue())
+    except Exception as _e:
+        _swallow(_e, "ui/dcc_header.py _header_icon_rgb")
+    return None
+
+
 def header_icon(stem: str) -> QIcon:
     """resources/icons/hdr_<stem>.png があればそれ、無ければ core/hdr_icons.py の
-    埋め込みデータ（ChatGPT デザイン、24px アルファ）から生成。どちらも無ければ空。"""
-    if stem in _ICON_CACHE:
-        return _ICON_CACHE[stem]
+    埋め込みデータ（ChatGPT デザイン、24px アルファ）から生成。どちらも無ければ空。
+    埋め込みデータはテーマの色で描くので、覚えておく単位は «名前＋色»
+    （モードを切り替えた後に前のモードの絵を使い回さない）。"""
+    rgb = _header_icon_rgb()
+    key = (stem, rgb)
+    if key in _ICON_CACHE:
+        return _ICON_CACHE[key]
     p = os.path.join(_ICON_DIR, "hdr_%s.png" % stem)
     ic = QIcon(p) if os.path.isfile(p) else QIcon()
     if ic.isNull():
         try:
             from core.hdr_icons import make_pixmap
-            pm = make_pixmap(stem, 24)
+            pm = make_pixmap(stem, 24, rgb)
             if pm is not None and not pm.isNull():
                 ic = QIcon(pm)
         except Exception:
             ic = QIcon()
-    _ICON_CACHE[stem] = ic
+    _ICON_CACHE[key] = ic
     return ic
 
 

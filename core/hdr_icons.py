@@ -79,8 +79,11 @@ def decode_alpha(name: str):
     return vals
 
 
-def make_pixmap(name: str, size: int = SIZE):
-    """QPixmap を返す（無ければ None）。"""
+def make_pixmap(name: str, size: int = SIZE, color=None):
+    """QPixmap を返す（無ければ None）。
+    color は線の色 (r, g, b)。省略時は COLOR（ダークの面に合わせた淡い色）。
+    ライトの面では淡い色のままだと面に溶けて見えないので、呼ぶ側がテーマの
+    文字色を渡す（r148、2026-11-18）。"""
     alpha = decode_alpha(name)
     if alpha is None:
         return None
@@ -88,7 +91,7 @@ def make_pixmap(name: str, size: int = SIZE):
         from core.compat import QtGui
         img = QtGui.QImage(SIZE, SIZE, QtGui.QImage.Format_ARGB32)
         img.fill(0)
-        r, g, b = COLOR
+        r, g, b = color or COLOR
         for y in range(SIZE):
             for x in range(SIZE):
                 a = alpha[y * SIZE + x]
