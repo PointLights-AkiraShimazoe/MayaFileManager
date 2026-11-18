@@ -201,12 +201,27 @@ def maya_code(path: str, mode: str, opts: dict) -> str:
         body.append("    _note = ' [選択 %d 件 / %d bytes]' % (len(_sel), _sz)")
     else:
         body.append("    _note = ' [%d bytes]' % _sz")
+    # r149: 上書き先が読み取り専用なら、黙って書き換えない。
+    # 以前は force の保存がそのまま通り、Perforce でチェックアウトしていない
+    # ファイルが «チェックアウト無しで» 書き換わっていた（P4 から見ると知らない
+    # 変更になり、サブミットの対象に入らない）。Maya 側の見張り
+    # （core/maya_save_watch.py）と同じ確認 «チェックアウトして保存／読み取り専用を
+    # 外して保存／保存しない» を通す。見張りが入っていない Maya では従来どおり。
+    guard = ("import os as _mfm_os\n"
+             "_mfm_go = True\n"
+             "_mfm_rf = (__import__('__main__').__dict__.get('_mfm_save_watch') or {}).get('ro_fix')\n"
+             "if _mfm_rf and _mfm_os.path.isfile('%s') and not _mfm_os.access('%s', _mfm_os.W_OK):\n"
+             "    _mfm_go = bool(_mfm_rf('%s'))\n" % (p, p, p))
     inner = ("import maya.cmds as cmds\n"
-             "try:\n" + "\n".join(body) + "\n"
-             "    _mfm_result = 'saved:%s' + _note\n"
-             "except Exception as _e:\n"
-             "    cmds.confirmDialog(title='Maya File Manager', message=u'保存に失敗しました:\\n' + str(_e), button=['OK'])\n"
-             "    _mfm_result = 'Error: ' + str(_e)\n" % p)
+             + guard +
+             "if not _mfm_go:\n"
+             "    _mfm_result = 'Cancelled'\n"
+             "else:\n"
+             "  try:\n" + "\n".join("  " + ln for ln in body) + "\n"
+             "      _mfm_result = 'saved:%s' + _note\n"
+             "  except Exception as _e:\n"
+             "      cmds.confirmDialog(title='Maya File Manager', message=u'保存に失敗しました:\\n' + str(_e), button=['OK'])\n"
+             "      _mfm_result = 'Error: ' + str(_e)\n" % p)
     # commandPort(python) は «単一の式» の値しか返さない → exec を式に包み結果を返す
     return "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_result', ''))[1])({})" % inner
 

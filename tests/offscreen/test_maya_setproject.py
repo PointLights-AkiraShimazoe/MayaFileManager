@@ -21,6 +21,9 @@ def _install_fake_maya():
         displayWarning=lambda m: EV.append(("warn", m)),
         displayError=lambda m: EV.append(("error", m)))
     om = types.ModuleType("maya.api.OpenMaya"); om.MGlobal = MGlobal
+    # r149: «開く» は kAfterOpen が来たかで «開けたか» を決める（core/maya_open_guard.py）
+    om.MSceneMessage = types.SimpleNamespace(kAfterOpen=1, addCallback=lambda *a, **k: 1)
+    om.MMessage = types.SimpleNamespace(removeCallback=lambda *a, **k: None)
     api = types.ModuleType("maya.api"); api.OpenMaya = om
     cmds = types.ModuleType("maya.cmds")
 

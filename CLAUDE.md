@@ -1407,6 +1407,33 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
 - 回帰テスト: tests/offscreen/test_header_icons_theme.py（ダーク / ライトの面との
   明るさの差 3:1 以上、ダークは従来色、モードを切り替えた後に絵を使い回さない）
 
+## «開けたのに保存できない» の正体と、読み取り専用の保存（r149、2026-11-18）
+
+ユーザー報告（2026-11-18）:「Manager から開いたシーンを Maya の Save Scene で保存
+しようとすると、何故かエラーが出て保存出来ない事がある。一度 Manager で上書き保存を
+すると次からは出来る」「開くと連携エラーが出た」
+
+- **読み込み中にエラーが 1 行でも出たシーンは、Maya が «開いた上で» 例外を投げる。**
+  kAfterOpen は来るし、シーン名も入る。それなのに `file -save` は
+  「A file must be given a name before saving」で必ず止まる（Maya 2027 で確認。
+  Maya 自身の File > Open と同じ MEL で開いても同じ）。`file -rename <同じパス>` を
+  1 回通すと保存できる。Manager の «シーンを保存» は rename してから保存するので
+  通っていた。**インポート・リファレンスでは起きない**（例外にならない）。
+- この止まり方は file コマンドの手前なので、保存の見張り（kBeforeSave）には
+  **記録が残らない**。「記録に無いから起きていない」とは言えない。記録だけを見て
+  «読み取り専用が原因» と決めかけた（読み取り専用の失敗は別件として 2 件あった）。
+- 開く処理は `core/maya_open_guard.py` の SRC 1 か所。外から送る時も Maya の中で動く
+  時も同じ物を使う。«開けたか» は例外の有無ではなく **kAfterOpen が来たか** で決める。
+- 読み取り専用の保存は、保存の «後» に直す（`core/maya_save_watch.py` の
+  `_mfm_ro_fix`）。保存の «前» に割り込む形（kBeforeSaveCheck）は、こちらの不具合で
+  全ての保存を止めてしまう危険があるので採らない。うまく行く保存の経路には何も
+  足していない。
+- `maya.api.OpenMaya`（API 2.0）に MFileIO は無い。要る時は `maya.OpenMaya`。
+- Perforce の接続を Maya 側で組み直さない。Manager が持っている表
+  （`p4_table` → `__main__._mfm_p4`）を渡し、Maya 側は同じ決め方で -c を差し替える。
+- 本物の Maya での確認は、テストから mayapy を起こす（`maya.standalone`）。GUI の
+  Maya（専用 Maya）で Save Scene を試すと、確認ダイアログで止まって戻って来ない。
+
 ## 開発・デバッグの約束事
 
 - 起動: `run_dev.bat`（インストール済み最新Maya 2027→2023 の mayapy を自動選択。

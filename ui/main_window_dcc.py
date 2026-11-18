@@ -1134,6 +1134,7 @@ class MainWindowDccMixin:
         armed = self.__dict__.setdefault("_save_watch_armed", set())
         key = (int(port), int(pid))
         if key in armed:
+            self._push_p4_table(port, key)      # r149: 接続の表が変わっていれば渡し直す
             return
         try:
             from core.maya_bridge import bridge_log
@@ -1145,8 +1146,31 @@ class MainWindowDccMixin:
                        % (port, pid, ok, (rep or "")[:80]))
             if ok and rep and "save-watch" in str(rep):
                 armed.add(key)
+                self._push_p4_table(port, key)
         except Exception as _e:
             _swallow(_e, "ui/main_window_dcc.py _arm_save_watch")
+
+    def _push_p4_table(self, port, key):
+        """Perforce の接続（どのフォルダがどのワークスペースか）を Maya へ渡す（r149）。
+
+        Maya 側の «チェックアウトして保存» がこの表から p4 の引数を組む
+        （core/maya_save_watch.py）。ワークスペースの一覧は起動の少し後に揃うので、
+        中身が変わった時だけ渡し直す。ここでは通信をしない（今わかっている分だけ）。"""
+        try:
+            from core.integrations import get_manager
+            from core.maya_save_watch import p4_table, p4_table_code
+            prov = next((x for x in get_manager().providers
+                         if getattr(x, "key", "") == "p4"), None)
+            table = p4_table(prov) if prov is not None else {}
+            sent = self.__dict__.setdefault("_p4_table_sent", {})
+            sig = repr(sorted(table.items()))
+            if sent.get(key) == sig:
+                return
+            ok, rep = MayaBridge(port).send_python(p4_table_code(table), timeout=1.5)
+            if ok and rep and "p4-table" in str(rep):
+                sent[key] = sig
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _push_p4_table")
 
     def _on_bridge_done(self, ok: bool, label: str, reply):
         # r119e/r119i: «実行中» の印を落とすのは **応答が返った時だけ**。
@@ -1179,6 +1203,19 @@ class MainWindowDccMixin:
             except Exception as _e:
                 _swallow(_e, "ui/main_window_dcc.py _on_bridge_done(dup log)")
             return
+        # r149: «開けたが、読み込み中に Maya がエラーを出した»。失敗ではないので
+        # «連携エラー» にしない（Maya 側で、何が起きたかとどうするかを聞き済み）。
+        if ok:
+            try:
+                from core import maya_open_guard as _og
+                _info = _og.parse(reply)
+            except Exception as _e:
+                _info = None
+                _swallow(_e, "ui/main_window_dcc.py _on_bridge_done(open guard)")
+            if _info:
+                _nm = label.split(" ", 1)[1] if " " in label else label
+                self.statusBar().showMessage(_og.status_text(_nm, _info))
+                return
         if ok:
             msg = tr("送信: %s", "Sent: %s") % label
             if reply is None:
@@ -1822,7 +1859,11 @@ class MainWindowDccMixin:
             _msg = tr("現在のシーンに未保存の変更があります。\\n破棄して開きますか？",
                       "The current scene has unsaved changes.\\nDiscard and open?")
             from core.maya_project import setproject_code
+            # r149: «開けたが読み込み中にエラーが出た» を «失敗» と分け、その場で
+            # どうするかを聞く（core/maya_open_guard.py）。
+            from core import maya_open_guard as _og
             inner = (
+                _og.SRC +
                 "import maya.cmds as cmds\n"
                 "_r = 'open'\n"
                 "if cmds.file(q=True, modified=True):\n"
@@ -1834,10 +1875,9 @@ class MainWindowDccMixin:
                 % _msg
                 # r89: workspace.mel があれば «プロジェクトをセットするか» を確認
                 + setproject_code(path, indent="    ")
-                + "    cmds.file('%s', open=True, force=True, ignoreVersion=True)\n"
-                "else:\n"
+                + _og.open_stmt(p, indent="    ")
+                + "else:\n"
                 "    _mfm_result = 'Cancelled'\n"
-                % p
             )
             code = "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_result'))[1])({})" % inner
             self._maya_send_or_prompt(
@@ -1860,8 +1900,11 @@ class MainWindowDccMixin:
                 if ret == QMessageBox.Save:
                     cmds.file(save=True)
             self._maya_local_setproject(path)
-            cmds.file(path, open=True, force=True, ignoreVersion=True)
+            from core import maya_open_guard as _og
+            _info = _og.open_in_this_maya(path)      # r149
             self._maya_local_log(act, path, "done")
+            if _info:
+                self.statusBar().showMessage(_og.status_text(Path(path).name, _info))
         except Exception as e:
             self._maya_local_log(act, path, "fail", str(e))
             QMessageBox.critical(self, tr("エラー", "Error"), str(e))

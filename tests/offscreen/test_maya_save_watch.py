@@ -53,14 +53,17 @@ mwd.MayaBridge = _FakeBridge
 try:
     class _Host:
         _sm = sm
+        # r149: 見張りを入れた後に Perforce の接続の表も渡す（test_save_readonly_fix）
+        _push_p4_table = mwd.MainWindowDccMixin._push_p4_table
     h = _Host()
     arm = mwd.MainWindowDccMixin._arm_save_watch if hasattr(mwd.MainWindowDccMixin, "_arm_save_watch") else None
     if arm:
         arm(h, 20261, 1234)
         arm(h, 20261, 1234)
         arm(h, 20262, 5678)
-    check(len(sent) == 2 and "_mfm_save_watch" in sent[0][1],
-          "接続できた Maya ごとに 1 回だけ見張りを入れる（%d 回送信）" % len(sent))
+    _inst = [c for c in sent if "_mfm_save_watch" in c[1]]
+    check(len(_inst) == 2 and "_mfm_save_watch" in sent[0][1],
+          "接続できた Maya ごとに 1 回だけ見張りを入れる（%d 回送信）" % len(_inst))
 finally:
     mwd.MayaBridge = _orig_bridge
 src = io.open(os.path.join(ROOT, "ui", "main_window_dcc.py"), encoding="utf-8").read()
