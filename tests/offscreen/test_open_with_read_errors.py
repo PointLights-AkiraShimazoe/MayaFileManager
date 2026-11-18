@@ -44,13 +44,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 from core import maya_open_guard as og
 from ui import main_window_dcc as mwd
 
-check(og.parse("OpenedWithErrors:4:pending:D:/w/a b.ma") == (4, "pending", "D:/w/a b.ma")
-      and og.parse("OpenedWithErrors:2:kept") == (2, "kept", "")
+check(og.parse("OpenedWithErrors:4:pending:-:D:/w/a b.ma") == (4, "pending", "D:/w/a b.ma", "-")
+      and og.parse("OpenedWithErrors:4:pending:a:D:/w/a.ma") == (4, "pending", "D:/w/a.ma", "a")
+      and og.parse("OpenedWithErrors:4:pending:D:/w/a.ma") == (4, "pending", "D:/w/a.ma", "-")
+      and og.parse("OpenedWithErrors:2:kept") == (2, "kept", "", "-")
+      and og.parse_arnold("MfmArnold:ok") == "ok" and og.parse_arnold("x") is None
       and og.parse("Error: x") is None and og.parse(None) is None
       and og.parse_unlock("MfmUnlocked:ok") == "ok" and og.parse_unlock("saved:x") is None,
       "応答から «エラー付きで開けた»・«解除した» を見分ける（パスに : があっても）")
 compile(og.SRC, "<maya>", "exec")
 compile(og.unlock_code("D:\\w\\it's.ma"), "<maya>", "eval")
+compile(og.arnold_code("D:\\w\\it's.ma"), "<maya>", "eval")
 check("confirmDialog" not in og.SRC and "confirmDialog" not in og.UNLOCK_SRC,
       "Maya 側ではダイアログを出さない")
 src = io.open(os.path.join(ROOT, "ui", "main_window_dcc.py"), encoding="utf-8").read()
@@ -69,9 +73,11 @@ class _Bridge:
     def __init__(self, port):
         self.port = port
 
+    reply = "MfmUnlocked:ok"
+
     def send_python(self, code, timeout=1.0, tag=""):
         sent.append((self.port, code))
-        return True, "MfmUnlocked:ok"
+        return True, self.reply
 
 
 class _Host:
@@ -87,6 +93,7 @@ class _Host:
 
     _ask_unlock_after_open = mwd.MainWindowDccMixin._ask_unlock_after_open
     _show_unlock_result = mwd.MainWindowDccMixin._show_unlock_result
+    _show_arnold_result = mwd.MainWindowDccMixin._show_arnold_result
     _on_bridge_done = mwd.MainWindowDccMixin._on_bridge_done
 
 
@@ -99,7 +106,7 @@ mwd.MayaBridge = _Bridge
 try:
     T = og.ask_texts()
     answer[:] = [T["no"]]
-    _Host()._on_bridge_done(True, "開く a.ma", "OpenedWithErrors:4:pending:D:/w/a.ma")
+    _Host()._on_bridge_done(True, "開く a.ma", "OpenedWithErrors:4:pending:-:D:/w/a.ma")
     check(not warned and shown and "a.ma" in shown[0],
           "エラー付きで開けた時は «連携エラー» を出さず、ステータスバーに出す（%r）" % (shown[:1],))
     txt, info, btns = asks[-1] if asks else ("", "", [])
@@ -111,12 +118,25 @@ try:
     check(not sent and "Save Scene As" in shown[-1], "«解除しない» は何も送らない（%r）" % (shown[-1],))
     del shown[:], asks[:]
     answer[:] = [T["yes"]]
-    _Host()._on_bridge_done(True, "開く a.ma", "OpenedWithErrors:4:pending:D:/w/a.ma")
+    _Host()._on_bridge_done(True, "開く a.ma", "OpenedWithErrors:4:pending:-:D:/w/a.ma")
     check(len(sent) == 1 and sent[0][0] == 20261 and "_mfm_unlock" in sent[0][1]
           and "D:/w/a.ma" in sent[0][1],
           "«解除する» は開いた Maya（同じ送り先）へ解除を送る（%r）" % ([s[0] for s in sent],))
     check(shown and "上書き保存できるようにしました" in shown[-1] and not warned,
           "解除できたらステータスバーに出す（%r）" % (shown[-1:],))
+    # r151: Arnold が読み込まれていない時は «Arnold を読み込んで開き直す» を先頭に
+    TA = og.arnold_texts()
+    del asks[:], sent[:], shown[:]
+    _Bridge.reply = "MfmArnold:ok"
+    answer[:] = [TA["reopen"]]
+    _Host()._on_bridge_done(True, "開く c.ma", "OpenedWithErrors:4:pending:a:D:/w/c.ma")
+    check(asks and asks[0][2] == [TA["reopen"], T["yes"], T["no"]] and "Arnold" in asks[0][0],
+          "Arnold が入っていて読み込まれていない時は «Arnold を読み込んで開き直す» を出す（%r）"
+          % (asks[0][2] if asks else None,))
+    check(len(sent) == 1 and sent[0][0] == 20261 and "_mfm_arnold_reopen" in sent[0][1]
+          and "D:/w/c.ma" in sent[0][1], "選ぶと開いた Maya へ «読み込んで開き直す» を送る")
+    check(shown and "Arnold を読み込んで開き直しました" in shown[-1], "結果をステータスバーに出す（%r）" % (shown[-1:],))
+    _Bridge.reply = "MfmUnlocked:ok"
     mwd.MainWindowDccMixin._on_bridge_done(_Host(), True, "開く b.ma", "Error: boom")
     check(len(warned) == 1, "本当の失敗は今までどおり «連携エラー» を出す")
 finally:
@@ -215,6 +235,20 @@ for kind in ("reference", "import"):
         err = "raised"
     res[kind] = [err, plain()]
 res["asked_total"] = len(asked)
+# 7) r151: Arnold（mtoa）が読み込まれていない時の印と «読み込んで開き直す»
+res["mtoa_avail"] = bool(ns["_mfm_mtoa_available"]())
+pb = bad("arn.ma"); cmds.file(new=True, force=True)
+cmds.undoInfo(state=True)
+res["arn_open"] = ns["_mfm_open"](pb, T)
+res["arn_undo_after_open"] = cmds.undoInfo(q=True, undoQueueEmpty=True)
+cmds.polySphere()
+res["arn_modified"] = ns["_mfm_arnold_reopen"](pb, T)
+try:
+    cmds.file(pb, open=True, force=True, ignoreVersion=True)
+except Exception:
+    pass
+res["arn_reopen"] = ns["_mfm_arnold_reopen"](pb, T) if res["mtoa_avail"] else "skip"
+res["arn_save"] = plain() if res["mtoa_avail"] else "skip"
 json.dump(res, open(out, "w", encoding="utf-8"), ensure_ascii=False)
 maya.standalone.uninitialize()
 ''')
@@ -246,4 +280,13 @@ maya.standalone.uninitialize()
           "エラーの無いシーンでは何も返さない")
     check(res.get("reference") == ["", "OK"] and res.get("import") == ["", "OK"],
           "リファレンス・インポートでは起きない（%r / %r）" % (res.get("reference"), res.get("import")))
+    if res.get("mtoa_avail"):
+        check(":pending:a:" in str(res.get("arn_open")) and res.get("arn_modified") == "MfmArnold:modified",
+              "Arnold が入っていて読み込まれていなければ «a» の印。開いた後に変更があれば開き直さない（%r / %r）"
+              % (res.get("arn_open"), res.get("arn_modified")))
+        check(res.get("arn_reopen") == "MfmArnold:ok" and res.get("arn_save") == "OK",
+              "Arnold を読み込んで開き直すとエラーが消え、上書き保存もできる（%r / %r）"
+              % (res.get("arn_reopen"), res.get("arn_save")))
+    else:
+        print("SKIP Arnold（mtoa）が入っていない環境", flush=True)
 finish(not fails)

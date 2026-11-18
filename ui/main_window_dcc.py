@@ -1211,18 +1211,23 @@ class MainWindowDccMixin:
                 from core import maya_open_guard as _og
                 _info = _og.parse(reply)
                 _unl = _og.parse_unlock(reply)
+                _arn = _og.parse_arnold(reply)
             except Exception as _e:
-                _info = _unl = None
+                _info = _unl = _arn = None
                 _swallow(_e, "ui/main_window_dcc.py _on_bridge_done(open guard)")
             if _info:
                 _nm = label.split(" ", 1)[1] if " " in label else label
                 self.statusBar().showMessage(_og.status_text(_nm, _info))
                 if _info[1] == "pending" and _info[2]:
                     self._ask_unlock_after_open(
-                        int(getattr(self, "_last_done_port", 0) or 0), _info[2], _info[0])
+                        int(getattr(self, "_last_done_port", 0) or 0), _info[2], _info[0],
+                        arnold=(_info[3] == "a"))
                 return
             if _unl:
                 self._show_unlock_result(label, _unl)
+                return
+            if _arn:
+                self._show_arnold_result(label, _arn)
                 return
             if isinstance(reply, str) and reply.startswith("saved:"):
                 # r150: Manager から行った保存は、Manager で «終わった» と分かるように
@@ -1921,7 +1926,7 @@ class MainWindowDccMixin:
             self._maya_local_log(act, path, "done")
             if _info:
                 self.statusBar().showMessage(_og.status_text(Path(path).name, _info))
-                self._ask_unlock_after_open(0, path, _info[0])     # r150
+                self._ask_unlock_after_open(0, path, _info[0], arnold=(_info[3] == "a"))   # r150/r151
         except Exception as e:
             self._maya_local_log(act, path, "fail", str(e))
             QMessageBox.critical(self, tr("エラー", "Error"), str(e))
@@ -2159,13 +2164,37 @@ class MainWindowDccMixin:
 
         ask_choice(self, t["text"] % name, note, buttons, _chosen)
 
-    def _ask_unlock_after_open(self, port: int, path: str, n_lines: int):
+    def _ask_unlock_after_open(self, port: int, path: str, n_lines: int, arnold: bool = False):
         """«エラー付きで開けた» シーンを上書き保存できるようにするか、Manager で聞く（r150）。
-        詳細は Maya のスクリプトエディターに書いてある。"""
+        詳細は Maya のスクリプトエディターに書いてある。
+        r151: エラーが Arnold のアトリビュートで、mtoa が入っているのに読み込まれて
+        いない時は «Arnold を読み込んで開き直す» を先頭に出す（ユーザー指示 2026-11-19）。"""
         from core import maya_open_guard as _og
         t = _og.ask_texts()
+        ta = _og.arnold_texts()
+
+        def _send_code(code, label):
+            if self._inside_maya:
+                try:
+                    self._on_bridge_done(True, label, eval(code, {}))
+                except Exception as e:
+                    QMessageBox.warning(self, tr("エラー", "Error"), str(e))
+                return
+            bridge = MayaBridge(port) if port else self._bridge
+
+            def _work():
+                return bridge.send_python(code, timeout=60.0, tag=label)
+
+            def _after(res):
+                ok, reply = res
+                self._on_bridge_done(bool(ok), label, reply)
+            self._run_bg(_work, _after)
 
         def _chosen(ans):
+            if arnold and ans == ta["reopen"]:
+                # 応答は «開く» と同じ形で返るので、名前も «開く» にそろえる
+                _send_code(_og.arnold_code(path), tr("開く %s", "Open %s") % Path(path).name)
+                return
             if ans != t["yes"]:
                 self.statusBar().showMessage(
                     _og.status_text(Path(path).name, (n_lines, "kept")))
@@ -2188,7 +2217,26 @@ class MainWindowDccMixin:
                 self._on_bridge_done(bool(ok), label, reply)
             self._run_bg(_send, _after)
 
-        ask_choice(self, t["text"], t["info"], [t["yes"], t["no"]], _chosen)
+        if arnold:
+            ask_choice(self, ta["text"], ta["info"], [ta["reopen"], t["yes"], t["no"]], _chosen)
+        else:
+            ask_choice(self, t["text"], t["info"], [t["yes"], t["no"]], _chosen)
+
+    def _show_arnold_result(self, label: str, res: str):
+        """«Arnold を読み込んで開き直す» の結果（r151）。"""
+        from core import maya_open_guard as _og
+        ta = _og.arnold_texts()
+        nm = label.rsplit(" ", 1)[-1]
+        if res == "ok":
+            self.statusBar().showMessage(ta["done"] % nm)
+        elif res == "modified":
+            self.statusBar().showMessage(ta["modified"] % nm)
+        elif res.startswith("loadfail"):
+            ask_choice(self, ta["loadfail"], res.split(":", 1)[-1], ["OK"], lambda _a: None)
+        else:
+            self.statusBar().showMessage(
+                tr("Maya のシーンが変わっていたため、何もしていません: %s",
+                   "The Maya scene has changed; nothing was done: %s") % nm)
 
     def _show_unlock_result(self, label: str, res):
         nm = label.split(" ", 1)[1] if " " in label else label

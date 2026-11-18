@@ -16,6 +16,7 @@ _ALLOW = {
     "core/hdr_icons.py",             # コメントのみ
     "ui/dcc_header.py",              # theme_engine が読めない時のフォールバック
     "ui/bookmark_panel.py",          # ブックマークの色は «ユーザーデータ»（設定に保存）
+    "core/preset_colors.py",         # r151: プリセットのボタンの色も «ユーザーデータ»（選べる見本）
     "ui/browser_area.py",            # rgba() ヘルパの docstring / 書式文字列
 }
 _HEX = re.compile(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba\s*\(")

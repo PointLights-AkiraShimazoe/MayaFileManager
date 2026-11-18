@@ -1472,6 +1472,23 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   «上書き保存すると読み込めなかった設定は消える» «詳細はスクリプトエディターをご確認
   ください。» の順で、理由と結果を伝えてから聞く。
 
+## Arnold が読み込まれていない時の «読み込んで開き直す»・プリセットの色（r151、2026-11-19）
+
+- 2026-11-18 の «Arnold のエラーが再発» は、v0.9.24 の PATH の不具合ではなかった。
+  mtoa の自動ロードが外れた Maya で、`requires "mtoa"` の無い（`.ai_` の setAttr だけが
+  残った）シーンを開いた時の出来事。Maya の File > Open でも同じ。**記録の行の日付を
+  確かめずに «別の起動» と結論しかけた**（mfm_maya.log は日をまたいで追記される）。
+  「読み込みに失敗した」なら `Unable to dynamically load … mtoa.mll` が出る。出ていなければ
+  «読み込んでいない» だけ。
+- 対処は Manager で聞く（ユーザーの Maya の設定は変えない）: SRC の応答に印
+  （`OpenedWithErrors:<n>:pending:<a|->:<パス>`）。«a» は `.ai_` のエラーがあり、mtoa が
+  MAYA_PLUG_IN_PATH にあって未ロードの時だけ。開き直しは `_mfm_arnold_reopen`。
+- **エラー付きで開いた直後の Maya は «変更あり» の印が立っている**（本物の Maya 2027 で
+  確認）。«開いた後に手を入れたか» は取り消しの記録（`undoInfo -q -undoQueueEmpty`）で見る。
+- プリセットのボタンの色: 項目の `color`（"#RRGGBB"、無ければ従来どおり）。計算は
+  `core/preset_colors.py`、選ぶのは `ui/quick_nav_editor.py` の色見本、塗るのは
+  `ui/nav_panels.py`。文字色は白とのコントラスト比 3:1 以上なら白、それ以外は黒。
+
 ## 開発・デバッグの約束事
 
 - 起動: `run_dev.bat`（インストール済み最新Maya 2027→2023 の mayapy を自動選択。

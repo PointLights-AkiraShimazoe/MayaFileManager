@@ -51,6 +51,7 @@
     "core/maya_version.py",
     "core/merge_browse.py",
     "core/path_guard.py",
+    "core/preset_colors.py",
     "core/save_target_guard.py",
     "core/settings_manager.py",
     "core/theme_engine.py",

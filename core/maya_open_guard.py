@@ -33,6 +33,7 @@ r150（ユーザー指示 2026-11-18、H-14 の実機確認）:
 
 RESULT_PREFIX = "OpenedWithErrors:"
 UNLOCK_PREFIX = "MfmUnlocked:"
+ARNOLD_PREFIX = "MfmArnold:"
 
 SRC = r'''
 def _mfm_open(_p, _t):
@@ -69,7 +70,57 @@ def _mfm_open(_p, _t):
         om2.MGlobal.displayWarning("Maya File Manager: " + _t["head"] % len(lines))
     except Exception:
         pass
-    return "OpenedWithErrors:%d:pending:%s" % (len(lines), _p)
+    # r151: Arnold（mtoa）が入っているのに読み込まれていないなら «a»。
+    # Manager が «Arnold を読み込んで開き直す» を出す（入っていない PC では出さない）
+    flag = "-"
+    if arnold:
+        try:
+            loaded = bool(cmds.pluginInfo("mtoa", q=True, loaded=True))
+        except Exception:
+            loaded = False
+        if not loaded and _mfm_mtoa_available():
+            flag = "a"
+    return "OpenedWithErrors:%d:pending:%s:%s" % (len(lines), flag, _p)
+
+
+def _mfm_mtoa_available():
+    import os
+    import maya.mel as mel
+    try:
+        dirs = (mel.eval("getenv MAYA_PLUG_IN_PATH") or "").split(os.pathsep)
+    except Exception:
+        dirs = []
+    for d in dirs:
+        for n in ("mtoa.mll", "mtoa.so", "mtoa.bundle"):
+            try:
+                if d and os.path.isfile(os.path.join(d, n)):
+                    return True
+            except Exception:
+                pass
+    return False
+
+
+def _mfm_arnold_reopen(_p, _t):
+    """Arnold を読み込んで、同じシーンを開き直す（r151）。"""
+    import os
+    import maya.cmds as cmds
+    cur = cmds.file(q=True, sceneName=True) or ""
+    if not cur or os.path.normcase(os.path.normpath(cur)) != os.path.normcase(os.path.normpath(_p)):
+        return "MfmArnold:other"
+    # 開いた後に手を入れていたら捨てない。«変更あり» の印は、エラー付きで開いた直後から
+    # 立っている（本物の Maya 2027 で確認）ので使えない。開くと取り消しの記録は空に
+    # なるので、記録が増えていれば «手を入れた» と見る（取り消しが切ってある時は見られない）。
+    try:
+        if cmds.undoInfo(q=True, state=True) and not cmds.undoInfo(q=True, undoQueueEmpty=True):
+            return "MfmArnold:modified"
+    except Exception:
+        pass
+    try:
+        cmds.loadPlugin("mtoa", quiet=True)
+    except Exception as e:
+        return "MfmArnold:loadfail:" + str(e).strip().splitlines()[0][:300]
+    r = _mfm_open(_p, _t)
+    return r if r else "MfmArnold:ok"
 '''
 
 UNLOCK_SRC = r'''
@@ -110,6 +161,24 @@ def texts() -> dict:
     }
 
 
+def arnold_texts() -> dict:
+    """Arnold が読み込まれていない時に Manager で聞く文言（r151）。"""
+    from core.i18n import tr
+    return {
+        "text": tr("Arnold が読み込まれていないため、シーンの Arnold の設定を読み込めませんでした。\n"
+                   "Arnold を読み込んで開き直しますか？",
+                   "Arnold is not loaded, so the scene's Arnold settings could not be read.\n"
+                   "Load Arnold and reopen the scene?"),
+        "info": tr("詳細はスクリプトエディターをご確認ください。",
+                   "See the Script Editor for details."),
+        "reopen": tr("Arnold を読み込んで開き直す", "Load Arnold and reopen"),
+        "done": tr("Arnold を読み込んで開き直しました: %s", "Loaded Arnold and reopened: %s"),
+        "modified": tr("開いた後に変更があるため、開き直していません: %s",
+                       "Not reopened because the scene has changed since it was opened: %s"),
+        "loadfail": tr("Arnold を読み込めませんでした。", "Could not load Arnold."),
+    }
+
+
 def ask_texts() -> dict:
     """Manager で聞く時の文言（r150）。«なぜ止まっているか» と «解除すると何が
     起きるか» を 1 行ずつ。ユーザー指摘「エラーがでたから読み取り専用を解除するの
@@ -135,6 +204,24 @@ def open_stmt(escaped_path: str, indent: str = "") -> str:
     return "%s_mfm_result = _mfm_open('%s', %r)\n" % (indent, escaped_path, texts())
 
 
+def arnold_code(path: str) -> str:
+    """«Arnold を読み込んで開き直す» を同じ Maya へ送る «単一の式»（r151）。"""
+    from core.maya_bridge import escape_path
+    inner = SRC + "_mfm_result = _mfm_arnold_reopen('%s', %r)\n" % (escape_path(path), texts())
+    return "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_result'))[1])({})" % inner
+
+
+def parse_arnold(reply):
+    """Arnold の開き直しの応答: "ok" / "modified" / "other" / "loadfail:..."。違えば None。"""
+    s = str(reply or "").strip()
+    return s[len(ARNOLD_PREFIX):] if s.startswith(ARNOLD_PREFIX) else None
+
+
+def arnold_in_this_maya(path: str):
+    """Maya の中で動いている時用。応答の文字列をそのまま返す。"""
+    return eval(arnold_code(path), {})
+
+
 def unlock_code(path: str) -> str:
     """«解除する» を選んだ時に同じ Maya へ送る «単一の式»。"""
     from core.maya_bridge import escape_path
@@ -144,19 +231,24 @@ def unlock_code(path: str) -> str:
 
 
 def parse(reply):
-    """応答が «エラー付きで開けた» なら (行数, 状態, パス)。違えば None。
-    状態は "pending"（Manager で聞く）。r149 の応答（"saveable"/"kept"）も読める。"""
+    """応答が «エラー付きで開けた» なら (行数, 状態, パス, 印)。違えば None。
+    状態は "pending"（Manager で聞く）。印は "a"（Arnold を読み込めば直る見込み）か "-"。
+    r149 の応答（"saveable"/"kept"）、r150 の応答（印なし）も読める。"""
     s = str(reply or "").strip()
     if not s.startswith(RESULT_PREFIX):
         return None
-    parts = s[len(RESULT_PREFIX):].split(":", 2)
+    parts = s[len(RESULT_PREFIX):].split(":", 3)
     try:
         n = int(parts[0])
     except (ValueError, IndexError):
         n = 0
     choice = parts[1].strip() if len(parts) > 1 else "kept"
-    path = parts[2].strip() if len(parts) > 2 else ""
-    return n, choice, path
+    flag = "-"
+    if len(parts) > 3 and parts[2] in ("a", "-"):
+        flag, path = parts[2], parts[3].strip()
+    else:
+        path = ":".join(parts[2:]).strip()
+    return n, choice, path, flag
 
 
 def parse_unlock(reply):

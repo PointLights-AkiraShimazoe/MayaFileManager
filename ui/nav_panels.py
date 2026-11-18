@@ -257,6 +257,12 @@ class QuickNavBar(QWidget):
             btn = QToolButton()
             btn.setText(nav.get("label", "?"))
             btn.setToolTip(nav.get("path", ""))
+            # r151: プリセットで選んだ色（無ければテーマのまま）
+            from core.preset_colors import button_qss
+            _qss = button_qss(nav.get("color", ""))
+            if _qss:
+                btn.setObjectName("mfmNavBtnColored")
+                btn.setStyleSheet(_qss)
             path = nav.get("path", "")
             btn.clicked.connect(lambda checked=False, p=path: self.navigate_requested.emit(p))
             self._btn_layout.addWidget(btn)

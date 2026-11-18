@@ -4,7 +4,7 @@ Quick-Nav Preset Editor
 クイックナビゲーションバーのプリセットを管理するダイアログ。
 
 プリセット = ナビゲーションボタンのリスト
-ボタン = { label, path, icon(optional) }
+ボタン = { label, path, color(optional, r151) }
 
 操作
 ----
@@ -27,6 +27,8 @@ from core.compat import (
     QMessageBox, QFileDialog, QInputDialog,
 )
 from core.compat import QtCore as _QtCore
+from core.compat import QtWidgets as _QtWidgets
+from core.compat import QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QMenu, QSize
 from ui.dialog_util import pick_directory  # r145
 
 
@@ -68,6 +70,15 @@ class NavItemRow(QWidget):
         down_btn.clicked.connect(lambda: self.move_down_requested.emit(self))
         layout.addWidget(down_btn)
 
+        # r151: ボタンの色（ユーザー指示 2026-11-18）。押すと色を選ぶ。
+        self._color_btn = QToolButton()
+        self._color_btn.setObjectName("mfmNavColor")
+        self._color_btn.setFixedSize(24, 24)
+        self._color_btn.setToolTip(tr("色", "Color"))
+        self._color_btn.clicked.connect(self._pick_color)
+        layout.addWidget(self._color_btn)
+        self._update_color_icon()
+
         # Label
         layout.addWidget(QLabel(tr("ラベル:", "Label:")))
         self._label_edit = QLineEdit(self._item.get("label", ""))
@@ -96,6 +107,68 @@ class NavItemRow(QWidget):
         del_btn.clicked.connect(lambda: self.remove_requested.emit(self))
         layout.addWidget(del_btn)
 
+    # ── 色（r151）────────────────────────────────────────────────
+    @staticmethod
+    def swatch_icon(color: str, size: int = 16) -> QIcon:
+        """色見本。色なしは «輪に斜線»。"""
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        if color:
+            p.setPen(QPen(QColor(0, 0, 0, 90), 1))
+            p.setBrush(QBrush(QColor(color)))
+            p.drawEllipse(1, 1, size - 2, size - 2)
+        else:
+            p.setPen(QPen(QColor(150, 155, 170), 1.5))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(2, 2, size - 4, size - 4)
+            p.drawLine(4, size - 4, size - 4, 4)
+        p.end()
+        return QIcon(pm)
+
+    def _update_color_icon(self):
+        from core.preset_colors import normalize
+        self._color_btn.setIcon(self.swatch_icon(normalize(self._item.get("color", ""))))
+        self._color_btn.setIconSize(QSize(16, 16))
+
+    def set_color(self, color: str):
+        from core.preset_colors import normalize
+        c = normalize(color)
+        if c:
+            self._item["color"] = c
+        else:
+            self._item.pop("color", None)
+        self._update_color_icon()
+        self.changed.emit()
+
+    def color_menu(self) -> QMenu:
+        """8 色・色なし・その他。テストからも開く。"""
+        from core.preset_colors import PALETTE
+        m = QMenu(self)
+        for c, ja, en in PALETTE:
+            a = m.addAction(self.swatch_icon(c), tr(ja, en))
+            a.triggered.connect(lambda _=False, c=c: self.set_color(c))
+        m.addSeparator()
+        a = m.addAction(self.swatch_icon(""), tr("なし", "None"))
+        a.triggered.connect(lambda _=False: self.set_color(""))
+        a = m.addAction(tr("その他…", "More..."))
+        a.triggered.connect(self._custom_color)
+        return m
+
+    def _pick_color(self):
+        m = self.color_menu()
+        gp = self._color_btn.mapToGlobal(self._color_btn.rect().bottomLeft())
+        m.exec(gp) if hasattr(m, "exec") else m.exec_(gp)
+
+    def _custom_color(self):
+        from core.preset_colors import PALETTE
+        cur = QColor(self._item.get("color") or PALETTE[5][0])
+        c = _QtWidgets.QColorDialog.getColor(
+            cur, self, tr("色", "Color"), _QtWidgets.QColorDialog.DontUseNativeDialog)
+        if c.isValid():
+            self.set_color(c.name())
+
     def _browse(self):
         # ネイティブダイアログはシェル拡張の読み込みで mayapy がクラッシュする
         # （r64）。アプリ属性 AA_DontUseNativeDialogs に加え、呼び出し側でも明示。
@@ -106,6 +179,7 @@ class NavItemRow(QWidget):
             self._path_edit.setText(d)
 
     def _sync(self):
+        # r151: 色（self._item["color"]）は set_color が持つので、ここでは触らない
         self._item["label"] = self._label_edit.text()
         self._item["path"]  = self._path_edit.text()
         self.changed.emit()
