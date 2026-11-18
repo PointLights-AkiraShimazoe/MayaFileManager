@@ -16,15 +16,23 @@
     「A file must be given a name before saving. Use file -rename first」で必ず
     止まる。読み込めなかった設定を上書きで消さないための Maya の動きで、Maya の
     File > Open で開いても同じになる（Manager の開き方のせいではない）。
-  * `file -rename <同じパス>` を 1 回通すと、素の保存が通るようになる。Manager の
-    «シーンを保存» は rename してから保存するので、通っていた。
+  * `file -rename <同じパス>` を 1 回通すと、素の保存が通るようになる。
   * インポート・リファレンスでは起きない（例外にならず、保存も通る）。
 
-そこで、開いた直後に Maya 側で «何が起きたか» と «どうするか» を聞く。
-Maya 側の処理は 1 か所（SRC）に置き、外から送る時も Maya の中で動く時も同じ物を使う。
+r150（ユーザー指示 2026-11-18、H-14 の実機確認）:
+  「文面が長すぎます。端的にエラーが起きたことと読み取り専用を解除する事を
+    伝えて意思確認をしてください。詳細はスクリプトエディターで大丈夫です。
+    maya の標準のエラーログと被ってでてしまい、ボタンが見えずに maya 操作が
+    できなくなったかと思いました」
+  → **Maya 側ではダイアログを出さない。** 何が起きたか（エラーの全行・Arnold の
+    見当）はスクリプトエディターにだけ書き、«開けた» と返す。どうするかは
+    Manager が短く聞き（ui/main_window_dcc.py _ask_unlock_after_open）、
+    «上書き保存できるようにする» なら同じ Maya へ UNLOCK_SRC を送る。Manager から行った操作の判断は
+    Manager で受ける（H-15 と同じ決まり）。
 """
 
 RESULT_PREFIX = "OpenedWithErrors:"
+UNLOCK_PREFIX = "MfmUnlocked:"
 
 SRC = r'''
 def _mfm_open(_p, _t):
@@ -49,53 +57,76 @@ def _mfm_open(_p, _t):
             pass
     lines = [l.strip() for l in err.splitlines()
              if l.strip() and l.strip() != "Error reading file."]
-    short = [re.sub(r"^file: .* line (\d+): ", r"line \1: ", l) for l in lines]
-    body = "\n".join(short[:4])
-    if len(short) > 4:
-        body += "\n" + _t["more"] % (len(short) - 4)
-    msg = _t["head"] % len(lines) + "\n\n" + body + "\n\n"
-    if any(".ai_" in l for l in lines):
-        msg += _t["arnold"] + "\n\n"
-    msg += _t["why"] + "\n\n" + _t["ask"]
-    choice = "kept"
+    arnold = any(".ai_" in l for l in lines)
+    # r150: 詳細はスクリプトエディターへ（ダイアログは出さない）
     try:
-        if not cmds.about(batch=True):
-            ans = cmds.confirmDialog(title="Maya File Manager", message=msg,
-                                     button=[_t["yes"], _t["no"]], defaultButton=_t["no"],
-                                     cancelButton=_t["no"], dismissString=_t["no"])
-            if ans == _t["yes"]:
-                cmds.file(rename=cmds.file(q=True, sceneName=True) or _p)
-                choice = "saveable"
+        out = ["", "// Maya File Manager: " + _t["head"] % len(lines)]
+        out += ["//   " + l for l in lines]
+        if arnold:
+            out.append("// " + _t["arnold"])
+        out.append("// " + _t["why"])
+        print("\n".join(out))
+        om2.MGlobal.displayWarning("Maya File Manager: " + _t["head"] % len(lines))
     except Exception:
         pass
-    return "OpenedWithErrors:%d:%s" % (len(lines), choice)
+    return "OpenedWithErrors:%d:pending:%s" % (len(lines), _p)
+'''
+
+UNLOCK_SRC = r'''
+def _mfm_unlock(_p, _msg):
+    import os
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om2
+    cur = cmds.file(q=True, sceneName=True) or ""
+    if not cur or os.path.normcase(os.path.normpath(cur)) != os.path.normcase(os.path.normpath(_p)):
+        return "MfmUnlocked:other"     # 別のシーンになっている → 何もしない
+    cmds.file(rename=cur)
+    try:
+        om2.MGlobal.displayInfo("Maya File Manager: " + _msg)
+    except Exception:
+        pass
+    return "MfmUnlocked:ok"
 '''
 
 
 def texts() -> dict:
-    """Maya 側のダイアログの文言（Manager の表示言語で）。"""
+    """スクリプトエディターへ書く文言（Manager の表示言語で）。"""
     from core.i18n import tr
     return {
         "head": tr("シーンは開きましたが、読み込み中に Maya がエラーを出しました（%d 行）。",
                    "The scene was opened, but Maya reported errors while reading it (%d lines)."),
-        "more": tr("…ほか %d 行（全文は Script Editor）",
-                   "...and %d more lines (see the Script Editor)"),
         "arnold": tr("「.ai_」で始まるのは Arnold（mtoa）のアトリビュートです。"
                      "Arnold を読み込んだ Maya で開き直すと、このエラーは出ません。",
                      "Names starting with \".ai_\" are Arnold (mtoa) attributes. "
                      "Open the scene in a Maya with Arnold loaded and these errors go away."),
-        "why": tr("この状態では、Maya の Save Scene は「A file must be given a name before "
-                  "saving」と出て保存できません（読み込めなかった設定を、上書き保存で消して"
-                  "しまわないための Maya の動きです）。",
+        "why": tr("この状態では Maya の Save Scene は「A file must be given a name before "
+                  "saving」で止まります（読み込めなかった設定を上書きで消さないための Maya の"
+                  "動き）。Manager で «上書き保存できるようにする» を選ぶと上書き保存でき、読み込めなかった設定は"
+                  "保存した時にファイルから消えます。",
                   "In this state Maya's Save Scene stops with \"A file must be given a name "
                   "before saving\" (Maya does this so the settings it could not read are not "
-                  "lost by saving over the file)."),
-        "ask": tr("上書き保存できるようにしますか？\n保存すると、読み込めなかった設定は"
-                  "ファイルから消えます。",
-                  "Allow saving over this file?\nOnce saved, the settings that could not "
-                  "be read are gone from the file."),
-        "yes": tr("保存できるようにする", "Allow saving"),
-        "no": tr("そのままにする", "Leave as is"),
+                  "lost). Choose \"Allow saving\" in the Manager to allow saving over the file; the "
+                  "settings that could not be read are then gone from the file once saved."),
+    }
+
+
+def ask_texts() -> dict:
+    """Manager で聞く時の文言（r150）。«なぜ止まっているか» と «解除すると何が
+    起きるか» を 1 行ずつ。ユーザー指摘「エラーがでたから読み取り専用を解除するの
+    ロジックが普通わからない」により «読み取り専用» という言い方はしない。"""
+    from core.i18n import tr
+    return {
+        "text": tr("読み込み中にエラーが起きたため、Maya がこのシーンの上書き保存を止めています。\n"
+                   "上書き保存できるようにしますか？",
+                   "Errors occurred while reading this scene, so Maya is blocking saving over it.\n"
+                   "Allow saving over the file?"),
+        "info": tr("読み込めなかった設定は、上書き保存するとファイルから消えます。\n"
+                   "詳細はスクリプトエディターをご確認ください。",
+                   "Settings that could not be read are removed from the file when you save over it.\n"
+                   "See the Script Editor for details."),
+        "yes": tr("上書き保存できるようにする", "Allow saving"),
+        "no": tr("このままにする", "Leave as is"),
+        "done": tr("上書き保存できるようにしました: %s", "Saving over the file is allowed: %s"),
     }
 
 
@@ -104,30 +135,47 @@ def open_stmt(escaped_path: str, indent: str = "") -> str:
     return "%s_mfm_result = _mfm_open('%s', %r)\n" % (indent, escaped_path, texts())
 
 
+def unlock_code(path: str) -> str:
+    """«解除する» を選んだ時に同じ Maya へ送る «単一の式»。"""
+    from core.maya_bridge import escape_path
+    msg = ask_texts()["done"] % path.replace("\\", "/").rsplit("/", 1)[-1]
+    inner = UNLOCK_SRC + "_mfm_result = _mfm_unlock('%s', %r)\n" % (escape_path(path), msg)
+    return "(lambda _ns: (exec(%r, _ns), _ns.get('_mfm_result'))[1])({})" % inner
+
+
 def parse(reply):
-    """応答が «エラー付きで開けた» なら (行数, "saveable" / "kept")。違えば None。"""
+    """応答が «エラー付きで開けた» なら (行数, 状態, パス)。違えば None。
+    状態は "pending"（Manager で聞く）。r149 の応答（"saveable"/"kept"）も読める。"""
     s = str(reply or "").strip()
     if not s.startswith(RESULT_PREFIX):
         return None
-    parts = s[len(RESULT_PREFIX):].split(":")
+    parts = s[len(RESULT_PREFIX):].split(":", 2)
     try:
         n = int(parts[0])
     except (ValueError, IndexError):
         n = 0
-    return n, (parts[1].strip() if len(parts) > 1 else "kept")
+    choice = parts[1].strip() if len(parts) > 1 else "kept"
+    path = parts[2].strip() if len(parts) > 2 else ""
+    return n, choice, path
+
+
+def parse_unlock(reply):
+    """解除の応答: "ok" / "other"。違えば None。"""
+    s = str(reply or "").strip()
+    return s[len(UNLOCK_PREFIX):] if s.startswith(UNLOCK_PREFIX) else None
 
 
 def status_text(name: str, info) -> str:
-    """ステータスバー用の 1 行。"""
+    """ステータスバー用の 1 行。info は parse() の戻り値（先頭 2 つを使う）。"""
     from core.i18n import tr
-    n, choice = info
+    n, choice = info[0], info[1]
     if choice == "saveable":
         tail = tr("上書き保存できるようにしました", "saving over the file is allowed")
+    elif choice == "pending":
+        tail = tr("詳細は Maya のスクリプトエディター", "details in the Maya Script Editor")
     else:
-        tail = tr("このままでは Maya の Save Scene は止まります（Save Scene As か "
-                  "Manager の «シーンを保存» で保存できます）",
-                  "Maya's Save Scene will stop as is (use Save Scene As or "
-                  "Manager's \"Save Scene\")")
+        tail = tr("上書き保存は止まったまま（Save Scene As なら保存できます）",
+                  "saving over the file stays blocked (Save Scene As still works)")
     return tr("開きました: %s — 読み込み中に Maya のエラー %d 行。%s",
               "Opened: %s - %d lines of Maya errors while reading. %s") % (name, n, tail)
 
@@ -138,3 +186,8 @@ def open_in_this_maya(path: str):
     ns = {}
     exec(SRC, ns)
     return parse(ns["_mfm_open"](path, texts()))
+
+
+def unlock_in_this_maya(path: str):
+    """Maya の中で動いている時用の «解除する»。戻り値は parse_unlock() と同じ。"""
+    return parse_unlock(eval(unlock_code(path), {}))

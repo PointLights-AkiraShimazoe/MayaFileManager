@@ -7,7 +7,9 @@
 
 確かめること:
   1) Perforce の接続（どのフォルダがどのワークスペースか）を Maya へ渡す
-  2) Manager の «シーンを保存» は、上書き先が読み取り専用なら黙って書き換えない
+  2) Manager の «シーンを保存» は、上書き先が読み取り専用なら黙って書き換えない。
+     r150（ユーザー指摘 2026-11-18）: Manager で聞き、チェックアウト／読み取り専用の
+     解除も Manager が行ってから送る（Maya 側では聞かない）
   3) Windows: 本物の Maya で
      * 保存に失敗した理由が読み取り専用なら «チェックアウトして保存／読み取り専用を
        外して保存／保存しない» を聞き、選んだとおりに直して保存し直す
@@ -90,67 +92,154 @@ finally:
     mwd.MayaBridge = _orig_bridge
 
 
-# 2) Manager の «シーンを保存»
+# 2) Manager の «シーンを保存»（r150: 判断も処置も Manager で。Maya 側では聞かない）
 def _inner(code):
     i = code.index("exec(") + 5
     j = code.rindex(", _ns)")
     return eval(code[i:j])
 
 
+from core import save_target_guard as sg
+inner = _inner(dcc_save.maya_code("D:/w/a.ma", "save", {}))
+check("_mfm_save_watch" not in inner and "ro_fix" not in inner and "W_OK" not in inner,
+      "Manager から送る保存のコードに Maya 側の確認を入れない")
+
 d = tmpdir("mfm_ro_")
-target = os.path.join(d, "a.ma")
-io.open(target, "w").write("x")
-os.chmod(target, stat.S_IREAD)
-calls = []
-fake = types.ModuleType("maya")
-fake.cmds = types.ModuleType("maya.cmds")
-fake.cmds.file = lambda *a, **k: calls.append(k)
-fake.cmds.confirmDialog = lambda *a, **k: "OK"
-_saved_mods = {k: sys.modules.get(k) for k in ("maya", "maya.cmds")}
-sys.modules["maya"], sys.modules["maya.cmds"] = fake, fake.cmds
+_orig_lp = sw.log_path
+sw.log_path = lambda: os.path.join(d, "save.log").replace("\\", "/")
+# 偽の p4（引数を残し、成功なら書き込めるようにする）
+io.open(os.path.join(d, "fakep4.py"), "w", encoding="utf-8").write(r"""
+import json, os, stat, sys
+here = os.path.dirname(os.path.abspath(__file__))
+json.dump(sys.argv[1:], open(os.path.join(here, "p4_args.json"), "w"))
+if os.path.exists(os.path.join(here, "p4_fail")):
+    print(sys.argv[-1] + " - file(s) not on client.")
+else:
+    os.chmod(sys.argv[-1], stat.S_IREAD | stat.S_IWRITE)
+    print("//depot/x#1 - opened for edit")
+""")
+if os.name == "nt":
+    exe = os.path.join(d, "fakep4.bat")
+    io.open(exe, "w").write('@echo off\r\n"%s" "%s" %%*\r\n' % (sys.executable, os.path.join(d, "fakep4.py")))
+else:
+    exe = os.path.join(d, "fakep4.sh")
+    io.open(exe, "w").write('#!/bin/sh\nexec "%s" "%s" "$@"\n' % (sys.executable, os.path.join(d, "fakep4.py")))
+    os.chmod(exe, 0o755)
+
+
+class _P4:
+    key = "p4"
+    available = True
+    p4 = exe
+
+    def conn_args_for(self, directory):
+        return ["-p", "srv:1666", "-c", "ws_test"]
+
+
+T = sg.texts()
+CO2, RW2, NO2 = T["co"], T["rw"], T["no"]
+asks, sends, shown, answer = [], [], [], []
+
+
+class _SB:
+    def showMessage(self, m, *a):
+        shown.append(m)
+
+
+class _SaveHost:
+    prov = _P4()
+
+    def statusBar(self):
+        return _SB()
+
+    def _p4_provider(self):
+        return self.prov
+
+    def _run_bg(self, work, done):
+        done(work())
+
+    def _dcc_once(self, *a):
+        return True
+
+    def _dcc_begin_op(self, *a):
+        pass
+
+    def _dcc_end_op(self):
+        pass
+
+    def _dcc_save_send(self, dcc, code, label, act, path):
+        sends.append((path, os.access(path, os.W_OK)))
+
+    _dcc_save_accepted = mwd.MainWindowDccMixin._dcc_save_accepted
+    _ask_readonly_then = mwd.MainWindowDccMixin._ask_readonly_then
+
+
+_orig_ask = mwd.ask_choice
+mwd.ask_choice = lambda parent, text, info, buttons, cb: (
+    asks.append((text, info, list(buttons))), cb(answer.pop(0) if answer else buttons[-1]))
+
+
+def _save(name, ans, ro=True, prov=True):
+    pth = os.path.join(d, name)
+    io.open(pth, "w").write("x")
+    if ro:
+        os.chmod(pth, stat.S_IREAD)
+    del asks[:], sends[:]
+    answer[:] = list(ans)
+    h = _SaveHost()
+    if not prov:
+        h.prov = None
+    h._dcc_save_accepted("maya", "save", pth, "code")
+    return pth
+
+
 try:
-    inner = _inner(dcc_save.maya_code(target, "save", {}))
-    if os.access(target, os.W_OK):
+    probe = os.path.join(d, "probe")
+    io.open(probe, "w").write("x")
+    os.chmod(probe, stat.S_IREAD)
+    if os.access(probe, os.W_OK):
         print("SKIP この環境では読み取り専用にしても書き込める（管理者）", flush=True)
     else:
-        asked = []
-        _main.__dict__["_mfm_save_watch"] = {"ro_fix": lambda p: (asked.append(p), False)[1]}
-        ns = {}
-        exec(inner, ns)
-        check(ns.get("_mfm_result") == "Cancelled" and not calls and len(asked) == 1,
-              "読み取り専用の上書き先: 断ったら保存しない（%r / file %d 回）" % (ns.get("_mfm_result"), len(calls)))
-        _main.__dict__["_mfm_save_watch"] = {"ro_fix": lambda p: True}
-        ns = {}
-        exec(inner, ns)
-        check(str(ns.get("_mfm_result", "")).startswith("saved:") and len(calls) == 2,
-              "読み取り専用の上書き先: 直せたら保存する（%r）" % (ns.get("_mfm_result"),))
-    os.chmod(target, stat.S_IREAD | stat.S_IWRITE)
-    del calls[:]
-    _main.__dict__["_mfm_save_watch"] = {"ro_fix": lambda p: (_ for _ in ()).throw(AssertionError("asked"))}
-    ns = {}
-    exec(inner, ns)
-    check(str(ns.get("_mfm_result", "")).startswith("saved:") and len(calls) == 2,
-          "書き込める上書き先では何も聞かない")
-    _main.__dict__.pop("_mfm_save_watch", None)
-    del calls[:]
-    ns = {}
-    exec(inner, ns)
-    check(len(calls) == 2, "見張りが入っていない Maya では従来どおり保存する")
+        pth = _save("no.ma", [NO2])
+        check(asks and asks[0][2] == [CO2, RW2, NO2] and not sends and not os.access(pth, os.W_OK),
+              "保存しない: Manager で聞いて、送らない・ファイルに触らない（%r / 送信 %d）"
+              % (asks[0][2] if asks else None, len(sends)))
+        check(asks and asks[0][0].count("\n") <= 1 and "no.ma" in asks[0][0],
+              "聞く文は短い（%r）" % (asks[0][0] if asks else "",))
+        pth = _save("rw.ma", [RW2])
+        check(sends == [(pth, True)] and len(asks) == 1,
+              "読み取り専用を外して保存: Manager が外してから送る（%r）" % (sends,))
+        pth = _save("co.ma", [CO2])
+        args = json.load(io.open(os.path.join(d, "p4_args.json")))
+        check(sends == [(pth, True)] and args[:5] == ["-p", "srv:1666", "-c", "ws_test", "edit"]
+              and os.path.normcase(args[-1]) == os.path.normcase(pth),
+              "チェックアウトして保存: Manager が p4 edit（そのワークスペースの -c）してから送る（%r）"
+              % (args[:5],))
+        io.open(os.path.join(d, "p4_fail"), "w").close()
+        pth = _save("cofail.ma", [CO2, NO2])
+        check(len(asks) == 2 and asks[1][2] == [RW2, NO2] and "not on client" in asks[1][1]
+              and not sends and not os.access(pth, os.W_OK),
+              "チェックアウトできない時: 理由を出し、残りの選択肢だけで聞き直す（%r）"
+              % ([a[2] for a in asks],))
+        pth = _save("noprov.ma", [NO2], prov=False)
+        check(asks and asks[0][2] == [RW2, NO2], "Perforce が無い時は «チェックアウト» を出さない")
+        pth = _save("ok.ma", [], ro=False)
+        check(not asks and sends == [(pth, True)], "書き込める上書き先では何も聞かない")
+        recs = [json.loads(ln) for ln in io.open(sw.log_path(), encoding="utf-8")]
+        fix = [(x.get("how"), x.get("ok"), x.get("by")) for x in recs if x.get("ev") == "ro_fix"]
+        check(("chmod", True, "manager") in fix and ("p4 edit", True, "manager") in fix
+              and ("p4 edit", False, "manager") in fix and ("declined", False, "manager") in fix,
+              "Manager で直した内容も記録に残る（%r）" % (fix,))
 finally:
-    _main.__dict__.pop("_mfm_save_watch", None)
+    mwd.ask_choice = _orig_ask
+    sw.log_path = _orig_lp
     _main.__dict__.pop("_mfm_p4", None)
-    for k, v in _saved_mods.items():
-        if v is None:
-            sys.modules.pop(k, None)
-        else:
-            sys.modules[k] = v
 
 # 3) 本物の Maya
 if os.name == "nt":
+    d = tmpdir("mfm_ro_maya_")
     log = os.path.join(d, "save.log").replace("\\", "/")
     io.open(os.path.join(d, "code.txt"), "w", encoding="utf-8").write(sw.install_code(log, "en"))
-    io.open(os.path.join(d, "mfmsave.txt"), "w", encoding="utf-8").write(
-        _inner(dcc_save.maya_code(os.path.join(d, "ws", "m.ma"), "save", {})))
     io.open(os.path.join(d, "fakep4.py"), "w", encoding="utf-8").write(r'''
 import json, os, stat, sys
 here = os.path.dirname(os.path.abspath(__file__))
@@ -223,15 +312,6 @@ res["no"] = save_via_menu(mk("no.ma"), [NO])
 p = os.path.join(ws, "ok.ma").replace("\\", "/")
 cmds.file(new=True, force=True); cmds.polyCube(); cmds.file(rename=p); cmds.file(save=True, type="mayaAscii", force=True)
 res["ok"] = save_via_menu(p, [])
-# Manager の «シーンを保存»（上書き先が読み取り専用）
-p = mk("m.ma")
-src = open(os.path.join(d, "mfmsave.txt"), encoding="utf-8").read()
-del asked[:]; answers[:] = [NO]
-ns = {}; exec(src, ns)
-res["mfm_no"] = [ns.get("_mfm_result"), os.access(p, os.W_OK), len(asked)]
-del asked[:]; answers[:] = [RW]
-ns = {}; exec(src, ns)
-res["mfm_rw"] = [str(ns.get("_mfm_result"))[:6], os.access(p, os.W_OK), len(asked)]
 json.dump(res, open(out, "w", encoding="utf-8"), ensure_ascii=False)
 maya.standalone.uninitialize()
 ''')
@@ -271,8 +351,6 @@ maya.standalone.uninitialize()
     x = res.get("ok") or {}
     check(x.get("first") == "" and x.get("buttons") == [] and x.get("saved"),
           "書き込めるファイルの保存では何も聞かない")
-    check(res.get("mfm_no") == ["Cancelled", False, 1] and res.get("mfm_rw") == ["saved:", True, 1],
-          "Manager の «シーンを保存» も同じ確認を通す（%r / %r）" % (res.get("mfm_no"), res.get("mfm_rw")))
     check(("chmod", True) in fix and ("p4 edit", True) in fix and ("p4 edit", False) in fix
           and ("declined", False) in fix, "直した内容が記録に残る（%r）" % (fix,))
 else:

@@ -26,7 +26,7 @@ from pathlib import Path
 
 from core.compat import (
     Qt, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QInputDialog, QDialog,
-    QApplication, QPushButton, QTextEdit, QTimer,
+    QApplication, QPushButton, QTextEdit, QTimer, QObject, Signal,
 )
 from core.maya_version import (
     MayaInstallation, find_installed_maya_versions, launch_maya,
@@ -1204,17 +1204,30 @@ class MainWindowDccMixin:
                 _swallow(_e, "ui/main_window_dcc.py _on_bridge_done(dup log)")
             return
         # r149: «開けたが、読み込み中に Maya がエラーを出した»。失敗ではないので
-        # «連携エラー» にしない（Maya 側で、何が起きたかとどうするかを聞き済み）。
+        # «連携エラー» にしない。
+        # r150: どうするかは Manager で聞く（Maya 側ではダイアログを出さない）。
         if ok:
             try:
                 from core import maya_open_guard as _og
                 _info = _og.parse(reply)
+                _unl = _og.parse_unlock(reply)
             except Exception as _e:
-                _info = None
+                _info = _unl = None
                 _swallow(_e, "ui/main_window_dcc.py _on_bridge_done(open guard)")
             if _info:
                 _nm = label.split(" ", 1)[1] if " " in label else label
                 self.statusBar().showMessage(_og.status_text(_nm, _info))
+                if _info[1] == "pending" and _info[2]:
+                    self._ask_unlock_after_open(
+                        int(getattr(self, "_last_done_port", 0) or 0), _info[2], _info[0])
+                return
+            if _unl:
+                self._show_unlock_result(label, _unl)
+                return
+            if isinstance(reply, str) and reply.startswith("saved:"):
+                # r150: Manager から行った保存は、Manager で «終わった» と分かるように
+                self.statusBar().showMessage(
+                    tr("保存しました: %s", "Saved: %s") % reply[len("saved:"):].strip())
                 return
         if ok:
             msg = tr("送信: %s", "Sent: %s") % label
@@ -1543,6 +1556,9 @@ class MainWindowDccMixin:
     def _on_dcc_sent_done(self, port: int, ok: bool, has_reply: bool):
         """送信の結果（UIスレッド）。応答が返った／送れなかった時だけ、
         **その送り先の** 印を落とす（応答なし＝まだ処理中、は落とさない）。"""
+        # r150: 直後に届く done（同じスレッドから出した順に届く）が «どの送り先の
+        # 応答か» を知るために覚えておく（開いた Maya へ «解除する» を送り返す）。
+        self._last_done_port = int(port or 0)
         if (not ok) or has_reply:
             self._clear_dcc_pending(port=(int(port) or None))
 
@@ -1905,6 +1921,7 @@ class MainWindowDccMixin:
             self._maya_local_log(act, path, "done")
             if _info:
                 self.statusBar().showMessage(_og.status_text(Path(path).name, _info))
+                self._ask_unlock_after_open(0, path, _info[0])     # r150
         except Exception as e:
             self._maya_local_log(act, path, "fail", str(e))
             QMessageBox.critical(self, tr("エラー", "Error"), str(e))
@@ -2054,21 +2071,7 @@ class MainWindowDccMixin:
             path, code = dlg.result_path(), dlg.dcc_code()
             if not path:
                 return
-            label = (tr("選択を書き出し %s", "Export Selection %s")
-                     if mode == "export"
-                     else tr("シーンを保存 %s", "Save Scene %s")) % Path(path).name
-            act = (tr("選択を書き出し", "Export Selection") if mode == "export"
-                   else tr("シーンを保存", "Save Scene"))
-            # r123: ダイアログの OK が二重に届けば二度保存／二度書き出しに
-            # なる（«1 操作 = 1 回» の原則）。共通ガードを通す。
-            kind = "export" if mode == "export" else "save"
-            if not self._dcc_once(kind, path, dcc):
-                return
-            self._dcc_begin_op(kind, path, dcc)
-            try:
-                self._dcc_save_send(dcc, code, label, act, path)
-            finally:
-                self._dcc_end_op()
+            self._dcc_save_accepted(dcc, mode, path, code)
 
         dlg.accepted.connect(_accepted)
         # 非モーダルなので、参照を持っていないと回収されて消える
@@ -2082,6 +2085,135 @@ class MainWindowDccMixin:
         # （«前面化はコンパクトの開閉だけ» という決まりを崩さないため）。
         dlg.show()
         dlg.raise_()
+
+    def _dcc_save_accepted(self, dcc: str, mode: str, path: str, code: str):
+        """保存ダイアログの OK の続き。
+
+        r150（ユーザー指摘 2026-11-18、H-15）:「Manager からの実行なのに、静かに
+        maya 側で出ていて何が起きているのか気づくまでに時間がかかりました。Manager で
+        意思決定し、Manager で保存が終わらないと駄目です」
+        → 上書き先が読み取り専用なら、**送る前に Manager で** 聞き、チェックアウト／
+        読み取り専用の解除も Manager が行ってから送る（core/save_target_guard.py）。"""
+        from core import save_target_guard as _sg
+        if _sg.needs_fix(path):
+            self._ask_readonly_then(
+                path, lambda: self._dcc_save_accepted(dcc, mode, path, code))
+            return
+        label = (tr("選択を書き出し %s", "Export Selection %s")
+                 if mode == "export"
+                 else tr("シーンを保存 %s", "Save Scene %s")) % Path(path).name
+        act = (tr("選択を書き出し", "Export Selection") if mode == "export"
+               else tr("シーンを保存", "Save Scene"))
+        # r123: ダイアログの OK が二重に届けば二度保存／二度書き出しに
+        # なる（«1 操作 = 1 回» の原則）。共通ガードを通す。
+        kind = "export" if mode == "export" else "save"
+        if not self._dcc_once(kind, path, dcc):
+            return
+        self._dcc_begin_op(kind, path, dcc)
+        try:
+            self._dcc_save_send(dcc, code, label, act, path)
+        finally:
+            self._dcc_end_op()
+
+    def _p4_provider(self):
+        try:
+            from core.integrations import get_manager
+            return next((x for x in get_manager().providers
+                         if getattr(x, "key", "") == "p4"), None)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _p4_provider")
+            return None
+
+    def _ask_readonly_then(self, path: str, proceed, note: str = "", allow_co: bool = True):
+        """上書き先が読み取り専用の時に Manager で聞く（r150）。書き込めるように
+        なったら proceed() を呼ぶ。断った時はファイルに触らない。"""
+        from core import save_target_guard as _sg
+        t = _sg.texts()
+        name = Path(path).name
+        cmd = _sg.p4_edit_cmd(self._p4_provider(), path) if allow_co else None
+        buttons = ([t["co"]] if cmd else []) + [t["rw"], t["no"]]
+
+        def _chosen(ans):
+            if ans == t["co"] and cmd:
+                self.statusBar().showMessage(t["co_running"] % name)
+
+                def _after(res):
+                    ok, out = res
+                    if ok:
+                        self.statusBar().showMessage(t["co_done"] % name)
+                        proceed()
+                    else:
+                        self._ask_readonly_then(path, proceed,
+                                                note=t["co_fail"] + "\n" + (out[:600] or "-"),
+                                                allow_co=False)
+                self._run_bg(lambda: _sg.run_p4_edit(cmd, path), _after)
+            elif ans == t["rw"]:
+                ok, err = _sg.make_writable(path)
+                if ok:
+                    proceed()
+                else:
+                    ask_choice(self, t["rw_fail"], err, [t["no"]], lambda _a: None)
+            else:
+                _sg.log("declined", False, path)
+                self.statusBar().showMessage(t["cancelled"] % name)
+
+        ask_choice(self, t["text"] % name, note, buttons, _chosen)
+
+    def _ask_unlock_after_open(self, port: int, path: str, n_lines: int):
+        """«エラー付きで開けた» シーンを上書き保存できるようにするか、Manager で聞く（r150）。
+        詳細は Maya のスクリプトエディターに書いてある。"""
+        from core import maya_open_guard as _og
+        t = _og.ask_texts()
+
+        def _chosen(ans):
+            if ans != t["yes"]:
+                self.statusBar().showMessage(
+                    _og.status_text(Path(path).name, (n_lines, "kept")))
+                return
+            label = tr("上書き保存を許可 %s", "Allow saving %s") % Path(path).name
+            if self._inside_maya:
+                try:
+                    self._show_unlock_result(label, _og.unlock_in_this_maya(path))
+                except Exception as e:
+                    QMessageBox.warning(self, tr("エラー", "Error"), str(e))
+                return
+            bridge = MayaBridge(port) if port else self._bridge
+            code = _og.unlock_code(path)
+
+            def _send():
+                return bridge.send_python(code, timeout=6.0, tag=label)
+
+            def _after(res):
+                ok, reply = res
+                self._on_bridge_done(bool(ok), label, reply)
+            self._run_bg(_send, _after)
+
+        ask_choice(self, t["text"], t["info"], [t["yes"], t["no"]], _chosen)
+
+    def _show_unlock_result(self, label: str, res):
+        nm = label.split(" ", 1)[1] if " " in label else label
+        if res == "ok":
+            from core import maya_open_guard as _og
+            self.statusBar().showMessage(_og.ask_texts()["done"] % nm)
+        else:
+            self.statusBar().showMessage(
+                tr("Maya のシーンが変わっていたため、何もしていません: %s",
+                   "The Maya scene has changed; nothing was done: %s") % nm)
+
+    def _run_bg(self, work, done):
+        """work() を別スレッドで実行し、結果で done(result) を UI スレッドで呼ぶ
+        （p4 や Maya の応答待ちで UI を止めない）。"""
+        import threading
+        keep = self.__dict__.setdefault("_ui_calls", [])
+        call = _UiCall(done, keep)
+
+        def _go():
+            try:
+                res = work()
+            except Exception as e:
+                res = (False, str(e))
+            call.sig.emit(res)
+        threading.Thread(target=_go, daemon=True, name="mfm-bg").start()
 
     def _dcc_save_send(self, dcc, code, label, act, path):
         if dcc == "blender":
@@ -2327,6 +2459,69 @@ class MainWindowDccMixin:
 # 分からない呼び出し元（ブリッジを持たない軽いスタブ等）は None の 1 枠に
 # まとまる＝従来と同じ。メソッドにしないのは、_dcc_once だけを借りて使う
 # 呼び出し元（テストの最小スタブ）でもそのまま動くようにするため。
+class _UiCall(QObject):
+    """別スレッドの結果を UI スレッドで受ける（r150）。受け手が QObject の
+    メソッドなので、スレッドを跨ぐ合図は UI スレッドで実行される。"""
+    sig = Signal(object)
+
+    def __init__(self, fn, keep):
+        super().__init__()
+        self._fn, self._keep = fn, keep
+        keep.append(self)              # 結果が届くまで回収させない
+        self.sig.connect(self._run)
+
+    def _run(self, res):
+        try:
+            self._fn(res)
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py _UiCall")
+        finally:
+            if self in self._keep:
+                self._keep.remove(self)
+
+
+def ask_choice(parent, text: str, info: str, buttons, on_choice):
+    """Manager で短く聞く（r150）。
+
+    * 非モーダル（«全てのウィンドウで拘束するな» r146 の決まり）。押された時に
+      on_choice(ボタンの文字) を呼ぶ。閉じるボタン・Esc は最後のボタン扱い。
+    * 常に手前（WindowStaysOnTopHint）。送った先の Maya が前に出ているので、
+      これが無いと Manager の後ろに隠れて «気づかない» になる。activateWindow は
+      呼ばない（前面化はコンパクトの開閉だけ、の決まり）。
+    テストはこの関数を差し替える。"""
+    box = QMessageBox(parent.window() if parent is not None else None)
+    box.setWindowTitle("Maya File Manager")
+    box.setIcon(QMessageBox.Warning)
+    box.setText(text)
+    if info:
+        box.setInformativeText(info)
+    btns = [box.addButton(b, QMessageBox.AcceptRole if i == 0 else QMessageBox.RejectRole)
+            for i, b in enumerate(buttons)]
+    box.setEscapeButton(btns[-1])
+    box.setDefaultButton(btns[0])
+    box.setWindowModality(Qt.NonModal)
+    box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    box.setAttribute(Qt.WA_DeleteOnClose, True)
+    done = []
+
+    def _clicked(b):
+        if done:
+            return
+        done.append(1)
+        try:
+            on_choice(buttons[btns.index(b)] if b in btns else buttons[-1])
+        except Exception as _e:
+            _swallow(_e, "ui/main_window_dcc.py ask_choice")
+    box.buttonClicked.connect(_clicked)
+    box.finished.connect(lambda *_a: _clicked(btns[-1]))
+    keep = parent.__dict__.setdefault("_ask_boxes", []) if parent is not None else []
+    keep.append(box)
+    box.destroyed.connect(lambda *_a, b=box: keep.remove(b) if b in keep else None)
+    box.show()
+    box.raise_()
+    return box
+
+
 def _dcc_pend_map(win) -> dict:
     m = win.__dict__.get("_dcc_pend")
     if m is None:

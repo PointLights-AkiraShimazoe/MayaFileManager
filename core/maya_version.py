@@ -328,7 +328,58 @@ def _clean_launch_env() -> Dict[str, str]:
     env = dict(os.environ)
     for k in _CONFLICTING_ENV_KEYS:
         env.pop(k, None)
+    # r150（2026-11-18、Codex の修正を取り込み）: Maya 2027 は PATH にある «未信頼の
+    # ジャンクション» で DLL 探索を中断する（WinError 448）。そのため mtoa の依存 DLL が
+    # 読めず、Arnold が載らなかった（Arnold のアトリビュートを持つシーンが
+    # «エラー付きで開けた» になる元）。起動する Maya に渡す PATH の写しだけ、
+    # 項目を実パスへ解決する。親・ユーザー・システムの環境変数は変えない。
+    # **ローカルの固定ディスク上の項目だけ** を解決する。realpath はそのドライブへ
+    # 問い合わせるので、ネットワーク・UNC の項目まで解決すると、切れたネットワーク
+    # ドライブで UI が止まる（この関数は UI スレッドから呼ばれる。C-6 と同じ罠）。
+    for key in list(env):
+        if key.upper() == "PATH":
+            env[key] = _resolve_local_path_entries(env[key])
     return env
+
+
+_IS_WIN = os.name == "nt"
+
+
+def _drive_type(drive: str) -> int:
+    """GetDriveTypeW（3 = 固定ディスク）。ドライブの割り当て表を見るだけで、
+    ネットワークへは問い合わせない。分からなければ 0。"""
+    try:
+        import ctypes
+        return int(ctypes.windll.kernel32.GetDriveTypeW(drive + "\\"))
+    except Exception:
+        return 0
+
+
+def _resolve_local_path_entries(value: str, sep: str = "") -> str:
+    """PATH の値のうち、ローカルの固定ディスク上の絶対パスだけを実パスへ解決する
+    （r150）。順番・空の項目・相対パス・ネットワーク／UNC／リムーバブルの項目は
+    そのまま。解決できない項目もそのまま。"""
+    import ntpath
+    sep = sep or os.pathsep
+    types = {}
+    out = []
+    for p in (value or "").split(sep):
+        q = p
+        try:
+            if _IS_WIN:
+                drive = ntpath.splitdrive(p)[0]
+                if (p and ntpath.isabs(p) and len(drive) == 2 and drive[1] == ":"):
+                    d = drive.upper()
+                    if d not in types:
+                        types[d] = _drive_type(d)
+                    if types[d] == 3:
+                        q = os.path.realpath(p)
+            elif p and os.path.isabs(p):
+                q = os.path.realpath(p)
+        except (OSError, ValueError):
+            q = p
+        out.append(q)
+    return sep.join(out)
 
 
 def parse_env_text(text: str) -> Dict[str, str]:

@@ -1434,6 +1434,44 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
 - 本物の Maya での確認は、テストから mayapy を起こす（`maya.standalone`）。GUI の
   Maya（専用 Maya）で Save Scene を試すと、確認ダイアログで止まって戻って来ない。
 
+## Manager から行った操作の判断は Manager で受ける（r150、2026-11-18）
+
+ユーザー指摘（H-14・H-15 の実機確認）:
+「文面が長すぎます。端的にエラーが起きたことと読み取り専用を解除する事を伝えて
+意思確認をしてください。詳細はスクリプトエディターで大丈夫です。maya の標準の
+エラーログと被ってでてしまい、ボタンが見えずに maya 操作ができなくなったかと
+思いました」「MayaFileManager からの実行なのに、静かに maya 側で出ていて何が
+起きているのか気づくまでに時間がかかりました。Manager で意思決定し、Manager で
+保存が終わらないと駄目です」
+
+- **Manager から始めた操作（開く・シーンを保存）で判断が要る時は、Manager で聞く。**
+  Maya 側の confirmDialog は Maya 自身のエラー表示と重なってボタンが隠れ、
+  «Maya が固まった» に見える。Manager から操作した人は Maya の画面を見ていない。
+  Maya で始めた操作（File > Save Scene）だけ Maya 側で聞く（maya_save_watch）。
+- 聞く文は 2 行まで。中身（エラーの全行・理由）は Maya のスクリプトエディターへ。
+- 聞く窓は `ui/main_window_dcc.py` の `ask_choice()`: 非モーダル（r146 の決まり）・
+  常に手前（送った先の Maya が前に出ているので、無いと後ろに隠れる）。
+  activateWindow は呼ばない。テストはこの関数を差し替える。
+- 開く: Maya は «開けた» と `OpenedWithErrors:<行数>:pending:<パス>` を返すだけ。
+  Manager が聞き、«解除する» なら **応答を返した送り先**（`_last_done_port`。
+  done_at は done より先に同じスレッドから届く）へ `unlock_code()` を送る。
+  Maya 側はシーンが変わっていたら何もしない（`MfmUnlocked:other`）。
+- 保存: `_dcc_save_accepted()` が送る前に `core/save_target_guard.py` で調べ、
+  p4 edit（そのフォルダのワークスペースの -c）・読み取り専用の解除も Manager が行う。
+  p4 は別スレッド（`_run_bg`。結果は QObject のメソッドで受けるので UI スレッドで動く）。
+  `dcc_save.maya_code()` には Maya 側の確認を入れない。
+- Maya を起動する時の PATH（`core/maya_version.py` `_resolve_local_path_entries`）:
+  Maya 2027 は PATH のジャンクションを «未信頼のマウントポイント»（WinError 448）として
+  DLL 探索を止める（mtoa が載らず、Arnold のシーンが «エラー付きで開けた» になった）。
+  起動用の写しだけ実パスへ解決する。**ローカル固定ディスクの項目だけ**（GetDriveTypeW
+  == 3）。realpath はドライブへ問い合わせるので、ネットワーク・UNC まで解決すると
+  切れたドライブで UI が止まる（起動は UI スレッド）。Codex の修正（全項目を解決）を
+  絞って取り込んだ。
+- 開く時の文面は «読み取り専用» と言わない（ユーザー指摘「エラーがでたから読み取り専用を
+  解除するのロジックが普通わからない」）。«エラーのため Maya が上書き保存を止めている»
+  «上書き保存すると読み込めなかった設定は消える» «詳細はスクリプトエディターをご確認
+  ください。» の順で、理由と結果を伝えてから聞く。
+
 ## 開発・デバッグの約束事
 
 - 起動: `run_dev.bat`（インストール済み最新Maya 2027→2023 の mayapy を自動選択。
