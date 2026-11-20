@@ -1796,3 +1796,17 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
     flatten_files(recursive=) → FlatColumn.set_recursive → 設定 "flat_recursive"。
     全ての子フォルダカラムで連動（_on_flat_depth_changed）。ラベルは
     QSizePolicy.Ignored で縮小可、スイッチは Fixed（文言の省略防止）。
+
+
+## 起動した Maya の見分け（r152、2026-11-21）
+
+* ユーザー報告「Manager から起動した最新の Maya に接続が切り替わっていないことが多々ある（複数 Maya が前提）」。
+  実機 mfm_maya.log では、起動の約 1 秒後に「予約 :20263 には来ず、新しく現れた :20262 を採る」が出ており、
+  前から開いていた Maya を «起動した当人» と取り違えていた（本物は数秒後に :20263 に来る）。
+* 原因: 起動前の顔ぶれを «前回の一覧»（_last_conn_items）だけで作っていた。一覧の更新が一度も終わって
+  いない時（Manager 起動直後）や、前回応答しなかった Maya（PID 不明）がいると顔ぶれが欠ける。
+* 直し方: 空きポートを探す走査（free_port_and_present）で «今使われているポート» も取り、予約の
+  ports に入れる。新顔の判定は «PID 一致» → «先に起動した PID は除外» → «起動時に無かったポート» →
+  «同じポートで PID が変わった（前の PID が分かっている時だけ）» の順。続けて起動した時は、前の予約の
+  ポートと PID を除外する。
+* テスト: test_launch_connect_claim の手順 10・11（v0.9.25 のコードでは 5 件失敗することを確認済み）。

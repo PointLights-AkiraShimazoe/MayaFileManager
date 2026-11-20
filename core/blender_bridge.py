@@ -56,11 +56,16 @@ def _scan_range(host, timeout):
 
 
 def find_free_port(host: str = "127.0.0.1") -> int:
+    return free_port_and_present(host)[0]
+
+
+def free_port_and_present(host: str = "127.0.0.1"):
+    """(空きポート, 今使われているポートの集合)。r152（2026-11-21）: maya_bridge と同じ。"""
     used = set(_scan_range(host, 0.15))
     for p in PORT_RANGE:
         if p not in used:
-            return p
-    return PORT_RANGE[-1]
+            return p, used
+    return PORT_RANGE[-1], used
 
 
 class BlenderBridge(MayaBridge):

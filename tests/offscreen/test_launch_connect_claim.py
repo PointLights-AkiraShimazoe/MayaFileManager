@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """r138: 起動した Maya / Blender へ接続を向ける（待たない）。
 
+r152（2026-11-21）: 手順 10・11 を追加（複数 Maya で取り違えていた件）。
+
 ユーザー指示 2026-10-08:
   「mayaとBlenderを起動した際には、最新で開いたものへコネクトを切り替えて
     ください。この挙動の実装により、managerが拘束されるようであれば、
@@ -174,6 +176,57 @@ def s1():
     w._on_conn_list(items, "maya")
     _settle()
     check(w._bridge.port == 20265, "PID が一致する Maya を採る（%r）" % w._bridge.port)
+
+    # ── 10) r152（実機 2026-11-21）: 一覧の更新がまだ一度も終わっていない時 ──
+    # Manager を起動してすぐ Maya を起動すると、«前回の一覧» は空。前から
+    # 開いていた :20261 / :20262 を «新しく現れた» と取り違えて切り替えていた
+    # （mfm_maya.log「予約 :20263 には来ず、新しく現れた :20262 を採る」）。
+    w._clear_launch_claim("maya")
+    w._last_conn_items = {}
+    w._known_conns["maya"].clear()
+    w._bridge.set_port(20263)
+    w._claim_launched_port("maya", 20263, pid=7001, present={20261, 20262})
+    w._on_conn_list(_items([20261, 20262]), "maya")      # 前からいた 2 台が答えた
+    _settle()
+    check(w._bridge.port == 20263 and w._launch_claim("maya") == 20263,
+          "一覧が空でも、起動前から開いていた Maya へは乗り換えない（%r）" % w._bridge.port)
+    items = _items([20261, 20262, 20263])
+    items[2] = (20263, "Maya 2027 — 無題 (:20263)", True, 7001, "maya")
+    w._on_conn_list(items, "maya")
+    _settle()
+    check(w._bridge.port == 20263 and w._launch_claim("maya") is None,
+          "起動した Maya が来たらそこへ繋がる（%r）" % w._bridge.port)
+
+    # 前回は応答できなかった（PID が分からない）Maya が後から答えても «新顔» ではない
+    w._clear_launch_claim("maya")
+    w._last_conn_items = {"maya": {20261: None}}
+    w._bridge.set_port(20262)
+    w._claim_launched_port("maya", 20262, pid=7101, present={20261})
+    w._on_conn_list(_items([20261]), "maya")
+    _settle()
+    check(w._bridge.port == 20262 and w._launch_claim("maya") == 20262,
+          "前回 PID が取れなかった Maya を起動した当人と見なさない（%r）" % w._bridge.port)
+
+    # ── 11) 続けて 2 台起動: 1 台目を 2 台目と取り違えない ──────────────
+    w._clear_launch_claim("maya")
+    w._last_conn_items = {"maya": {20261: 1000 + 20261}}
+    w._bridge.set_port(20262)
+    w._claim_launched_port("maya", 20262, pid=7201, present={20261})   # 1 台目
+    w._bridge.set_port(20263)
+    w._claim_launched_port("maya", 20263, pid=7202, present={20261})   # 2 台目（1 台目はまだ）
+    items = _items([20261, 20264])
+    items[1] = (20264, "Maya 2027 — 1st (:20264)", True, 7201, "maya")  # 1 台目が隣に来た
+    w._on_conn_list(items, "maya")
+    _settle()
+    check(w._bridge.port == 20263 and w._launch_claim("maya") == 20263,
+          "先に起動した 1 台目へは乗り換えない（%r）" % w._bridge.port)
+    items = _items([20261, 20264, 20263])
+    items[1] = (20264, "Maya 2027 — 1st (:20264)", True, 7201, "maya")
+    items[2] = (20263, "Maya 2027 — 2nd (:20263)", True, 7202, "maya")
+    w._on_conn_list(items, "maya")
+    _settle()
+    check(w._bridge.port == 20263 and w._launch_claim("maya") is None,
+          "最後に起動した Maya へ繋がる（%r）" % w._bridge.port)
 
     finish(not fails)
 

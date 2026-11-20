@@ -151,12 +151,20 @@ def find_free_port(host: str = "127.0.0.1") -> int:
     r146: 接続が時間切れのポート（読み込み中で accept が止まっている Maya）も
     «使用中»。空きと見て予約すると、起動した Maya がそのポートを開けず隣へ
     逃げ、予約だけが残る（実機 2026-10-20、:20261 → :20262）。"""
+    return free_port_and_present(host)[0]
+
+
+def free_port_and_present(host: str = "127.0.0.1"):
+    """(空きポート, 今使われているポートの集合) を 1 回の走査で返す（r152 2026-11-21）。
+
+    使われているポート＝ «起動する前からいた Maya» 。起動した当人の見分けに使う
+    （ui/main_window_dcc.py _claim_launched_port）。"""
     open_, busy = scan_ports(host)
     used = set(open_) | set(busy)
     for p in PORT_RANGE:
         if p not in used:
-            return p
-    return PORT_RANGE[-1]
+            return p, used
+    return PORT_RANGE[-1], used
 
 
 # Maya識別用: バージョン・シーン名・PIDをセンチネル付きで返すコード。
