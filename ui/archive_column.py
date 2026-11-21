@@ -76,6 +76,38 @@ def draw_icon(kind: str, size: int = 14, color: str = ""):
     return QIcon(pm)
 
 
+class _ElideLabel(QLabel):
+    """幅が足りなければ «…» で省略するラベル（r153、2026-11-22）。
+
+    書庫カラムの見出し（「xxx.zip（8 ファイル）」）は QLabel の最小幅が
+    文字列の全幅になるため、カラムが狭いと右の «解凍» と閉じるボタンが
+    カラムの外へ押し出されて見えなかった（撮影で発見）。見出しは縮めて省略し、
+    ボタンは必ず見えるようにする。全文はツールチップで見られる。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._full = ""
+        from core.compat import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setMinimumWidth(1)
+
+    def setText(self, text):
+        self._full = text or ""
+        self._refit()
+
+    def full_text(self):
+        return self._full
+
+    def _refit(self):
+        from core.compat import QFontMetrics
+        fm = QFontMetrics(self.font())
+        super().setText(fm.elidedText(self._full, Qt.ElideMiddle, max(0, self.width() - 2)))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._refit()
+
+
 _OPEN_PICKERS = []
 
 
@@ -207,7 +239,7 @@ class ArchiveColumn(QWidget):
         hl = QHBoxLayout(hdr)
         hl.setContentsMargins(6, 3, 3, 3)
         hl.setSpacing(4)
-        self._title = QLabel(hdr)
+        self._title = _ElideLabel(hdr)
         self._title.setObjectName("arcTitle")
         hl.addWidget(self._title, 1)
         from core.theme_engine import qss_vars as _qv
@@ -407,7 +439,73 @@ class ArchiveColumn(QWidget):
 
 
 class _ArchiveColumnView(QColumnView):
-    """書庫用のカラムビュー。各カラムへドラッグ設定を流し込む。"""
+    """書庫用のカラムビュー。各カラムへドラッグ設定を流し込む。
+
+    r153（2026-11-22、ユーザー指摘「✕ が見えるまで広げるとスクロールバーが右端から
+    離れ、バーが丁度よい所ではボタンがほぼ見えない」）: QColumnView のカラム幅は
+    固定で、書庫カラムの幅と関係なかった。**カラムを書庫カラムの幅に合わせる**:
+    最後のカラムが右端まで伸びる（スクロールバーは常に右端）。1 階層だけなら
+    横スクロールは出ない。幅は自前で決めるので、カラムのつまみは出さない。"""
+
+    _MIN_COL = 150
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        try:
+            self.setResizeGripsVisible(False)
+        except Exception as _e:
+            _swallow(_e, "ui/archive_column.py _ArchiveColumnView grips")
+        from core.compat import QTimer
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.setInterval(0)
+        self._fit_timer.timeout.connect(self.fit_columns)
+
+    def setModel(self, model):
+        super().setModel(model)
+        try:
+            self.selectionModel().currentChanged.connect(lambda *_a: self._fit_timer.start())
+        except Exception as _e:
+            _swallow(_e, "ui/archive_column.py _ArchiveColumnView setModel")
+        self._fit_timer.start()
+
+    def _depth(self) -> int:
+        """今見えているカラムの数（ルート＋選んだフォルダの深さ）。"""
+        n = 1
+        idx = self.currentIndex()
+        m = self.model()
+        while idx.isValid():
+            if m is not None and m.hasChildren(idx):
+                n += 1
+            idx = idx.parent()
+            # 選んだのがファイルなら、その親までがカラム
+        return n
+
+    def fit_columns(self):
+        try:
+            vpw = max(1, self.viewport().width())
+            n = max(1, self._depth())
+            if n == 1:
+                widths = [vpw]
+            else:
+                each = max(self._MIN_COL, vpw // n)
+                last = max(self._MIN_COL, vpw - each * (n - 1))
+                widths = [each] * (n - 1) + [last]
+            if list(self.columnWidths())[:len(widths)] != widths:
+                self.setColumnWidths(widths)
+            # 1 階層なら横スクロールは要らない（幅の更新が遅れて一瞬出るのも出さない）
+            hb = self.horizontalScrollBar()
+            if n == 1:
+                self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                hb.setValue(0)
+            else:
+                self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        except Exception as _e:
+            _swallow(_e, "ui/archive_column.py fit_columns")
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit_timer.start()
 
     def createColumn(self, index):
         view = super().createColumn(index)

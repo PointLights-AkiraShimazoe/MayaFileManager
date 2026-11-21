@@ -139,6 +139,54 @@ def s2():
     assert left >= -1 and right <= vp.width() + 1, (
         "zip のカラムが隠れている", left, right, vp.width())
     print("archive column does not hide the column that holds the zip: OK")
+
+    # 7) 書庫カラムの幅を変えても、中のカラムは右端まで（スクロールバーは右端・横スクロール無し）
+    #    （ユーザー指摘 2026-11-22: 広げるとバーが右端から離れ、狭めるとボタンが見えない）
+    from core.compat import QToolButton, QListView
+    ac = b._archive_col
+    for want in (520, 300, 220):
+        b._set_inline_panel_sizes(b._view_stack.indexOf(ac), want)
+        _settle(250)
+        av = ac._view
+        cols = [v for v in av.findChildren(QListView) if v.isVisible()]
+        assert cols, "書庫の中のカラムが無い"
+        last = max(cols, key=lambda v: v.mapTo(av.viewport(), v.rect().topLeft()).x())
+        right = last.mapTo(av.viewport(), last.rect().topRight()).x() + 1
+        vpw = av.viewport().width()
+        assert abs(right - vpw) <= 2, ("中のカラムが右端に届いていない／はみ出している", want, right, vpw)
+        hb = av.horizontalScrollBar()
+        assert not hb.isVisible() and hb.value() == 0, ("1 階層なのに横スクロールが出る", want)
+        for name in ("arcExtract", "arcClose"):
+            btn = ac.findChild(QToolButton, name)
+            bx = btn.mapTo(ac, btn.rect().topRight()).x()
+            assert btn.isVisible() and bx <= ac.width(), ("ボタンが見えない", want, name, bx, ac.width())
+    # 中のフォルダへ入っても（2 カラム）、最後のカラムが右端まで
+    b._set_inline_panel_sizes(b._view_stack.indexOf(ac), 520)
+    _settle(200)
+    av = ac._view
+    av.setCurrentIndex(av.model().index(0, 0))
+    _settle(300)
+    cols = [v for v in av.findChildren(QListView) if v.isVisible() and v.width() > 1]
+    assert len(cols) >= 2, ("フォルダに入っても 2 カラムにならない", len(cols))
+    last = max(cols, key=lambda v: v.mapTo(av.viewport(), v.rect().topLeft()).x())
+    right = last.mapTo(av.viewport(), last.rect().topRight()).x() + 1
+    assert abs(right - av.viewport().width()) <= 2 or av.horizontalScrollBar().maximum() > 0, (
+        "2 カラムで右端に届いていない", right, av.viewport().width())
+    av.setCurrentIndex(av.model().index(-1, -1))
+    print("archive inner columns fill to the right edge at any width: OK")
+
+    # 7b) 狭いカラムでも «解凍» と閉じるボタンがカラムの中に見えている（見出しは省略）
+    b._set_inline_panel_sizes(b._view_stack.indexOf(ac), 220)
+    ac._title.setText("very_long_archive_name_" * 6 + ".zip（123 ファイル）")
+    _settle(300)
+    for name in ("arcExtract", "arcClose"):
+        btn = ac.findChild(QToolButton, name)
+        r = btn.rect()
+        right = btn.mapTo(ac, r.topRight()).x()
+        assert btn.isVisible() and btn.width() >= 16 and right <= ac.width(), (
+            "ボタンがカラムの外へ押し出されている", name, right, ac.width(), btn.width())
+    assert ac._title.text() != ac._title.full_text(), "見出しが省略されていない"
+    print("narrow archive column keeps extract/close buttons visible: OK")
     finish()
 
 
