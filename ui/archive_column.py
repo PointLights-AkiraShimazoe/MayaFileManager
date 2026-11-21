@@ -38,6 +38,115 @@ ISDIR_ROLE = Qt.UserRole + 12
 SIZE_ROLE = Qt.UserRole + 13
 
 
+def draw_icon(kind: str, size: int = 14, color: str = ""):
+    """書庫カラムのヘッダの絵（r153、2026-11-21）。
+
+    ユーザー指摘「zip のカラムを閉じるボタンに何のアイコンも無く、閉じ方が分からない」
+    「展開と書かれていたりアイコンが無いので、そこから解凍できるとは誰も思わない」。
+    «✕» の文字はボタンの内側の余白に押し出されて消えていた（24px 幅で左右 6px の余白）。
+    フォントに頼らず線で描く。kind: "close"（×）／"extract"（下向き矢印＋受け皿）。"""
+    from core.compat import QPixmap, QPainter, QPen, QColor, QIcon
+    pm = QPixmap(size, size)
+    pm.fill(QColor(0, 0, 0, 0))
+    pt = QPainter(pm)
+    try:
+        pt.setRenderHint(QPainter.Antialiasing, True)
+        if not color:
+            from core.theme_engine import qss_vars as _qv0
+            color = _qv0()["on_surface"]
+        pen = QPen(QColor(color))
+        pen.setWidthF(max(1.5, size / 8.0))
+        pen.setCapStyle(Qt.RoundCap)
+        pt.setPen(pen)
+        m = size * 0.22
+        if kind == "close":
+            pt.drawLine(int(m), int(m), int(size - m), int(size - m))
+            pt.drawLine(int(size - m), int(m), int(m), int(size - m))
+        else:
+            cx = size / 2.0
+            pt.drawLine(int(cx), int(size * 0.12), int(cx), int(size * 0.62))
+            pt.drawLine(int(cx - size * 0.22), int(size * 0.40), int(cx), int(size * 0.62))
+            pt.drawLine(int(cx + size * 0.22), int(size * 0.40), int(cx), int(size * 0.62))
+            y = int(size * 0.86)
+            pt.drawLine(int(size * 0.14), int(size * 0.66), int(size * 0.14), y)
+            pt.drawLine(int(size * 0.14), y, int(size * 0.86), y)
+            pt.drawLine(int(size * 0.86), y, int(size * 0.86), int(size * 0.66))
+    finally:
+        pt.end()
+    return QIcon(pm)
+
+
+_OPEN_PICKERS = []
+
+
+def pick_directory_nonmodal(parent, title: str, start: str, on_pick):
+    """解凍先を選ぶ窓を «Manager を止めずに» 出す（r153、2026-11-21）。
+
+    ユーザー指摘「解凍の窓でパスが指定しづらい。代わりに Manager からパスを拾いたいのに、
+    ロックされていて Manager としても終わっている」。モーダルの
+    getExistingDirectory は Manager 全体を止める。非モーダルで出し、Manager で
+    パスをコピーして貼り付けられるようにする。選ばれたら on_pick(フォルダ)。"""
+    dlg = QFileDialog(parent, title, start or "")
+    dlg.setFileMode(QFileDialog.Directory)
+    dlg.setOption(QFileDialog.ShowDirsOnly, True)
+    dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+    # ユーザー指摘「開いた瞬間、圧縮ファイルがある場所と同じフォルダが選ばれている
+    # 見た目でないと、同じ所なのか分からず迷う」: 一つ上の階層を開き、
+    # 書庫のあるフォルダを選択した状態で出す（そのまま «選択» で同じ場所に解凍）。
+    try:
+        st = os.path.normpath(start or "")
+        up = os.path.dirname(st)
+        if st and up and up != st and os.path.isdir(st):
+            dlg.setDirectory(up)
+            dlg.selectFile(st)
+    except Exception as _e:
+        _swallow(_e, "ui/archive_column.py pick_directory_nonmodal select start")
+    dlg.setWindowModality(Qt.NonModal)
+    dlg.setAttribute(Qt.WA_DeleteOnClose, True)
+    _OPEN_PICKERS.append(dlg)
+
+    def _done(*_a):
+        try:
+            _OPEN_PICKERS.remove(dlg)
+        except ValueError:
+            pass
+
+    dlg.fileSelected.connect(lambda d: on_pick(d) if d else None)
+    dlg.finished.connect(_done)
+    dlg.show()
+    dlg.raise_()
+    return dlg
+
+
+def extract_archive(parent, archive: str, here: bool, status=None) -> bool:
+    """書庫を丸ごと解凍する（r153: ファイルの右クリックからも解凍できるように）。
+    here=True: 書庫と同じ場所の «書庫名» フォルダへ。False: 解凍先を選ぶ。"""
+    if here:
+        base = os.path.splitext(os.path.basename(archive))[0]
+        if base.lower().endswith(".tar"):
+            base = base[:-4]
+        dest = os.path.join(os.path.dirname(archive), base)
+    else:
+        # 非モーダル: 選ばれた時に解凍する（Manager は使えたまま）
+        pick_directory_nonmodal(
+            parent, tr("解凍先を選択", "Extract to"), os.path.dirname(archive) or "",
+            lambda d: _extract_all(parent, archive, d, status))
+        return True
+    return _extract_all(parent, archive, dest, status)
+
+
+def _extract_all(parent, archive, dest, status) -> bool:
+    try:
+        made = ab.extract_members(archive, None, dest)
+    except Exception as e:
+        QMessageBox.warning(parent, tr("書庫", "Archive"),
+                            tr("解凍できませんでした: %s", "Cannot extract: %s") % (e,))
+        return False
+    if status is not None:
+        status(tr("解凍しました: %d ファイル → %s", "Extracted %d files to %s") % (len(made), dest))
+    return True
+
+
 def _human(n):
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
@@ -101,14 +210,20 @@ class ArchiveColumn(QWidget):
         self._title = QLabel(hdr)
         self._title.setObjectName("arcTitle")
         hl.addWidget(self._title, 1)
+        from core.theme_engine import qss_vars as _qv
+        _ic = _qv()["on_plane_archive"]
         self._extract_btn = QToolButton(hdr)
-        self._extract_btn.setText(tr("展開…", "Extract…"))
-        self._extract_btn.setToolTip(tr("書庫の中身をフォルダへ展開する",
+        self._extract_btn.setObjectName("arcExtract")
+        self._extract_btn.setIcon(draw_icon("extract", 14, _ic))
+        self._extract_btn.setText(tr("解凍", "Extract"))
+        self._extract_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._extract_btn.setToolTip(tr("書庫の中身をフォルダへ解凍する（解凍先を選ぶ）",
                                         "Extract the archive to a folder"))
         self._extract_btn.clicked.connect(lambda _c=False: self._extract_dialog(None))
         hl.addWidget(self._extract_btn, 0)
         close_btn = QToolButton(hdr)
-        close_btn.setText("✕")
+        close_btn.setObjectName("arcClose")
+        close_btn.setIcon(draw_icon("close", 12, _ic))
         close_btn.setFixedSize(24, 20)
         close_btn.setToolTip(tr("書庫カラムを閉じる", "Close archive column"))
         close_btn.clicked.connect(self.closed.emit)
@@ -135,6 +250,7 @@ class ArchiveColumn(QWidget):
             "border:1px solid %(hairline)s;border-radius:9px;"
             "min-height:16px;max-height:18px;padding:0px 6px;}"
             "QToolButton:hover{background:%(fill_subtle_hover)s;}"
+            "QToolButton#arcClose{padding:0px;}"
             "QColumnView{background:%(plane_archive)s;border:none;}"
             "QListView{background:%(plane_archive)s;color:%(on_plane_archive)s;"
             "border:none;border-right:1px solid %(hairline)s;}"
@@ -157,7 +273,7 @@ class ArchiveColumn(QWidget):
         n_files = len([e for e in self._entries if not e.is_dir])
         note = ""
         if ab.has_encrypted(self._entries):
-            note = tr("／🔒パスワード付き（展開不可）", " / password protected")
+            note = tr("／🔒パスワード付き（解凍不可）", " / password protected")
         self._title.setText(tr("📦 %s（%d ファイル）%s", "📦 %s (%d files)%s")
                             % (name, n_files, note))
         self._title.setToolTip(self._archive)
@@ -221,27 +337,25 @@ class ArchiveColumn(QWidget):
             paths = ab.extract_to_temp(self._archive, names)
         except Exception as e:
             QMessageBox.warning(self, tr("書庫", "Archive"),
-                                tr("展開できませんでした: %s", "Cannot extract: %s") % (e,))
+                                tr("解凍できませんでした: %s", "Cannot extract: %s") % (e,))
             return
         if not paths:
             QMessageBox.warning(
                 self, tr("書庫", "Archive"),
-                tr("展開できませんでした（パスワード付きの可能性があります）",
+                tr("解凍できませんでした（パスワード付きの可能性があります）",
                    "Cannot extract (the archive may be password protected)"))
             return
         self.status_message.emit(
-            tr("書庫から展開して開きます: %s", "Extracted and opening: %s")
+            tr("圧縮ファイルから解凍して開きます: %s", "Extracted and opening: %s")
             % os.path.basename(paths[0]))
         for p in paths:
             self.file_activated.emit(p)
 
     def _extract_dialog(self, names):
+        # r153: 非モーダル（Manager からパスを拾えるように）
         start = os.path.dirname(self._archive) or ""
-        dest = pick_directory(
-            self, tr("展開先を選択", "Extract to"), start,
-            QFileDialog.ShowDirsOnly | QFileDialog.DontUseNativeDialog)
-        if dest:
-            self._extract_to(names, dest)
+        pick_directory_nonmodal(self, tr("解凍先を選択", "Extract to"), start,
+                                lambda d, n=names: self._extract_to(n, d))
 
     def _extract_here(self, names):
         base = os.path.splitext(os.path.basename(self._archive))[0]
@@ -253,10 +367,10 @@ class ArchiveColumn(QWidget):
             made = ab.extract_members(self._archive, names, dest)
         except Exception as e:
             QMessageBox.warning(self, tr("書庫", "Archive"),
-                                tr("展開できませんでした: %s", "Cannot extract: %s") % (e,))
+                                tr("解凍できませんでした: %s", "Cannot extract: %s") % (e,))
             return
         self.status_message.emit(
-            tr("展開しました: %d ファイル → %s", "Extracted %d files to %s")
+            tr("解凍しました: %d ファイル → %s", "Extracted %d files to %s")
             % (len(made), dest))
 
     def _context_menu(self, pos):
@@ -267,15 +381,15 @@ class ArchiveColumn(QWidget):
             if not dirs_only:
                 menu.addAction(tr("開く", "Open"),
                                lambda: self._open_inner(names))
-            menu.addAction(tr("選択を展開…", "Extract selected…"),
+            menu.addAction(tr("選択を解凍…", "Extract selected…"),
                            lambda: self._extract_dialog(names))
             menu.addSeparator()
             menu.addAction(tr("書庫内パスをコピー", "Copy path inside archive"),
                            lambda: QApplication.clipboard().setText("\n".join(names)))
             menu.addSeparator()
-        menu.addAction(tr("すべてここに展開", "Extract all here"),
+        menu.addAction(tr("すべてここに解凍", "Extract all here"),
                        lambda: self._extract_here(None))
-        menu.addAction(tr("すべて展開…", "Extract all…"),
+        menu.addAction(tr("すべて解凍…", "Extract all…"),
                        lambda: self._extract_dialog(None))
         menu.addSeparator()
         note = menu.addAction(tr("※書庫の中身は読み取り専用です",

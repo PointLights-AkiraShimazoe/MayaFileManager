@@ -3204,6 +3204,42 @@ class CappedColumnView(QColumnView):
         for ms in (60, 160, 300, 520):
             QTimer.singleShot(ms, self._restore_anchor_column_x)
 
+    def reveal_column_of(self, path) -> bool:
+        """path をルートに持つカラムが、ビューポートの中に全部見えるように横へ送る
+        （r153、2026-11-21）。
+
+        ユーザー報告「zip を見ると、右から出てきたカラムに隠れて通常のカラムが見えない」。
+        書庫カラムが出るとカラムビューの幅が縮むが、横スクロールの位置は
+        そのままなので、zip を選んだカラムが右の書庫カラムの下へ押し出されていた。"""
+        try:
+            want = os.path.normcase(os.path.normpath(path or ""))
+            target = None
+            for v in self.findChildren(QListView):
+                if not (v.isVisible() and v.model() is not None and v.width() > 1):
+                    continue
+                p = self._path_for_index(v.rootIndex())
+                if p and os.path.normcase(os.path.normpath(p)) == want:
+                    target = v
+                    break
+            if target is None:
+                return False
+            hb = self.horizontalScrollBar()
+            if hb is None:
+                return False
+            vpw = self.viewport().width()
+            right = target.x() + target.width()
+            dx = 0
+            if right > vpw:
+                dx = right - vpw                     # 右へはみ出した分だけ送る
+            if target.x() - dx < 0:
+                dx = target.x()                      # 左へ行き過ぎない（左端を合わせる）
+            if dx:
+                hb.setValue(max(0, min(hb.value() + dx, hb.maximum())))
+            return True
+        except Exception as _e:
+            _swallow(_e, "ui/browser_column_view.py reveal_column_of")
+            return False
+
     def _restore_anchor_column_x(self):
         info = getattr(self, "_anchor_info", None)
         if not info:

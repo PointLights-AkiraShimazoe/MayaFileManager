@@ -405,6 +405,25 @@ class ContextMenuMixin:
         bm_act.triggered.connect(lambda: self._add_to_bookmarks(paths))
         menu.addSeparator()
 
+        # ── r153: 圧縮ファイルの解凍（ユーザー指摘 2026-11-21「右クリックから解凍できない」）──
+        try:
+            from core.archive_browse import is_archive as _is_arc
+            arcs = [p for p in paths if _is_arc(p) and _fs.isfile(p)]
+        except Exception as _e:
+            _swallow(_e, "ui/browser_context_menu_mixin.py (archive check)")
+            arcs = []
+        if arcs:
+            from ui.archive_column import draw_icon, extract_archive
+            from core.theme_engine import qss_vars as _qv
+            _xi = draw_icon("extract", 16, _qv()["on_surface"])
+            here_act = menu.addAction(_xi, tr("ここに解凍", "Extract here"))
+            here_act.triggered.connect(lambda _c=False, a=list(arcs): [
+                extract_archive(self, x, True, self.status_message.emit) for x in a])
+            to_act = menu.addAction(_xi, tr("解凍先を選んで解凍…", "Extract to…"))
+            to_act.triggered.connect(lambda _c=False, a=list(arcs): [
+                extract_archive(self, x, False, self.status_message.emit) for x in a])
+            menu.addSeparator()
+
         # ── File ops ─────────────────────────────────────────────────
         copy_act = menu.addAction(glyph_icon("📋"), tr("コピー...", "Copy..."))
         copy_act.triggered.connect(lambda: self._copy_dialog(paths))

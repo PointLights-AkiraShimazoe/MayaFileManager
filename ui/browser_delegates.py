@@ -386,6 +386,23 @@ def _badge_tooltip(provider_key: str, state: str, is_dir: bool = False) -> str:
     return "%s: %s" % (names.get(provider_key, provider_key), tr(*style[2]))
 
 
+_FOLDER_ICON = []
+
+
+def _folder_icon():
+    """標準のフォルダアイコン（r153）。desktop.ini を見ない（_SafeIconProvider と同じ）。"""
+    if not _FOLDER_ICON:
+        try:
+            try:
+                from PySide6.QtWidgets import QFileIconProvider
+            except ImportError:
+                from PySide2.QtWidgets import QFileIconProvider
+            _FOLDER_ICON.append(QFileIconProvider().icon(QFileIconProvider.Folder))
+        except Exception:
+            _FOLDER_ICON.append(QIcon())
+    return _FOLDER_ICON[0]
+
+
 class StatusBadgeDelegate(QStyledItemDelegate):
     """通常描画の後、連携状態があればアイコン右下にバッジを重ねる。
     状態は IntegrationManager の辞書参照のみ（描画中に I/O しない）。
@@ -413,6 +430,25 @@ class StatusBadgeDelegate(QStyledItemDelegate):
             return bool(fn(index))
         except Exception:
             return False
+
+    def initStyleOption(self, option, index):
+        """r153（2026-11-21）: 名前に «.» を含むフォルダ（版番号付きの名前など）が
+        ファイルのアイコンになっていた（ユーザー報告: zip を解凍したフォルダ）。
+        アイコンは UI を止めないよう «拡張子が無ければフォルダ» と仮に決めて返し、
+        本当の答えは裏で調べる作り（_SafeIconProvider）だが、QFileSystemModel は
+        最初に受け取ったアイコンを持ち続けるため直らなかった。描く時に、モデルが
+        既に持っている «フォルダかどうか»（I/O なし）でフォルダの絵に差し替える。
+        «.» を含む名前だけを見るので、普通の名前の描画には足さない。"""
+        super().initStyleOption(option, index)
+        if self._is_dir_of_index is None:
+            return
+        try:
+            name = option.text or ""
+            if "." not in name or not self._is_dir(index):
+                return
+            option.icon = _folder_icon()
+        except Exception as _e:
+            _swallow(_e, "ui/browser_delegates.py StatusBadgeDelegate.initStyleOption")
 
     def paint(self, painter, option, index):
         # r81: 通常描画の前に「展開中フォルダ」の淡い下地を敷く（選択中は描かない）

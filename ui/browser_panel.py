@@ -2123,6 +2123,11 @@ class BrowserPanel(FileOpsMixin, RenameMixin, ContextMenuMixin, QWidget):
                     col_w = max(260, v.width() + 20)
             self._set_inline_panel_sizes(
                 self._view_stack.indexOf(self._archive_col), col_w)
+            # r153: カラムビューが縮んでも、zip を選んだカラムを隠さない
+            # （QColumnView の自前のスクロールが遅れて走るので、落ち着くまで数回）
+            parent = os.path.dirname(path)
+            for ms in (0, 60, 160, 300, 520):
+                QTimer.singleShot(ms, lambda p=parent: self._column_view.reveal_column_of(p))
             _mfm_log("archive: %s visible=%s"
                      % (os.path.basename(path), self._archive_col.isVisible()))
         except Exception as e:
