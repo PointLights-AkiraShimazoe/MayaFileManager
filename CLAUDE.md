@@ -1810,3 +1810,18 @@ Maya用ファイルマネージャ（PySide6/PySide2両対応、QColumnViewベ�
   «同じポートで PID が変わった（前の PID が分かっている時だけ）» の順。続けて起動した時は、前の予約の
   ポートと PID を除外する。
 * テスト: test_launch_connect_claim の手順 10・11（v0.9.25 のコードでは 5 件失敗することを確認済み）。
+
+
+## 配布版から起動した Maya の環境（r153、2026-11-21）
+
+* ユーザー報告「Manager から起動した Maya で Arnold が読み込めない（mtoa.mll: 信頼されていないマウントポイント／WinError 448）。
+  このツールでしか起きない Maya の不具合は 1 つでもあれば信頼を失う」。同じ PC で Manager を通さず起動した Maya
+  （PLsMayaMCP の専用 Maya）では mtoa が読み込めた。PATH のジャンクション（Java・Codex）は両方にあった。
+* 失敗した Maya で取った診断（Downloads\mfm_diag_13208.json）で違ったのは: ①PATH の 5・6 番目に Manager の展開先
+  （%TEMP%\_MEIxxxx\PySide6・%TEMP%\_MEIxxxx。PyInstaller の PySide6 用起動処理が足す）②_PYI_* の環境変数
+  ③作業フォルダが Manager のインストール先。«DLL を探す場所»（GetDllDirectoryW）は空で、引き継ぎは無かった
+  （最初はこれを疑って入れかけたが、診断で外れと分かったので入れていない）。
+* 直し方（core/maya_version.py strip_frozen_env）: PATH から sys._MEIPASS とその下・_MEIxxxx の項目を外し、
+  _PYI_* / _MEIPASS* を渡さない。直接起動の作業フォルダは Maya の bin（スタートメニューのショートカットと同じ）。
+  Blender も strip_frozen_env を通す。
+* 配布版の exe でしか起きないので、確認は配布版で行う（H-19）。テスト: test_launch_frozen_dll（v0.9.26 のコードでは 6 件失敗）。

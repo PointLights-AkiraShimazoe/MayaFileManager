@@ -422,6 +422,10 @@ def launch_blender(installation: BlenderInstallation,
     for k in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "PYTHONNOUSERSITE",
               "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QT_QPA_PLATFORM"):
         env.pop(k, None)
+    # r153（2026-11-21）: Maya と同じく、配布版の exe が自分用に足した PATH の項目と
+    # 環境変数を引き継がせない（core/maya_version.py strip_frozen_env）
+    from core.maya_version import strip_frozen_env
+    strip_frozen_env(env)
     kwargs: Dict = {"close_fds": True, "env": env}
     if platform.system() == "Windows":
         kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

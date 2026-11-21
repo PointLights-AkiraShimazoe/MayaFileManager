@@ -8,6 +8,7 @@ Maya version detection.
 
 import os
 import re
+import sys
 import struct
 import subprocess
 import platform
@@ -339,6 +340,43 @@ def _clean_launch_env() -> Dict[str, str]:
     for key in list(env):
         if key.upper() == "PATH":
             env[key] = _resolve_local_path_entries(env[key])
+    return strip_frozen_env(env)
+
+
+_MEI_DIR_RE = re.compile(r"[\\/]_MEI[0-9A-Za-z]+([\\/]|$)")
+
+
+def strip_frozen_env(env: Dict[str, str]) -> Dict[str, str]:
+    """配布版（PyInstaller でまとめた exe）が自分用に足したものを、起動する
+    Maya / Blender へ渡さない（r153、2026-11-21）。
+
+    ユーザー報告「Manager から起動した Maya で Arnold（mtoa.mll）が読み込めない
+    （信頼されていないマウントポイント／WinError 448）。このツールでしか起きない」。
+    失敗した Maya で取った診断（2026-11-21）では、Manager を通さず起動した Maya と
+    違うのは次だけだった:
+      * PATH の上のほうに Manager の展開先（%TEMP%\\_MEIxxxx\\PySide6・%TEMP%\\_MEIxxxx）。
+        PyInstaller の PySide6 用の起動処理が足すもので、Maya が Manager 同梱の
+        別版の Qt・DLL を探しに行く
+      * _PYI_* の環境変数
+      * 作業フォルダが Manager のインストール先（launch_maya で Maya の bin にする）
+    «DLL を探す場所»（SetDllDirectoryW）は引き継がれていなかった（診断で空）。
+    """
+    for k in list(env):
+        if k.upper().startswith(("_PYI_", "_MEIPASS")):
+            env.pop(k, None)
+    mei = getattr(sys, "_MEIPASS", "") or ""
+    mei_n = os.path.normcase(os.path.normpath(mei)) if mei else ""
+    for k in list(env):
+        if k.upper() != "PATH":
+            continue
+        keep = []
+        for p in (env[k] or "").split(os.pathsep):
+            q = os.path.normcase(os.path.normpath(p)) if p else ""
+            if p and (_MEI_DIR_RE.search(p) or
+                      (mei_n and (q == mei_n or q.startswith(mei_n + os.sep)))):
+                continue
+            keep.append(p)
+        env[k] = os.pathsep.join(keep)
     return env
 
 
@@ -606,7 +644,12 @@ def launch_maya(installation: MayaInstallation,
         kwargs["start_new_session"] = True
 
     if not via_cmd:
-        launch_log("launch: %s" % subprocess.list2cmdline(cmd))
+        # r153: スタートメニューから起動した時と同じく、作業フォルダは Maya 本体の
+        # フォルダ（Manager の作業フォルダを引き継がない）
+        exe_dir = os.path.dirname(exe)
+        if os.path.isdir(exe_dir):
+            kwargs["cwd"] = exe_dir
+        launch_log("launch: %s  [cwd=%s]" % (subprocess.list2cmdline(cmd), kwargs.get("cwd", "")))
         return subprocess.Popen(cmd, **kwargs)
 
     # ── ラッパーの .bat（r146、ユーザー報告 2026-10-31）──────────────
