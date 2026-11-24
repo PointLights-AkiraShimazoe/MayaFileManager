@@ -141,7 +141,7 @@ maya.standalone.uninitialize()
     evs = [x.get("ev") for x in recs]
     print("events:", evs, "err:", res.get("err"), flush=True)
     check(res.get("r1") == "save-watch: installed" and res.get("r2") == "save-watch: already"
-          and res.get("ids") == 4, "見張りを 2 回入れても 1 回分（%r）" % ({k: res.get(k) for k in ("r1", "r2", "ids")},))
+          and res.get("ids") == 5, "見張りを 2 回入れても 1 回分（r154: 保存前の確認を足して 5 つ）（%r）" % ({k: res.get(k) for k in ("r1", "r2", "ids")},))
     saved = [x for x in recs if x.get("ev") == "saved"]
     check(saved and saved[0].get("scene", "").endswith("a.ma") and saved[0].get("workspace")
           and saved[0].get("writable") is True and saved[0].get("scene_in_workspace") is True,

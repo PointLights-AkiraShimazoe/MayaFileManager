@@ -111,6 +111,17 @@ sw.log_path = lambda: os.path.join(d, "save.log").replace("\\", "/")
 io.open(os.path.join(d, "fakep4.py"), "w", encoding="utf-8").write(r"""
 import json, os, stat, sys
 here = os.path.dirname(os.path.abspath(__file__))
+if "fstat" in sys.argv:                       # r154: 保存の前の状態確認
+    mode = open(os.path.join(here, "fstat_mode")).read().strip() if os.path.exists(os.path.join(here, "fstat_mode")) else ""
+    if mode == "untracked":
+        print(sys.argv[-1] + " - no such file(s).")
+    else:
+        print("... depotFile //depot/x.ma\n... haveRev 1\n... headRev 1")
+        if mode in ("others", "locked"):
+            print("... otherOpen0 bob@ws_bob\n... otherOpen 1")
+        if mode == "locked":
+            print("... otherLock0 bob@ws_bob\n... otherLock ")
+    sys.exit(0)
 json.dump(sys.argv[1:], open(os.path.join(here, "p4_args.json"), "w"))
 if os.path.exists(os.path.join(here, "p4_fail")):
     print(sys.argv[-1] + " - file(s) not on client.")
@@ -243,6 +254,17 @@ if os.name == "nt":
     io.open(os.path.join(d, "fakep4.py"), "w", encoding="utf-8").write(r'''
 import json, os, stat, sys
 here = os.path.dirname(os.path.abspath(__file__))
+if "fstat" in sys.argv:                       # r154: 保存の前の状態確認
+    mode = open(os.path.join(here, "fstat_mode")).read().strip() if os.path.exists(os.path.join(here, "fstat_mode")) else ""
+    if mode == "untracked":
+        print(sys.argv[-1] + " - no such file(s).")
+    else:
+        print("... depotFile //depot/x.ma\n... haveRev 1\n... headRev 1")
+        if mode in ("others", "locked"):
+            print("... otherOpen0 bob@ws_bob\n... otherOpen 1")
+        if mode == "locked":
+            print("... otherLock0 bob@ws_bob\n... otherLock ")
+    sys.exit(0)
 json.dump(sys.argv[1:], open(os.path.join(here, "p4_args.json"), "w"))
 if os.path.exists(os.path.join(here, "p4_fail")):
     print(sys.argv[-1] + " - file(s) not on client.")
@@ -334,11 +356,11 @@ maya.standalone.uninitialize()
           and res.get("p4_cmd_outer", [None])[1:] == ["-p", "srv:1666", "-c", "ws_outer"],
           "p4 の引数は «そのファイルが入っているワークスペース» の -c に差し替える（%r）" % (res.get("p4_cmd"),))
     x = res.get("rw") or {}
-    check(x.get("first") == "failed" and x.get("buttons") == [[CO, RW, NO]] and x.get("writable")
+    check(x.get("first") == "" and x.get("buttons") == [[CO, RW, NO]] and x.get("writable")
           and x.get("saved") and x.get("modified") is False,
-          "読み取り専用を外して保存: 聞いて、外して、保存し直す（%r）" % (x,))
+          "書き込み可能にして保存: 保存の前に聞いて、外して、そのまま保存する（失敗させない）（%r）" % (x,))
     x = res.get("co") or {}
-    check(x.get("writable") and x.get("saved") and res.get("co_path_ok")
+    check(x.get("first") == "" and x.get("writable") and x.get("saved") and res.get("co_path_ok")
           and res.get("co_args", [])[:5] == ["-p", "srv:1666", "-c", "ws_test", "edit"],
           "チェックアウトして保存: p4 edit を実行して保存し直す（%r）" % (res.get("co_args", [])[:5],))
     x = res.get("cofail") or {}
@@ -347,7 +369,7 @@ maya.standalone.uninitialize()
           "チェックアウトできない時: 理由を出し、残りの選択肢だけで聞き直す（%r）" % (x.get("buttons"),))
     x = res.get("no") or {}
     check(x.get("buttons") == [[CO, RW, NO]] and not x.get("writable") and not x.get("saved"),
-          "保存しない: ファイルに触らない。お知らせも重ねて出さない（%r）" % (x.get("buttons"),))
+          "保存しない: 保存の前に止める。ファイルに触らない。お知らせも重ねて出さない（%r）" % (x.get("buttons"),))
     x = res.get("ok") or {}
     check(x.get("first") == "" and x.get("buttons") == [] and x.get("saved"),
           "書き込めるファイルの保存では何も聞かない")

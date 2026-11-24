@@ -2166,14 +2166,34 @@ class MainWindowDccMixin:
             _swallow(_e, "ui/main_window_dcc.py _p4_provider")
             return None
 
-    def _ask_readonly_then(self, path: str, proceed, note: str = "", allow_co: bool = True):
+    def _ask_readonly_then(self, path: str, proceed, note: str = "", allow_co: bool = True,
+                           status="?"):
         """上書き先が読み取り専用の時に Manager で聞く（r150）。書き込めるように
-        なったら proceed() を呼ぶ。断った時はファイルに触らない。"""
+        なったら proceed() を呼ぶ。断った時はファイルに触らない。
+
+        r154（ユーザー指示 2026-11-24）: 聞く前に Perforce の状態（p4 fstat）を調べ、
+        «チェックアウトが要るか・他の人がチェックアウト中か・排他ロックか・最新か» で
+        選択肢と一言を決める。排他ロック中・管理外ならチェックアウトは出さず、
+        書き込み可能にして保存（UE の Make Writable）と保存しないだけにする。"""
         from core import save_target_guard as _sg
         t = _sg.texts()
         name = Path(path).name
-        cmd = _sg.p4_edit_cmd(self._p4_provider(), path) if allow_co else None
-        buttons = ([t["co"]] if cmd else []) + [t["rw"], t["no"]]
+        prov = self._p4_provider()
+        if status == "?":
+            fcmd = _sg.p4_fstat_cmd(prov, path) if allow_co else None
+            if fcmd:
+                self._run_bg(lambda: _sg.run_fstat(fcmd, path),
+                             lambda st: self._ask_readonly_then(path, proceed, note, allow_co, st))
+                return
+            status = None
+        cmd = _sg.p4_edit_cmd(prov, path) if allow_co else None
+        keys = _sg.choice_keys(status, bool(cmd))
+        if "co" not in keys:
+            cmd = None
+        buttons = [t[k] for k in keys]
+        sn = _sg.status_note(status, _sg.note_texts())
+        if sn:
+            note = (sn + "\n" + note) if note else sn
 
         def _chosen(ans):
             if ans == t["co"] and cmd:
@@ -2187,7 +2207,7 @@ class MainWindowDccMixin:
                     else:
                         self._ask_readonly_then(path, proceed,
                                                 note=t["co_fail"] + "\n" + (out[:600] or "-"),
-                                                allow_co=False)
+                                                allow_co=False, status=None)
                 self._run_bg(lambda: _sg.run_p4_edit(cmd, path), _after)
             elif ans == t["rw"]:
                 ok, err = _sg.make_writable(path)

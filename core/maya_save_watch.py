@@ -21,7 +21,7 @@ Maya に一度だけ «保存の見張り» を入れる（Maya 側の Python。
 """
 import json
 
-VERSION = 2
+VERSION = 3          # r154: 保存の前に確かめる（チェック用コールバック＋メニューの保存）
 
 
 def _maya_source(log_path: str, lang: str = "ja") -> str:
@@ -42,13 +42,31 @@ def _maya_source(log_path: str, lang: str = "ja") -> str:
               if ja else
               "Files under Perforce stay read-only until they are checked out.")
     ro_co = ("チェックアウトして保存" if ja else "Check out and save")
-    ro_rw = ("読み取り専用を外して保存" if ja else "Make writable and save")
+    ro_rw = ("書き込み可能にして保存" if ja else "Make writable and save")
     ro_no = ("保存しない" if ja else "Don't save")
     ro_p4fail = ("チェックアウトできませんでした。" if ja else "The checkout did not work.")
     ro_p4out = ("Perforce の出力:" if ja else "Perforce output:")
     ro_rwfail = ("読み取り専用を外せませんでした。" if ja else
                  "Could not clear the read-only attribute.")
-    return r'''
+    # r154: 聞く前に Perforce の状態を調べる。判断の関数は Manager と同じもの
+    # （core/save_target_guard.py）をそのまま埋め込む。
+    import inspect
+    from core import save_target_guard as _sg
+    helpers = "\n".join(inspect.getsource(f) for f in
+                        (_sg.parse_fstat, _sg.choice_keys, _sg.status_note))
+    nt = {
+        "others": ("%s もチェックアウトしています。" if ja else "Also checked out by %s."),
+        "locked": ("%s が排他チェックアウト中のため、チェックアウトできません。\n"
+                   "書き込み可能にすれば手元には保存できます（サブミットは相手の作業後）。" if ja else
+                   "Locked by %s, so it can't be checked out.\n"
+                   "Make it writable to save locally (submit after they finish)."),
+        "behind": ("手元は最新ではありません（手元 #%d / 最新 #%d）。" if ja else
+                   "Not the latest revision (have #%d, head #%d)."),
+        "untracked": ("Perforce の管理外のファイルです。" if ja else "Not under Perforce."),
+    }
+    ro_plain = ("このファイルは読み取り専用です。" if ja else "This file is read-only.")
+    cancelled = ("保存しませんでした（読み取り専用）: " if ja else "Not saved (read-only): ")
+    return helpers + "\n_MFM_NT = " + repr(nt) + r'''
 import __main__ as _mfm_main
 _mfm_st = _mfm_main.__dict__.get("_mfm_save_watch")
 if _mfm_st and _mfm_st.get("ver") == %(ver)d:
@@ -153,9 +171,30 @@ else:
             base = out + ["-c", name]
         return [exe] + base
 
+    def _mfm_status(path, p4):
+        """Perforce 上の状態（r154）。調べられなければ None。"""
+        import subprocess
+        if not p4:
+            return None
+        try:
+            kw = {}
+            if os.name == "nt":
+                kw["creationflags"] = 0x08000000
+            r = subprocess.run(p4 + ["-ztag", "fstat", path], cwd=os.path.dirname(path),
+                               capture_output=True, timeout=8, **kw)
+            raw = (r.stdout or b"") + b"\n" + (r.stderr or b"")
+            try:
+                out = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                out = raw.decode("mbcs" if os.name == "nt" else "latin-1", "replace")
+            return parse_fstat(out)
+        except Exception:
+            return None
+
     def _mfm_ro_fix(path):
         """読み取り専用のファイルを «保存できる状態» にするかを聞いて、実行する。
-        書き込めるようになったら True。断った・出来なかった時は False。"""
+        書き込めるようになったら True。断った・出来なかった時は False。
+        r154: 聞く前に Perforce の状態を調べ、選択肢と一言を決める（Manager と同じ判断）。"""
         import stat, subprocess
         if not path or not os.path.isfile(path) or os.access(path, os.W_OK):
             return True
@@ -163,13 +202,19 @@ else:
             return False
         name = os.path.basename(path)
         p4 = _mfm_p4_cmd(path)
+        stt = _mfm_status(path, p4)
+        if "co" not in choice_keys(stt, bool(p4)):
+            p4 = None
+        sn = status_note(stt, _MFM_NT)
+        _mfm_w({"ev": "ro_status", "scene": path, "status": stt})
         note = ""
         while True:
             btns = ([%(ro_co)r] if p4 else []) + [%(ro_rw)r, %(ro_no)r]
+            why = sn or (%(ro_why)r if (p4 or (stt or {}).get("tracked")) else %(ro_plain)r)
             ans = _cmds.confirmDialog(
                 title=%(title)r,
                 message=(note + "\n\n" if note else "") + %(ro_head)r + "\n" + name
-                + "\n\n" + %(ro_why)r,
+                + "\n\n" + why,
                 button=btns, defaultButton=btns[0], cancelButton=%(ro_no)r,
                 dismissString=%(ro_no)r)
             if ans == %(ro_co)r and p4:
@@ -286,6 +331,103 @@ else:
         except Exception:
             pass
 
+    # ── r154: 保存の «前» に確かめる（ユーザー指示 2026-11-24）──────────────────
+    # 「チェックアウトしてないと一度エラーが出てから選択になるが、先に状態を
+    #   チェックして選択肢を出す。キャンセルすれば保存しないので、Maya のエラーが
+    #   出る事はなくなるのが筋」
+    # 1) File > Save Scene と Ctrl+S（どちらも FileMenu_SaveItem）は、保存を始める前に
+    #    聞く。断れば保存そのものを呼ばないので、Maya のエラーは一切出ない。
+    # 2) それ以外の保存（Save Scene As で既存の読み取り専用へ上書き等）は、保存の
+    #    チェック用コールバックで聞く。直せばそのまま保存される。断った時は保存を
+    #    止める（Maya のエラーの窓は出さない。スクリプトエディターに 1 行だけ残る）。
+    def _mfm_restore_prompt():
+        try:
+            _cmds.file(prompt=_mfm_st.pop("prompt_was", True))
+        except Exception:
+            pass
+
+    def _mfm_precheck(*_a):
+        try:
+            if _cmds.about(batch=True):
+                return True
+            sn = _cmds.file(q=True, sceneName=True) or ""
+            if not sn or not os.path.isfile(sn) or os.access(sn, os.W_OK):
+                return True
+            if _mfm_ro_fix(sn):
+                return True
+            # 断った: 保存を止める。Maya の «File Error» の窓は出さない
+            try:
+                _mfm_st["prompt_was"] = bool(_cmds.file(q=True, prompt=True))
+                _cmds.file(prompt=False)
+                import maya.utils as _mu
+                _mu.executeDeferred(_mfm_restore_prompt)
+            except Exception:
+                pass
+            _om.MGlobal.displayInfo(%(cancelled)r + sn)
+            return False
+        except Exception:
+            return True                 # 見張りの失敗で保存を止めない
+
+    def _mfm_menu_ok():
+        """FileMenu_SaveItem の前に呼ぶ。保存してよければ 1、断られたら 0。"""
+        try:
+            sn = _cmds.file(q=True, sceneName=True) or ""
+            if (not sn or not os.path.isfile(sn) or os.access(sn, os.W_OK)
+                    or not _cmds.file(q=True, modified=True)):
+                return 1                # 名前が無い・書ける・変更なし → いつもの処理に任せる
+            if _mfm_ro_fix(sn):
+                return 1
+            _om.MGlobal.displayInfo(%(cancelled)r + sn)
+            return 0
+        except Exception:
+            return 1
+
+    def _mfm_wrap_menu_save():
+        """FileMenu_SaveItem の前に _mfm_menu_ok を挟む。元の手続きは Maya に入っている
+        FileMenu.mel から «その版のまま» 取り出して別名で定義する（版ごとの違いに追従）。
+        他のツールが既に置き換えている時は触らない（2 のコールバックで守る）。"""
+        import re
+        import maya.mel as _mel
+        try:
+            if _mel.eval('exists "mfm_orig_FileMenu_SaveItem"'):
+                where = "already"
+            else:
+                where = _mel.eval("whatIs FileMenu_SaveItem") or ""
+                src_path = where.split(":", 1)[-1].strip() if "found in" in where else ""
+                if not src_path.replace("\\", "/").lower().endswith("/startup/filemenu.mel"):
+                    return "menu-wrap: skipped (%%s)" %% where
+                txt = open(src_path, encoding="utf-8", errors="replace").read()
+                m = re.search(r"global proc FileMenu_SaveItem\s*\(\s*\)", txt)
+                if not m:
+                    return "menu-wrap: not found"
+                i, depth, j = txt.index("{", m.end()), 0, None
+                for k in range(i, len(txt)):
+                    if txt[k] == "{":
+                        depth += 1
+                    elif txt[k] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            j = k + 1
+                            break
+                if j is None:
+                    return "menu-wrap: parse failed"
+                _mel.eval("global proc mfm_orig_FileMenu_SaveItem()" + txt[i:j])
+            _mel.eval('global proc FileMenu_SaveItem() {'
+                      ' if (`python "__import__(\'__main__\').__dict__[\'_mfm_save_watch\']'
+                      '[\'menu_ok\']()"`) mfm_orig_FileMenu_SaveItem; }')
+            return "menu-wrap: ok (%%s)" %% where
+        except Exception as e:
+            return "menu-wrap: error %%s" %% e
+
+    _mfm_st["menu_ok"] = _mfm_menu_ok
+    _mfm_st["wrap_menu"] = _mfm_wrap_menu_save
+    _mfm_st["precheck"] = _mfm_precheck
+    _mfm_st["status"] = _mfm_status
+    _mfm_st["ids"].append(_om.MSceneMessage.addCheckCallback(
+        _om.MSceneMessage.kBeforeSaveCheck, _mfm_precheck))
+    _mfm_st["menu_wrap"] = (_mfm_wrap_menu_save() if not _cmds.about(batch=True)
+                            else "menu-wrap: batch")
+
     _mfm_st["check"] = _mfm_check
     _mfm_st["ro_fix"] = _mfm_ro_fix
     _mfm_st["p4_cmd"] = _mfm_p4_cmd
@@ -298,7 +440,8 @@ else:
 ''' % {"ver": VERSION, "log": log_path, "title": title, "head": head, "why": why,
        "none": none, "tip": tip, "rec": rec, "ro_head": ro_head, "ro_why": ro_why,
        "ro_co": ro_co, "ro_rw": ro_rw, "ro_no": ro_no, "ro_p4fail": ro_p4fail,
-       "ro_p4out": ro_p4out, "ro_rwfail": ro_rwfail}
+       "ro_p4out": ro_p4out, "ro_rwfail": ro_rwfail, "ro_plain": ro_plain,
+       "cancelled": cancelled}
 
 
 def p4_table_code(table: dict) -> str:
