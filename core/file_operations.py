@@ -585,6 +585,51 @@ def normalize_for_shell(path: str) -> str:
         return path
 
 
+class _ChildEnv:
+    """外のアプリを起動する間だけ、配布版（exe）が自分用に足した環境変数を外す
+    （r154、実機 2026-11-24「Failed to remove temporary directory: …\\_MEIxxxx」）。
+
+    ダブルクリック等で既定のアプリを開くと、そのアプリは Manager の環境変数を
+    引き継ぐ。配布版では PATH の先頭と QT_PLUGIN_PATH が Manager の展開先
+    （%TEMP%\\_MEIxxxx）を指しているため、Qt を使うアプリは Manager 同梱の別版の
+    Qt を読み込み得る（動作がおかしくなる・Manager を閉じても展開先が消せない）。
+    ShellExecute には環境を渡せないので、呼ぶ間だけこのプロセスの環境から外す。
+    Maya / Blender の起動と同じ判断（core.maya_version.strip_frozen_env）を使う。"""
+
+    def __enter__(self):
+        import sys
+        self._saved = None
+        if not getattr(sys, "frozen", False):
+            return self
+        try:
+            from core.maya_version import strip_frozen_env
+            self._saved = dict(os.environ)
+            new = strip_frozen_env(dict(os.environ))
+            for k in list(os.environ):
+                if k not in new:
+                    del os.environ[k]
+            for k, v in new.items():
+                if os.environ.get(k) != v:
+                    os.environ[k] = v
+        except Exception as _e:
+            _swallow(_e, "core/file_operations.py _ChildEnv")
+        return self
+
+    def __exit__(self, *_a):
+        if self._saved is None:
+            return False
+        try:
+            for k in list(os.environ):
+                if k not in self._saved:
+                    del os.environ[k]
+            for k, v in self._saved.items():
+                if os.environ.get(k) != v:
+                    os.environ[k] = v
+        except Exception as _e:
+            _swallow(_e, "core/file_operations.py _ChildEnv restore")
+        return False
+
+
 def _windows_shell_open(path: str) -> bool:
     """Windows: シェルの既定動作を **アイテムに対して** 実行する（r143）。
 
@@ -645,13 +690,14 @@ def open_with_default_app(path: str):
     system = platform.system()
     path = normalize_for_shell(path)
     try:
-        if system == "Windows":
-            if not _windows_shell_open(path):
-                os.startfile(path)        # 最後の退避路
-        elif system == "Darwin":
-            subprocess.Popen(["open", path])
-        else:
-            subprocess.Popen(["xdg-open", path])
+        with _ChildEnv():                 # r154: 開くアプリに Manager の展開先を渡さない
+            if system == "Windows":
+                if not _windows_shell_open(path):
+                    os.startfile(path)    # 最後の退避路
+            elif system == "Darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
     except Exception as e:
         raise FileOperationError(f"Cannot open {path}: {e}") from e
 
@@ -794,24 +840,25 @@ def reveal_in_explorer(path: str):
             raise FileOperationError(
                 "Cannot reveal %s: path not found" % path)
     try:
-        if system == "Windows":
-            target = os.path.normpath(str(p if select else p.parent))
-            # ドライブ直下（D:\）のように末尾が \ だと、"D:\" の \" が
-            # エスケープ扱いになって引用が壊れる。重ねて逃がす。
-            if target.endswith("\\"):
-                target += "\\"
-            if select:
-                # 1 引数として渡す（リストにすると空白が入って壊れる）
-                subprocess.Popen('explorer /select,"%s"' % target)
+        with _ChildEnv():                 # r154: エクスプローラーにも展開先を渡さない
+            if system == "Windows":
+                target = os.path.normpath(str(p if select else p.parent))
+                # ドライブ直下（D:\）のように末尾が \ だと、"D:\" の \" が
+                # エスケープ扱いになって引用が壊れる。重ねて逃がす。
+                if target.endswith("\\"):
+                    target += "\\"
+                if select:
+                    # 1 引数として渡す（リストにすると空白が入って壊れる）
+                    subprocess.Popen('explorer /select,"%s"' % target)
+                else:
+                    subprocess.Popen('explorer "%s"' % target)
+            elif system == "Darwin":
+                if select:
+                    subprocess.Popen(["open", "-R", str(p)])
+                else:
+                    subprocess.Popen(["open", str(p.parent)])
             else:
-                subprocess.Popen('explorer "%s"' % target)
-        elif system == "Darwin":
-            if select:
-                subprocess.Popen(["open", "-R", str(p)])
-            else:
-                subprocess.Popen(["open", str(p.parent)])
-        else:
-            subprocess.Popen(["xdg-open", str(p if p.is_dir() else p.parent)])
+                subprocess.Popen(["xdg-open", str(p if p.is_dir() else p.parent)])
     except Exception as e:
         raise FileOperationError(f"Cannot reveal {path}: {e}") from e
 

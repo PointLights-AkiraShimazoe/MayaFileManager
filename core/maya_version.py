@@ -366,17 +366,30 @@ def strip_frozen_env(env: Dict[str, str]) -> Dict[str, str]:
             env.pop(k, None)
     mei = getattr(sys, "_MEIPASS", "") or ""
     mei_n = os.path.normcase(os.path.normpath(mei)) if mei else ""
+
+    def _is_mei(p):
+        q = os.path.normcase(os.path.normpath(p)) if p else ""
+        return bool(p) and bool(_MEI_DIR_RE.search(p) or
+                                (mei_n and (q == mei_n or q.startswith(mei_n + os.sep))))
+
+    # r154（実機 2026-11-24）: PATH だけでなく **すべての** 環境変数から、展開先を指す
+    # 項目を外す。Manager の起動処理（build_tools/runtime_hook.py）は QT_PLUGIN_PATH を
+    # 展開先の PySide6\plugins にしており、それが Maya へ渡って Maya の Qt が
+    # Manager 同梱の別版のプラグインを読み込んでいた。Manager を閉じる時に
+    # «Failed to remove temporary directory: …\_MEIxxxx» が出たのは、Maya がそこの
+    # ファイルを使い続けていたため。項目が全部消えた変数は変数ごと外す
+    # （利用者が自分で設定していた値は展開先を指さないので残る）。
     for k in list(env):
-        if k.upper() != "PATH":
+        v = env.get(k)
+        if not v or not _is_mei(v) and not any(_is_mei(p) for p in v.split(os.pathsep)):
             continue
-        keep = []
-        for p in (env[k] or "").split(os.pathsep):
-            q = os.path.normcase(os.path.normpath(p)) if p else ""
-            if p and (_MEI_DIR_RE.search(p) or
-                      (mei_n and (q == mei_n or q.startswith(mei_n + os.sep)))):
-                continue
-            keep.append(p)
-        env[k] = os.pathsep.join(keep)
+        keep = [p for p in v.split(os.pathsep) if not _is_mei(p)]
+        if any(keep):
+            env[k] = os.pathsep.join(keep)
+        elif k.upper() == "PATH":
+            env[k] = ""
+        else:
+            env.pop(k, None)
     return env
 
 

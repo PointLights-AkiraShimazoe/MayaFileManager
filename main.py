@@ -493,6 +493,43 @@ _REQUIRED_MODULES = [
 ]
 
 
+def _selfcheck_dcc_codes():
+    """Maya へ送るコードを全部作り、構文を確かめる。失敗の一覧を返す。"""
+    import traceback
+    bad = []
+
+    def _try(name, make, mode="exec"):
+        try:
+            src = make()
+            if not isinstance(src, str) or not src.strip():
+                raise ValueError("空のコード")
+            try:
+                compile(src, "<%s>" % name, mode)
+            except SyntaxError:
+                compile(src, "<%s>" % name, "eval" if mode == "exec" else "exec")
+        except Exception as e:
+            bad.append(("dcc-code " + name, repr(e), traceback.format_exc()))
+
+    from core import maya_save_watch as sw, maya_open_guard as og, dcc_save, maya_project
+    for lang in ("ja", "en"):
+        _try("save_watch(%s)" % lang, lambda: sw._maya_source("C:/x/log.txt", lang))
+        _try("save_watch_install(%s)" % lang, lambda: sw.install_code("C:/x/log.txt", lang), "eval")
+    _try("p4_table", lambda: sw.p4_table_code({"exe": "p4", "base": [], "clients": []}), "eval")
+    _try("open_stmt", lambda: og.open_stmt("C:/x/a.ma"))
+    _try("arnold_code", lambda: og.arnold_code("C:/x/a.ma"))
+    _try("unlock_code", lambda: og.unlock_code("C:/x/a.ma"))
+    _try("unlock_src", lambda: og.UNLOCK_SRC)
+    import tempfile
+    import os as _os
+    with tempfile.TemporaryDirectory(prefix="mfm_selfcheck_") as _d:
+        _os.makedirs(_os.path.join(_d, "scenes"))
+        open(_os.path.join(_d, "workspace.mel"), "w").close()
+        _try("setproject", lambda: maya_project.setproject_code(_os.path.join(_d, "scenes", "a.ma")))
+    for mode in ("save", "export"):
+        _try("dcc_save(%s)" % mode, lambda: dcc_save.maya_code("C:/x/a.ma", mode, {}))
+    return bad
+
+
 def selfcheck(out_path: str = "") -> int:
     """必要なモジュールが «この実行形態で» 全部読めるかを確かめる。
     0=すべて揃っている / 1=欠けがある（CI はここで落とす）。
@@ -533,6 +570,12 @@ def selfcheck(out_path: str = "") -> int:
         except Exception as e:
             missing.append(("integrations.providers", repr(e),
                             traceback.format_exc()))
+
+        # r154（2026-11-24 実機障害）: Maya へ送るコードを «この実行形態で» 実際に作って
+        # 構文まで確かめる。v0.9.29 は inspect.getsource が配布版で失敗し、保存の見張りの
+        # コードが作れず Maya 側の確認が全部消えていた（import だけの検査では通っていた）。
+        for name, err, tb in _selfcheck_dcc_codes():
+            missing.append((name, err, tb))
 
         if missing:
             say("[selfcheck] NG — 欠けている機能があります（%d 件）"

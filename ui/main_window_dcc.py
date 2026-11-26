@@ -1185,6 +1185,13 @@ class MainWindowDccMixin:
                 armed.add(key)
                 self._push_p4_table(port, key)
         except Exception as _e:
+            # r154: 見張りを入れられなかった事を必ず記録に残す（v0.9.29 は配布版だけ
+            # 見張りのコードが作れず、何も記録されないまま Maya 側の確認が全部消えていた）
+            try:
+                from core.maya_bridge import bridge_log
+                bridge_log("save-watch port %s pid %s: FAILED %r" % (port, pid, _e))
+            except Exception:
+                pass
             _swallow(_e, "ui/main_window_dcc.py _arm_save_watch")
 
     def _push_p4_table(self, port, key):
@@ -2186,14 +2193,20 @@ class MainWindowDccMixin:
                              lambda st: self._ask_readonly_then(path, proceed, note, allow_co, st))
                 return
             status = None
-        cmd = _sg.p4_edit_cmd(prov, path) if allow_co else None
-        keys = _sg.choice_keys(status, bool(cmd))
-        if "co" not in keys:
-            cmd = None
+        cmd_full = _sg.p4_edit_cmd(prov, path)
+        keys = _sg.choice_keys(status, bool(cmd_full))
+        if not allow_co:
+            keys = [k for k in keys if k != "co"]      # チェックアウトに失敗した後は出さない
+        cmd = cmd_full if "co" in keys else None
         buttons = [t[k] for k in keys]
-        sn = _sg.status_note(status, _sg.note_texts())
-        if sn:
-            note = (sn + "\n" + note) if note else sn
+        off = [t[k] for k in _sg.disabled_keys(status) if k in keys]
+        if off:
+            cmd = None                     # 押せないボタンは実行もしない
+        # r154（島添さん指示 2026-11-24）: 状態を端的な 1 文で（«チェックアウトされていません»
+        # «他のユーザー（…）にチェックアウトされています» «読み取り専用です» 等）
+        main, extra = _sg.status_lines(status, bool(cmd_full), _sg.note_texts())
+        if extra:
+            note = (extra + "\n" + note) if note else extra
 
         def _chosen(ans):
             if ans == t["co"] and cmd:
@@ -2207,9 +2220,9 @@ class MainWindowDccMixin:
                     else:
                         self._ask_readonly_then(path, proceed,
                                                 note=t["co_fail"] + "\n" + (out[:600] or "-"),
-                                                allow_co=False, status=None)
+                                                allow_co=False, status=status)
                 self._run_bg(lambda: _sg.run_p4_edit(cmd, path), _after)
-            elif ans == t["rw"]:
+            elif ans in (t["rw"], t["unro"]):
                 ok, err = _sg.make_writable(path)
                 if ok:
                     proceed()
@@ -2219,7 +2232,7 @@ class MainWindowDccMixin:
                 _sg.log("declined", False, path)
                 self.statusBar().showMessage(t["cancelled"] % name)
 
-        ask_choice(self, t["text"] % name, note, buttons, _chosen)
+        ask_choice(self, name + "\n" + main, note, buttons, _chosen, disabled=off)
 
     def _ask_unlock_after_open(self, port: int, path: str, n_lines: int, arnold: bool = False):
         """«エラー付きで開けた» シーンを上書き保存できるようにするか、Manager で聞く（r150）。
@@ -2587,7 +2600,7 @@ class _UiCall(QObject):
                 self._keep.remove(self)
 
 
-def ask_choice(parent, text: str, info: str, buttons, on_choice):
+def ask_choice(parent, text: str, info: str, buttons, on_choice, disabled=()):
     """Manager で短く聞く（r150）。
 
     * 非モーダル（«全てのウィンドウで拘束するな» r146 の決まり）。押された時に
@@ -2595,6 +2608,7 @@ def ask_choice(parent, text: str, info: str, buttons, on_choice):
     * 常に手前（WindowStaysOnTopHint）。送った先の Maya が前に出ているので、
       これが無いと Manager の後ろに隠れて «気づかない» になる。activateWindow は
       呼ばない（前面化はコンパクトの開閉だけ、の決まり）。
+    * disabled の文字のボタンは «見せるが押せない»（r154）。
     テストはこの関数を差し替える。"""
     box = QMessageBox(parent.window() if parent is not None else None)
     box.setWindowTitle("Maya File Manager")
@@ -2604,8 +2618,11 @@ def ask_choice(parent, text: str, info: str, buttons, on_choice):
         box.setInformativeText(info)
     btns = [box.addButton(b, QMessageBox.AcceptRole if i == 0 else QMessageBox.RejectRole)
             for i, b in enumerate(buttons)]
+    for b, w in zip(buttons, btns):
+        if b in disabled:
+            w.setEnabled(False)
     box.setEscapeButton(btns[-1])
-    box.setDefaultButton(btns[0])
+    box.setDefaultButton(next((w for b, w in zip(buttons, btns) if b not in disabled), btns[-1]))
     box.setWindowModality(Qt.NonModal)
     box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
     box.setAttribute(Qt.WA_DeleteOnClose, True)

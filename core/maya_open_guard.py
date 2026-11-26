@@ -132,6 +132,11 @@ def _mfm_unlock(_p, _msg):
     if not cur or os.path.normcase(os.path.normpath(cur)) != os.path.normcase(os.path.normpath(_p)):
         return "MfmUnlocked:other"     # 別のシーンになっている → 何もしない
     cmds.file(rename=cur)
+    try:   # r154: 保存の見張りに «もう上書きしてよい» と伝える（Ctrl+S で重ねて聞かない）
+        import __main__
+        (__main__.__dict__.get("_mfm_save_watch") or {}).pop("open_err", None)
+    except Exception:
+        pass
     try:
         om2.MGlobal.displayInfo("Maya File Manager: " + _msg)
     except Exception:

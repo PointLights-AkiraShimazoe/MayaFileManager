@@ -186,8 +186,8 @@ class _SaveHost:
 
 
 _orig_ask = mwd.ask_choice
-mwd.ask_choice = lambda parent, text, info, buttons, cb: (
-    asks.append((text, info, list(buttons))), cb(answer.pop(0) if answer else buttons[-1]))
+mwd.ask_choice = lambda parent, text, info, buttons, cb, disabled=(): (
+    asks.append((text, info, list(buttons), list(disabled))), cb(answer.pop(0) if answer else buttons[-1]))
 
 
 def _save(name, ans, ro=True, prov=True):
@@ -215,8 +215,9 @@ try:
         check(asks and asks[0][2] == [CO2, RW2, NO2] and not sends and not os.access(pth, os.W_OK),
               "保存しない: Manager で聞いて、送らない・ファイルに触らない（%r / 送信 %d）"
               % (asks[0][2] if asks else None, len(sends)))
-        check(asks and asks[0][0].count("\n") <= 1 and "no.ma" in asks[0][0],
-              "聞く文は短い（%r）" % (asks[0][0] if asks else "",))
+        check(asks and asks[0][0].count("\n") <= 1 and "no.ma" in asks[0][0]
+              and sg.note_texts()["notco"] in asks[0][0],
+              "聞く文は短い: ファイル名と «チェックアウトされていません» の 1 文（%r）" % (asks[0][0] if asks else "",))
         pth = _save("rw.ma", [RW2])
         check(sends == [(pth, True)] and len(asks) == 1,
               "読み取り専用を外して保存: Manager が外してから送る（%r）" % (sends,))
@@ -233,7 +234,8 @@ try:
               "チェックアウトできない時: 理由を出し、残りの選択肢だけで聞き直す（%r）"
               % ([a[2] for a in asks],))
         pth = _save("noprov.ma", [NO2], prov=False)
-        check(asks and asks[0][2] == [RW2, NO2], "Perforce が無い時は «チェックアウト» を出さない")
+        check(asks and asks[0][2] == [T["unro"], NO2],
+              "Perforce が無い時は «読み取り専用を解除して保存／保存しない» だけ（%r）" % (asks[0][2] if asks else None,))
         pth = _save("ok.ma", [], ro=False)
         check(not asks and sends == [(pth, True)], "書き込める上書き先では何も聞かない")
         recs = [json.loads(ln) for ln in io.open(sw.log_path(), encoding="utf-8")]

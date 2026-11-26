@@ -31,7 +31,6 @@ except ImportError:  # PySide2
 
 from core import archive_browse as ab
 from core.i18n import tr
-from ui.dialog_util import pick_directory  # r145
 
 INNER_ROLE = Qt.UserRole + 11       # 書庫内パス（"/" 区切り）
 ISDIR_ROLE = Qt.UserRole + 12
@@ -111,40 +110,121 @@ class _ElideLabel(QLabel):
 _OPEN_PICKERS = []
 
 
-def pick_directory_nonmodal(parent, title: str, start: str, on_pick):
-    """解凍先を選ぶ窓を «Manager を止めずに» 出す（r153、2026-11-21）。
+def _current_folder_of(widget) -> str:
+    """Manager が今表示しているフォルダ（親をたどって current_path を持つものに聞く）。"""
+    w = widget
+    while w is not None:
+        fn = getattr(w, "current_path", None)
+        if callable(fn):
+            try:
+                p = fn() or ""
+                if p and os.path.isdir(p):
+                    return p
+            except Exception as _e:
+                _swallow(_e, "ui/archive_column.py _current_folder_of")
+        w = w.parentWidget() if hasattr(w, "parentWidget") else None
+    return ""
 
-    ユーザー指摘「解凍の窓でパスが指定しづらい。代わりに Manager からパスを拾いたいのに、
-    ロックされていて Manager としても終わっている」。モーダルの
-    getExistingDirectory は Manager 全体を止める。非モーダルで出し、Manager で
-    パスをコピーして貼り付けられるようにする。選ばれたら on_pick(フォルダ)。"""
-    dlg = QFileDialog(parent, title, start or "")
-    dlg.setFileMode(QFileDialog.Directory)
-    dlg.setOption(QFileDialog.ShowDirsOnly, True)
-    dlg.setOption(QFileDialog.DontUseNativeDialog, True)
-    # ユーザー指摘「開いた瞬間、圧縮ファイルがある場所と同じフォルダが選ばれている
-    # 見た目でないと、同じ所なのか分からず迷う」: 一つ上の階層を開き、
-    # 書庫のあるフォルダを選択した状態で出す（そのまま «選択» で同じ場所に解凍）。
-    try:
-        st = os.path.normpath(start or "")
-        up = os.path.dirname(st)
-        if st and up and up != st and os.path.isdir(st):
-            dlg.setDirectory(up)
-            dlg.selectFile(st)
-    except Exception as _e:
-        _swallow(_e, "ui/archive_column.py pick_directory_nonmodal select start")
+
+def pick_extract_dest(parent, start: str, on_pick):
+    """解凍先を決める小さな窓（r154、実機 2026-11-24 の J-20）。
+
+    r153 は Qt のフォルダ選択の窓（QFileDialog）を出していたが、その窓は Manager の
+    フリーズ対策（ファイル情報を UI で待たない）を通らず、大きい・遅いフォルダ
+    （Perforce・ネットワーク）を開いたり閉じたりした時に数十秒止まっていた
+    （mfm_freeze.log: QFileSystemModel::permissions → GetFileAttributesW で 33 秒）。
+    フォルダ一覧は出さず、パスを直接決める:
+      * 開いた時は書庫のあるフォルダが入って全選択（そのまま «解凍» で同じ場所）
+      * Manager で行き先を表示して «表示中» を押すと、そのフォルダが入る
+      * Manager からフォルダをドラッグして落としても入る。貼り付けも可
+    非モーダル（開いたまま Manager を操作できる）。決まったら on_pick(フォルダ)。"""
+    from core.compat import (QDialog, QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton,
+                             QToolButton, QStyle)
+
+    class _DropEdit(QLineEdit):
+        def __init__(self, *a):
+            super().__init__(*a)
+            self.setAcceptDrops(True)
+
+        def dragEnterEvent(self, e):
+            if e.mimeData().hasUrls():
+                e.setDropAction(Qt.CopyAction)   # パスを入れるだけ。元は動かさない
+                e.accept()
+            else:
+                super().dragEnterEvent(e)
+
+        def dragMoveEvent(self, e):
+            if e.mimeData().hasUrls():
+                e.setDropAction(Qt.CopyAction)
+                e.accept()
+            else:
+                super().dragMoveEvent(e)
+
+        def dropEvent(self, e):
+            urls = [u.toLocalFile() for u in e.mimeData().urls() if u.toLocalFile()]
+            if urls:
+                p = urls[0]
+                self.setText(p if os.path.isdir(p) else os.path.dirname(p))
+                e.setDropAction(Qt.CopyAction)   # 元フォルダを動かさない
+                e.accept()
+            else:
+                super().dropEvent(e)
+
+    dlg = QDialog(parent.window() if parent is not None else None)
+    dlg.setWindowTitle(tr("解凍先", "Extract to"))
     dlg.setWindowModality(Qt.NonModal)
     dlg.setAttribute(Qt.WA_DeleteOnClose, True)
+    dlg.setMinimumWidth(520)
+    edit = _DropEdit(dlg)
+    edit.setObjectName("extractDest")
+    edit.setText(os.path.normpath(start) if start else "")
+    edit.selectAll()
+    edit.setToolTip(tr("解凍先のフォルダ（パスの貼り付け・Manager からのドラッグも可）",
+                       "Destination folder (paste a path or drag a folder from the Manager)"))
+    here_btn = QToolButton(dlg)
+    here_btn.setObjectName("extractUseCurrent")
+    here_btn.setIcon(dlg.style().standardIcon(QStyle.SP_DirOpenIcon))
+    here_btn.setText(tr("表示中", "Current"))
+    here_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+    here_btn.setToolTip(tr("Manager で表示中のフォルダを入れる", "Use the folder shown in the Manager"))
+    ok_btn = QPushButton(draw_icon("extract", 16), tr("解凍", "Extract"), dlg)
+    ok_btn.setObjectName("extractOk")
+    ok_btn.setDefault(True)
+    cancel_btn = QPushButton(tr("キャンセル", "Cancel"), dlg)
+    row1 = QHBoxLayout()
+    row1.addWidget(edit, 1)
+    row1.addWidget(here_btn)
+    row2 = QHBoxLayout()
+    row2.addStretch(1)
+    row2.addWidget(ok_btn)
+    row2.addWidget(cancel_btn)
+    lay = QVBoxLayout(dlg)
+    lay.addLayout(row1)
+    lay.addLayout(row2)
+
+    def _use_current():
+        p = _current_folder_of(parent)
+        if p:
+            edit.setText(os.path.normpath(p))
+            edit.selectAll()
+
+    def _ok():
+        d = edit.text().strip().strip('"')
+        if not d:
+            return
+        if os.path.exists(d) and not os.path.isdir(d):
+            QMessageBox.warning(dlg, tr("解凍", "Extract"),
+                                tr("フォルダではありません: %s", "Not a folder: %s") % d)
+            return
+        dlg.accept()
+        on_pick(d)
+
+    here_btn.clicked.connect(_use_current)
+    ok_btn.clicked.connect(_ok)
+    edit.returnPressed.connect(_ok)
+    cancel_btn.clicked.connect(dlg.reject)
     _OPEN_PICKERS.append(dlg)
-
-    def _done(*_a):
-        try:
-            _OPEN_PICKERS.remove(dlg)
-        except ValueError:
-            pass
-
-    dlg.fileSelected.connect(lambda d: on_pick(d) if d else None)
-    dlg.finished.connect(_done)
+    dlg.finished.connect(lambda *_a: _OPEN_PICKERS.remove(dlg) if dlg in _OPEN_PICKERS else None)
     dlg.show()
     dlg.raise_()
     return dlg
@@ -159,10 +239,9 @@ def extract_archive(parent, archive: str, here: bool, status=None) -> bool:
             base = base[:-4]
         dest = os.path.join(os.path.dirname(archive), base)
     else:
-        # 非モーダル: 選ばれた時に解凍する（Manager は使えたまま）
-        pick_directory_nonmodal(
-            parent, tr("解凍先を選択", "Extract to"), os.path.dirname(archive) or "",
-            lambda d: _extract_all(parent, archive, d, status))
+        # 非モーダル: 決まった時に解凍する（Manager は使えたまま）
+        pick_extract_dest(parent, os.path.dirname(archive) or "",
+                          lambda d: _extract_all(parent, archive, d, status))
         return True
     return _extract_all(parent, archive, dest, status)
 
@@ -386,8 +465,8 @@ class ArchiveColumn(QWidget):
     def _extract_dialog(self, names):
         # r153: 非モーダル（Manager からパスを拾えるように）
         start = os.path.dirname(self._archive) or ""
-        pick_directory_nonmodal(self, tr("解凍先を選択", "Extract to"), start,
-                                lambda d, n=names: self._extract_to(n, d))
+        pick_extract_dest(self, start,
+                          lambda d, n=names: self._extract_to(n, d))
 
     def _extract_here(self, names):
         base = os.path.splitext(os.path.basename(self._archive))[0]

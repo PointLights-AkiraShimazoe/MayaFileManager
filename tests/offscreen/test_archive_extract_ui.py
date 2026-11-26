@@ -78,20 +78,31 @@ def s1():
     assert os.path.isfile(os.path.join(out, "Asset_v3.0", "readme.txt")), os.listdir(out)
     print("extract here -> sibling folder named after the archive: OK")
 
-    # 4) 解凍先の窓はモーダルでない（Manager からパスを拾える）・書庫のフォルダが選ばれている
+    # 4) 解凍先の窓（r154）: モーダルでない・書庫のフォルダが入って全選択・フォルダ一覧を出さない
+    #    （Qt のフォルダ選択の窓は、大きい・遅いフォルダで数十秒止まった。実機 2026-11-24）
     picked = []
-    dlg = acm.pick_directory_nonmodal(b, "t", sub, picked.append)
+    dlg = acm.pick_extract_dest(b, sub, picked.append)
     _settle(200)
-    assert isinstance(dlg, QFileDialog) and dlg.isVisible()
-    assert dlg.windowModality() == Qt.NonModal and not dlg.isModal(), "モーダルで Manager がロックされる"
-    assert QApplication_active_modal() is None, "モーダル窓が出ている"
-    assert _same(dlg.directory().absolutePath(), root), dlg.directory().absolutePath()
-    sel = dlg.selectedFiles()
-    assert sel and _same(sel[0], sub), ("書庫のフォルダが選ばれていない", sel)
-    dlg.fileSelected.emit(sub)
-    assert picked and _same(picked[0], sub)
-    dlg.close()
-    print("extract-to dialog is non-modal and starts with the archive folder selected: OK")
+    from core.compat import QLineEdit, QToolButton, QPushButton
+    edit = dlg.findChild(QLineEdit, "extractDest")
+    check_ok = (dlg.isVisible() and dlg.windowModality() == Qt.NonModal and not dlg.isModal()
+                and QApplication_active_modal() is None)
+    assert check_ok, "モーダルで Manager がロックされる"
+    assert edit is not None and _same(edit.text(), sub) and edit.selectedText() == edit.text(), (
+        "書庫のフォルダが入って全選択されていない", edit.text() if edit else None)
+    assert not dlg.findChildren(QFileDialog), "フォルダ選択の窓（QFileDialog）を使っている"
+    from core.compat import QAbstractItemView as _AIV
+    assert not dlg.findChildren(_AIV), "フォルダの一覧を出している（遅いフォルダで止まる元）"
+    # «表示中»: Manager で表示中のフォルダが入る
+    b.navigate_to(root)
+    _settle(300)
+    dlg.findChild(QToolButton, "extractUseCurrent").click()
+    assert _same(edit.text(), root), ("«表示中» で Manager のフォルダが入らない", edit.text(), root)
+    # «解凍»: 決まったフォルダで on_pick
+    dlg.findChild(QPushButton, "extractOk").click()
+    assert picked and _same(picked[0], root), picked
+    print("extract-to dialog: non-modal, archive folder preselected, no folder list, picks from Manager: OK")
+    b.navigate_to(sub)
     QTimer.singleShot(50, s2)
 
 

@@ -28,6 +28,30 @@ def needs_fix(path: str) -> bool:
         return False
 
 
+def _conn_for(provider, path: str):
+    """そのファイル用の接続引数。表記の比較でワークスペースが見つからない時は、
+    ジャンクションの実体どうしでも比べて -c を決める（r155: 実体側のパスで開いたシーン）。"""
+    d = os.path.dirname(path)
+    conn = list(provider.conn_args_for(d) or [])
+    try:
+        if getattr(provider, "client_for", None) and not provider.client_for(d):
+            for _k, name, root in (provider._all_clients() or []):
+                if root and name and map_to_root(path, str(root)):
+                    out, skip = [], False
+                    for a in conn:
+                        if skip:
+                            skip = False
+                            continue
+                        if a == "-c":
+                            skip = True
+                            continue
+                        out.append(a)
+                    return out + ["-c", str(name)]
+    except Exception:
+        pass
+    return conn
+
+
 def p4_edit_cmd(provider, path: str):
     """p4 edit のコマンド（そのファイルのワークスペースの -c で）。Perforce が
     使えない時は None（«チェックアウトして保存» を出さない）。"""
@@ -35,8 +59,7 @@ def p4_edit_cmd(provider, path: str):
         exe = getattr(provider, "p4", None)
         if provider is None or not exe or not getattr(provider, "available", False):
             return None
-        conn = list(provider.conn_args_for(os.path.dirname(path)) or [])
-        return [str(exe)] + conn + ["edit", path]
+        return [str(exe)] + _conn_for(provider, path) + ["edit", path]
     except Exception:
         return None
 
@@ -48,6 +71,10 @@ def p4_edit_cmd(provider, path: str):
 # 手元が最新か» を調べ、選択肢と一言の説明を決める。下の 3 つの関数は
 # Maya 側（core/maya_save_watch.py）にもそのまま埋め込むので、標準ライブラリ以外を使わない。
 
+# 配布版（PyInstaller の exe）には .py のソースが入らないので、inspect.getsource で
+# 取り出してはいけない（v0.9.29 の実機障害: 取り出しに失敗して Maya へ見張りが
+# 一切入らなかった）。ソースを文字列で持ち、ここでも Maya 側でも同じ文字列を実行する。
+HELPERS_SRC = r'''
 def parse_fstat(text):
     """p4 -ztag fstat の出力から状態を取り出す。分からない項目は既定値のまま。"""
     st = {"tracked": False, "others": [], "locked": False, "have": None, "head": None,
@@ -75,36 +102,140 @@ def parse_fstat(text):
 
 
 def choice_keys(st, has_p4):
-    """出す選択肢（"co" チェックアウトして保存 / "rw" 書き込み可能にして保存 / "no" 保存しない）。
-    st が None（調べられなかった）なら、Perforce があればチェックアウトも出す（従来どおり）。
-    管理下でない・排他ロック中・最新で削除済みのファイルには «チェックアウト» を出さない。
-    他の人がチェックアウトしていても、書き込み可能にして保存はできる（UE の Make Writable）。"""
-    if not has_p4:
-        return ["rw", "no"]
-    if st is None:
-        return ["co", "rw", "no"]
-    if not st.get("tracked") or st.get("locked") or st.get("head_deleted"):
+    """出す選択肢。
+      "co"   チェックアウトして保存
+      "rw"   書き込み可能にして保存（Perforce のファイルを、チェックアウトせず手元だけで保存）
+      "unro" 読み取り専用を解除して保存（Perforce と関係ない、ただの読み取り専用）
+      "no"   保存しない
+    st が None（Perforce の状態を調べられなかった）で Perforce があれば、従来どおり 3 択。"""
+    if not has_p4 or (st is not None and not st.get("tracked")):
+        return ["unro", "no"]
+    if st is not None and st.get("head_deleted"):
         return ["rw", "no"]
     return ["co", "rw", "no"]
 
 
-def status_note(st, T):
-    """状態の一言（無ければ ""）。T は文言の表（others / locked / behind / untracked）。"""
-    if not st:
-        return ""
-    out = []
-    users = ", ".join(o.split("@", 1)[0] + ("（" + o.split("@", 1)[1] + "）" if "@" in o else "")
-                      for o in st.get("others") or [])
+def disabled_keys(st):
+    """見せるが押せない選択肢（r154、島添さん指示 2026-11-24）。他のユーザーが
+    チェックアウトしている（排他を含む）時は «チェックアウトして保存» を押せなくする。"""
+    if st and st.get("tracked") and (st.get("others") or st.get("locked")):
+        return ["co"]
+    return []
+
+
+def status_lines(st, has_p4, T, scene=False):
+    """状態を端的な 1 文で（r154、2026-11-24 島添さん指示）。戻り値 (主文, 補足)。
+    補足は «手元が最新でない» 等の付け足し（無ければ ""）。T は status_texts() の表。
+    st が None（Perforce に聞けなかった）で Perforce があれば、その旨を言う（r155）。"""
+    if has_p4 and st is None:
+        return T["unknown"], ""
+    if not has_p4 or st is None or not st.get("tracked"):
+        return T["ro"], ""
+    if st.get("head_deleted"):
+        return T["deleted"], ""
+    users = ", ".join(o.split("@", 1)[0] for o in st.get("others") or [])
     if st.get("locked"):
-        out.append(T["locked"] % (users or "?"))
+        main = T["locked"] % (users or "?")
     elif users:
-        out.append(T["others"] % users)
+        main = T["others"] % users
+    else:
+        main = T["notco"]
     h, H = st.get("have"), st.get("head")
-    if st.get("tracked") and h is not None and H is not None and h < H:
-        out.append(T["behind"] % (h, H))
-    if not st.get("tracked"):
-        out.append(T["untracked"])
-    return "\n".join(out)
+    behind = T["behind_scene" if scene else "behind"]
+    extra = behind % (h, H) if (h is not None and H is not None and h < H) else ""
+    return main, extra
+
+# r155（H-20 の詰め、2026-11-26）: 実機の Perforce で確かめた «管理下なのに
+# ただの読み取り専用に見える» 3 つの穴を塞ぐ。
+#   1. 日本語の名前: P4CHARSET=utf8 だと、コマンド行の引数（Windows では ANSI=CP932 で
+#      渡る）が «No Translation» で弾かれる → パスを UTF-8 の引数ファイル（-C utf8 -x）で渡す
+#   2. ジャンクション・シンボリックリンクの先（実体）のパスで開いたシーン:
+#      «is not under client's root 'X'» → 実体どうしで比べて X の下のパスに直して聞き直す
+#   3. Perforce に聞けなかった（接続できない・ログイン切れ等）: «管理外» とは扱わず
+#      «分からない»（None）にして、チェックアウトの選択肢を消さない
+_FSTAT_UNTRACKED = ("no such file", "not in client view", "not under client", "not on client")
+
+
+def fstat_state(text):
+    """p4 -ztag fstat の出力 → 状態。管理外と分かる時は tracked=False、
+    Perforce に聞けなかった時（接続失敗・ログイン切れ・その他のエラー）は None。"""
+    st = parse_fstat(text)
+    if st["tracked"]:
+        return st
+    low = (text or "").lower()
+    if any(m in low for m in _FSTAT_UNTRACKED):
+        return st
+    return None
+
+
+def p4_run(base, args, path, timeout=8):
+    """p4 を実行して出力（標準出力＋標準エラー）を返す。base は [p4.exe, 接続引数...]、
+    args は ["-ztag", "fstat"] や ["edit"]、path は対象のファイル（最後に付ける）。
+    日本語の名前とジャンクション先のパスを扱う（上の 1・2）。失敗しても例外は出さない。"""
+    import os, re, subprocess, tempfile
+
+    def _call(argv):
+        kw = {}
+        if os.name == "nt":
+            kw["creationflags"] = 0x08000000            # 黒い窓を出さない
+        try:
+            cwd = os.path.dirname(path)
+            r = subprocess.run(argv, cwd=cwd if cwd and os.path.isdir(cwd) else None,
+                               capture_output=True, timeout=timeout, **kw)
+        except Exception as e:
+            return "p4 failed: %s" % e
+        raw = (r.stdout or b"") + b"\n" + (r.stderr or b"")
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw.decode("mbcs" if os.name == "nt" else "latin-1", "replace")
+
+    def _once(p):
+        text = _call(list(base) + list(args) + [p])
+        if "No Translation" not in text:
+            return text
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(prefix="mfm_p4_", suffix=".txt")
+            os.write(fd, (p + "\n").encode("utf-8"))
+            os.close(fd)
+            return _call(list(base) + ["-C", "utf8", "-x", tmp] + list(args))
+        except Exception as e:
+            return text + "\n" + str(e)
+        finally:
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+    text = _once(path)
+    m = re.search(r"not under client's root '([^']+)'", text)
+    if m:
+        mapped = map_to_root(path, m.group(1))
+        if mapped and os.path.normcase(mapped) != os.path.normcase(path):
+            return _once(mapped)
+    return text
+
+
+def map_to_root(path, root):
+    """path（ジャンクション・シンボリックリンクの先の実体パスでもよい）を、root の下の
+    表記に直す。実体どうしで比べて root の下でなければ ""。ドライブ直下のルート（S:\\）も扱う。"""
+    import os
+    try:
+        rt = root if not root.endswith(":") else root + os.sep
+        rr = os.path.normcase(os.path.realpath(rt))
+        rr_s = rr if rr.endswith(os.sep) else rr + os.sep
+        rp_raw = os.path.realpath(path)
+        rp = os.path.normcase(rp_raw)
+        if rp == rr.rstrip(os.sep) or rp.startswith(rr_s):
+            head = rt if rt.endswith(("\\", "/")) else rt + os.sep
+            return head + rp_raw[len(rr_s):] if rp.startswith(rr_s) else rt
+    except Exception:
+        pass
+    return ""
+'''
+exec(HELPERS_SRC)          # parse_fstat / choice_keys / disabled_keys / status_lines / fstat_state / p4_run / map_to_root を定義する
 
 
 def p4_fstat_cmd(provider, path: str):
@@ -113,8 +244,7 @@ def p4_fstat_cmd(provider, path: str):
         exe = getattr(provider, "p4", None)
         if provider is None or not exe or not getattr(provider, "available", False):
             return None
-        conn = list(provider.conn_args_for(os.path.dirname(path)) or [])
-        return [str(exe)] + conn + ["-ztag", "fstat", path]
+        return [str(exe)] + _conn_for(provider, path) + ["-ztag", "fstat", path]
     except Exception:
         return None
 
@@ -124,49 +254,57 @@ def run_fstat(cmd, path: str, timeout: float = 8.0):
     if not cmd:
         return None
     try:
-        kw = {}
-        if os.name == "nt":
-            kw["creationflags"] = 0x08000000
-        r = subprocess.run(cmd, cwd=os.path.dirname(path) or None,
-                           capture_output=True, timeout=timeout, **kw)
-        raw = (r.stdout or b"") + b"\n" + (r.stderr or b"")
-        try:
-            out = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            out = raw.decode("mbcs" if os.name == "nt" else "latin-1", "replace")
-        return parse_fstat(out)
+        # cmd は p4_fstat_cmd の形（[...接続, "-ztag", "fstat", path]）
+        return fstat_state(p4_run(cmd[:-3], cmd[-3:-1], path, timeout))
     except Exception:
         return None
 
 
+def status_texts(ja: bool = True) -> dict:
+    """状態の文と選択肢の文言（Manager でも Maya 側でも同じ表を使う）。"""
+    if ja:
+        return {
+            "notco": "このファイルはチェックアウトされていません。",
+            "others": "このファイルは他のユーザー（%s）にチェックアウトされています。",
+            "locked": "このファイルは他のユーザー（%s）に排他チェックアウトされています。",
+            "ro": "このファイルは読み取り専用です。",
+            "unknown": "このファイルは読み取り専用です（Perforce の状態を確認できませんでした）。",
+            "deleted": "このファイルは Perforce 上で削除されています。",
+            "behind": "このファイルは最新版ではありません（#%d / 最新 #%d）。",
+            "behind_scene": "現在のシーンは最新版ではありません（#%d / 最新 #%d）。",
+            "errlock": "読み込み時にエラーが出たシーンです。保存すると、読み込めなかった設定はファイルから消えます。",
+            "co": "チェックアウトして保存", "rw": "書き込み可能にして保存",
+            "unro": "読み取り専用を解除して保存", "no": "保存しない", "save": "保存する",
+            "co_fail": "チェックアウトできませんでした。", "rw_fail": "読み取り専用を解除できませんでした。",
+            "p4out": "Perforce の出力:", "cancelled": "保存しませんでした: ",
+        }
+    return {
+        "notco": "This file is not checked out.",
+        "others": "This file is checked out by another user (%s).",
+        "locked": "This file is locked (exclusive checkout) by another user (%s).",
+        "ro": "This file is read-only.",
+        "unknown": "This file is read-only (could not get its Perforce status).",
+        "deleted": "This file is deleted in Perforce.",
+        "behind": "This file is not the latest revision (#%d / head #%d).",
+        "behind_scene": "The current scene is not the latest revision (#%d / head #%d).",
+        "errlock": "This scene had errors when it was opened. Saving drops the settings that could not be read.",
+        "co": "Check out and save", "rw": "Make writable and save",
+        "unro": "Clear read-only and save", "no": "Don't save", "save": "Save",
+        "co_fail": "Could not check out.", "rw_fail": "Could not clear the read-only attribute.",
+        "p4out": "Perforce output:", "cancelled": "Not saved: ",
+    }
+
+
 def note_texts() -> dict:
     from core.i18n import tr
-    return {
-        "others": tr("%s もチェックアウトしています。", "Also checked out by %s."),
-        "locked": tr("%s が排他チェックアウト中のため、チェックアウトできません。\n"
-                     "書き込み可能にすれば手元には保存できます（サブミットは相手の作業後）。",
-                     "Locked by %s, so it can't be checked out.\n"
-                     "Make it writable to save locally (submit after they finish)."),
-        "behind": tr("手元は最新ではありません（手元 #%d / 最新 #%d）。",
-                     "Not the latest revision (have #%d, head #%d)."),
-        "untracked": tr("Perforce の管理外のファイルです。", "Not under Perforce."),
-    }
+    return status_texts(tr("ja", "en") == "ja")
 
 
 def run_p4_edit(cmd, path: str):
     """p4 edit を実行する（UI スレッドから呼ばない）。戻り値 (書き込めるようになったか, 出力)。"""
-    out = ""
     try:
-        kw = {}
-        if os.name == "nt":
-            kw["creationflags"] = 0x08000000          # 黒い窓を出さない
-        r = subprocess.run(cmd, cwd=os.path.dirname(path) or None,
-                           capture_output=True, timeout=30, **kw)
-        raw = (r.stdout or b"") + b"\n" + (r.stderr or b"")
-        try:
-            out = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            out = raw.decode("mbcs" if os.name == "nt" else "latin-1", "replace")
+        # cmd は p4_edit_cmd の形（[...接続, "edit", path]）
+        out = p4_run(cmd[:-2], cmd[-2:-1], path, 30)
     except Exception as e:
         out = str(e)
     ok = os.access(path, os.W_OK)
@@ -209,9 +347,10 @@ def texts() -> dict:
                    "The file to overwrite is read-only.\n%s"),
         "co": tr("チェックアウトして保存", "Check out and save"),
         "rw": tr("書き込み可能にして保存", "Make writable and save"),
+        "unro": tr("読み取り専用を解除して保存", "Clear read-only and save"),
         "no": tr("保存しない", "Don't save"),
         "co_fail": tr("チェックアウトできませんでした。", "Could not check out."),
-        "rw_fail": tr("読み取り専用を外せませんでした。", "Could not make the file writable."),
+        "rw_fail": tr("読み取り専用を解除できませんでした。", "Could not clear the read-only attribute."),
         "co_running": tr("チェックアウト中: %s …", "Checking out: %s …"),
         "co_done": tr("チェックアウトしました: %s", "Checked out: %s"),
         "cancelled": tr("保存しませんでした: %s", "Not saved: %s"),
