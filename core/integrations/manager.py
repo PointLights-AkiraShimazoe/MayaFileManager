@@ -68,6 +68,7 @@ from .cloud_provider import CloudProvider
 
 
 class IntegrationManager(QObject):
+    WORKERS = 3          # r156: 状態取得を並べて走らせる本数
     # ディレクトリ（表示上のパス）の状態が更新された
     status_updated = Signal(str)
     # 検出が完了した
@@ -99,6 +100,13 @@ class IntegrationManager(QObject):
         self._pending = set()
         self._lock = threading.Lock()
         self._worker = None
+        # r156（ユーザー報告 2026-11-24「Perforce のステータスアイコンの更新が相当遅い」）:
+        # 状態取得のワーカーを 1 本から複数に。1 本だと、遅いフォルダ（外付けドライブの
+        # 読み込みで p4 が 12 秒の打ち切りまで待つ等）が 1 つあるだけで、その後ろに並んだ
+        # 全フォルダのバッジが出るまで待たされていた（実機ログで 12 秒待ちが 70 回）。
+        # 検出（detect）が終わるまでは状態取得を始めない（_ready）。
+        self._workers = []
+        self._ready = threading.Event()
         # r136: 自動更新の有効期限（秒）。0 なら従来どおり
         # «表示時に 1 回だけ、あとは手動更新»。
         self.ttl = 0.0
@@ -126,9 +134,12 @@ class IntegrationManager(QObject):
         if not self.enabled:
             return
         if self._worker is None:
-            self._worker = threading.Thread(target=self._loop, daemon=True,
-                                            name="mfm-integrations")
-            self._worker.start()
+            for i in range(self.WORKERS):
+                t = threading.Thread(target=self._loop, daemon=True,
+                                     name="mfm-integrations" if i == 0 else "mfm-integrations-%d" % i)
+                t.start()
+                self._workers.append(t)
+            self._worker = self._workers[0]
         if redetect or not (self._detected or getattr(self, "_detect_queued", False)):
             self._detect_queued = True
             self._enqueue("detect", None)
@@ -140,20 +151,26 @@ class IntegrationManager(QObject):
                 if kind == "detect":
                     self._do_detect()
                 elif kind == "status":
+                    self._ready.wait(60.0)       # r156: 検出の後に始める
                     self._do_status(arg)
             except Exception as _e:
                 _swallow(_e, "core/integrations/manager.py:94 _loop")
 
     def _do_detect(self):
         self._detect_queued = False
-        for p in self.providers:
-            try:
-                p.detect()
-            except Exception as e:
-                p.available = False
-                _ilog("detect %s: 例外 %r" % (p.key, e))
-            _ilog("detect %s: available=%s info=%r" % (p.key, p.available, p.info))
-        self._detected = True
+        try:
+            for p in self.providers:
+                try:
+                    p.detect()
+                except Exception as e:
+                    p.available = False
+                    _ilog("detect %s: 例外 %r" % (p.key, e))
+                _ilog("detect %s: available=%s info=%r"
+                      % (p.key, p.available, getattr(p, "info", None)))
+        finally:
+            # r156: 検出が途中で失敗しても、状態取得を待たせたままにしない
+            self._detected = True
+            self._ready.set()
         try:
             self.detected.emit()
         except Exception as _e:

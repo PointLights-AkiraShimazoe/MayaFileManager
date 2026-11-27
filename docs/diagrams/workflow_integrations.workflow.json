@@ -40,7 +40,7 @@
       "col": 1,
       "type": "external",
       "label": "状態を取得",
-      "sublabel": "p4 fstat / git status（裏で）",
+      "sublabel": "3 本並行（裏で）",
       "width": 120
     },
     {

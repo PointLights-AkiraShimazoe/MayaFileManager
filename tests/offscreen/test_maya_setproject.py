@@ -139,7 +139,7 @@ def step():
     #    「プロジェクトをセットしなおしますか？／現在：…／セット：…」
     #    長い共通の頭は 1 行に括り出して «どこが違うか» を見せる。
     EV.clear()
-    STATE.update(cur="D:/users/OneDrive - PL/Projects/MoonLights/Dollar/SA",
+    STATE.update(cur="D:/users/OneDrive - Studio/Projects/ProjectA/ShowB/SA",
                  answer="no", msg="")
     import __main__ as _m
     _m.__dict__.pop("_mfm_setproj_declined", None)

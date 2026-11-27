@@ -236,7 +236,7 @@ jobs:
             ## Maya File Manager ${{ github.ref_name }}
 
             ### ダウンロード（推奨: インストーラー）
-            - **MayaFileManager_vX.X.X_Setup.exe** … 実行するだけでインストール完了（推奨）
+            - **MayaFileManager_${{ github.ref_name }}_Setup.exe** … 実行するだけでインストール完了（推奨）
             - MayaFileManager_${{ github.ref_name }}_windows.zip … EXE単体（ポータブル利用向け）
             - SHA256SUMS.txt … 下の «ファイルの確認» で使います
 

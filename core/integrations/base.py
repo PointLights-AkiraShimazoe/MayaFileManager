@@ -256,7 +256,7 @@ class Provider:
         return out
 
     def run_cli_async(self, cmd, cwd, what: str, timeout: float = 120.0,
-                      fixed_len: int = None):
+                      fixed_len: int = None, cleanup=()):
         """CLI をデーモンスレッドで実行し、終了時に self.report() へ結果を渡す。
         actions() が返す callable から使う（r58: 失敗を黙殺しない）。
 
@@ -281,6 +281,11 @@ class Provider:
             else:
                 self.report(False, "%s に失敗しました。\n\n%s"
                             % (what, "\n".join(fails[:5])))
+            for f in cleanup or ():          # r156: 引数ファイル（p4 -x）の後始末
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
         threading.Thread(target=_go, daemon=True, name="mfm-integ-cli").start()
 
     def cli_output_is_error(self, text: str) -> bool:

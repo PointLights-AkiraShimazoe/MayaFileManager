@@ -125,6 +125,8 @@ class P4Provider(Provider):
                     self.info["user"] = line[len("... userName "):].strip()
                 elif line.startswith("... clientHost "):
                     self.info["host"] = line[len("... clientHost "):].strip()
+                elif line.startswith("... unicode "):
+                    self.info["unicode"] = "enabled" in line   # r156: -x の文字コードを決める
             return root
 
         # 1) p4 の既定設定（P4PORT/P4CONFIG/レジストリ `p4 set`）
@@ -229,8 +231,53 @@ class P4Provider(Provider):
             if is_under(key, root_key):          # r137: ドライブ直下のルート対応
                 found = name
                 break
+        if not found:
+            # r156: ジャンクション・シンボリックリンクの先（実体）のフォルダは、
+            # ルートも実体に直して比べる（表記が違うだけで別ワークスペース扱いにしない）
+            for _k, name, root in self._all_clients():
+                rr = self._real_root(root)
+                if rr and is_under(key, rr):
+                    found = name
+                    break
         self._client_for_dir[key] = found
         return found
+
+    def _real_root(self, root: str):
+        """ワークスペースのルートの実体パス（norm 済み）。1 回だけ求めて覚える（r156）。
+        ルートの表記と違う時だけ返す（同じなら ""）。"""
+        cache = self.__dict__.setdefault("_real_roots", {})
+        if root in cache:
+            return cache[root]
+        rr = ""
+        try:
+            rt = root if not root.endswith(":") else root + os.sep
+            r = norm(os.path.realpath(rt))
+            if r and r != norm(rt):
+                rr = r
+        except (OSError, ValueError):
+            rr = ""
+        cache[root] = rr
+        return rr
+
+    def _xfile(self, items):
+        """p4 の引数ファイル（-x）を作る（r156）。戻り値 (グローバル引数, 一時ファイル)。
+
+        ファイル名をコマンド行で渡すと 2 つ困る（実機 2026-11-27）:
+          * Unicode のサーバー（P4CHARSET=utf8）で日本語の名前が «No Translation» で弾かれ、
+            フォルダの fstat が丸ごと失敗してバッジが一切出ない
+          * «フォルダの *» を p4.exe が手元で展開する（フォルダを読む）。遅いドライブ
+            （外付け SSD へのジャンクション等）で 12 秒の打ち切りに達していた
+        引数ファイルなら、ワイルドカードはサーバーが解釈し、文字コードも指定できる。"""
+        import tempfile
+        self._client_root_via_info()            # unicode かどうか（キャッシュ済みなら即）
+        uni = bool(self.info.get("unicode"))
+        enc = "utf-8" if (uni or os.name != "nt") else "mbcs"
+        fd, tmp = tempfile.mkstemp(prefix="mfm_p4x_", suffix=".txt")
+        try:
+            os.write(fd, ("\n".join(items) + "\n").encode(enc, "replace"))
+        finally:
+            os.close(fd)
+        return (["-C", "utf8"] if uni else []) + ["-x", tmp], tmp
 
     def conn_args_for(self, directory: str):
         """そのフォルダ用の接続引数。該当ワークスペースがあれば -c を差し替える。"""
@@ -288,6 +335,13 @@ class P4Provider(Provider):
             if is_under(d, root_key):            # r137: ドライブ直下のルート対応
                 self._log("root via clients: %r (ws=%s)" % (root, name))
                 return root
+        # r156: 実体パス（ジャンクションの先）で比べる。従来はここで一致せず、
+        # 新しいフォルダを開くたびに p4 where を 1 回ずつ実行していた（実機で 660 回）。
+        for _k, name, root in self._all_clients():
+            rr = self._real_root(root)
+            if rr and is_under(d, rr):
+                self._log("root via clients (実体): %r (ws=%s)" % (root, name))
+                return root
         cr = self._client_root_via_info()
         self._log("info clientRoot=%r conn_args=%r" % (cr, self._conn_args))
         if cr:
@@ -329,11 +383,18 @@ class P4Provider(Provider):
         self._log("fstat ws=%r dir=%r" % (self.client_for(directory) or "(既定)",
                                           directory))
         pattern = os.path.join(directory, "*")
-        rc, out, err = run([self.p4] + self.conn_args_for(directory)
-                           + ["-ztag", "fstat", "-T",
-                            "clientFile,headRev,haveRev,action,otherOpen,otherLock,"
-                            "ourLock,headAction",
-                            pattern], cwd=directory, timeout=12.0)
+        # r156: パターンは引数ファイル（-x）で渡す（日本語の名前・手元での展開。_xfile 参照）
+        gargs, tmp = self._xfile([pattern])
+        try:
+            rc, out, err = run([self.p4] + self.conn_args_for(directory) + gargs
+                               + ["-ztag", "fstat", "-T",
+                                  "clientFile,headRev,haveRev,action,otherOpen,otherLock,"
+                                  "ourLock,headAction"], cwd=directory, timeout=12.0)
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
         if rc != 0:
             text = (err + out)
             # r125: **rc != 0 を何でも «失敗» に数えていた。**
@@ -434,6 +495,7 @@ class P4Provider(Provider):
             self._file_info.clear()
             self._clients = None
             self._client_for_dir = {}
+            self.__dict__["_real_roots"] = {}
 
     def file_info(self, path: str):
         with self._lock:
@@ -532,7 +594,24 @@ class P4Provider(Provider):
         conn = self.conn_args_for(cwd)
         cmd = [self.p4] + conn + args
         fixed = None if file_from is None else (1 + len(conn) + file_from)
-        return lambda: self.run_cli_async(cmd, cwd, what, fixed_len=fixed)
+        if fixed is None:
+            return lambda: self.run_cli_async(cmd, cwd, what)
+        return lambda: self.run_cli_async(cmd, cwd, what, fixed_len=fixed, gpos=1 + len(conn))
+
+    def run_cli_async(self, cmd, cwd, what: str, timeout: float = 120.0,
+                      fixed_len: int = None, cleanup=(), gpos: int = None):
+        """r156: ファイル群（fixed_len 以降）は引数ファイル（-x）で渡す。日本語の名前でも
+        «No Translation» にならず、コマンド行の長さの上限も無いので分けずに 1 回で済む。"""
+        if fixed_len is None or gpos is None:
+            return super().run_cli_async(cmd, cwd, what, timeout=timeout,
+                                         fixed_len=fixed_len, cleanup=cleanup)
+        files = list(cmd[fixed_len:])
+        if not files:
+            return super().run_cli_async(cmd, cwd, what, timeout=timeout)
+        gargs, tmp = self._xfile(files)
+        cmd2 = list(cmd[:gpos]) + gargs + list(cmd[gpos:fixed_len])
+        return super().run_cli_async(cmd2, cwd, what, timeout=timeout,
+                                     cleanup=list(cleanup or ()) + [tmp])
 
     def _vc(self, command, paths):
         return lambda: spawn([self.p4vc, command] + list(paths))
